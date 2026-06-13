@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Compiled libgpod oracle (build from ipodctl.c when needed)
+/ipodctl
+
+# Local Claude Code project instructions (not for the public repo)
+/CLAUDE.md
+
+# Editor / OS junk
+*.swp
+.DS_Store
+._*

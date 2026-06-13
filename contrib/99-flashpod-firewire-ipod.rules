@@ -1,0 +1,9 @@
+# flashpod - pin block-queue settings for FireWire (SBP-2) disks on attach.
+# Early iPod FireWire bridges - especially on storage-modded units - can
+# crash on large or queued transfers, and the kernel's default settings
+# reset on every re-attach.
+# Install:  sudo cp contrib/99-flashpod-firewire-ipod.rules /etc/udev/rules.d/
+#           sudo udevadm control --reload
+ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd?", SUBSYSTEMS=="firewire", \
+  ATTR{queue/max_sectors_kb}="4", ATTR{queue/read_ahead_kb}="0"
+ACTION=="add|change", SUBSYSTEM=="scsi", SUBSYSTEMS=="firewire", ATTR{queue_depth}="1"

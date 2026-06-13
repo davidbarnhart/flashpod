@@ -1,0 +1,42 @@
+{
+  "_comment": "Apple ipsw naming is iPod_<family>.<version>.ipsw (family 1 = 1G/2G, 2 = 3G, 4/10 = 4G grayscale, 5 = photo, 11 = color). Paths are relative to this directory. `flashpod flash` offers this list when no --firmware is given; the entry marked default is preselected (and used outright in non-interactive runs).",
+  "firmwares": [
+    {
+      "file": "Gen1and2/iPod_1.1.5.ipsw",
+      "generation": "1st/2nd generation (FireWire)",
+      "version": "1.5",
+      "description": "Last stock Apple-released firmware for 1G/2G iPods",
+      "default": true
+    },
+    {
+      "file": "Gen3/iPod_2.2.3.ipsw",
+      "generation": "3rd generation (dock connector)",
+      "version": "2.3",
+      "description": "Last stock Apple-released firmware for 3G"
+    },
+    {
+      "file": "Gen4_non_photo/iPod_4.3.1.1.ipsw",
+      "generation": "4th generation (grayscale)",
+      "version": "3.1.1",
+      "description": "Last stock Apple-released firmware for 4G grayscale (family 4)"
+    },
+    {
+      "file": "Gen4_non_photo/iPod_10.3.1.1.ipsw",
+      "generation": "4th generation (grayscale, late board revision)",
+      "version": "3.1.1",
+      "description": "Last stock Apple-released firmware for the family-10 4G grayscale hardware revision"
+    },
+    {
+      "file": "Gen4_photo/iPod_5.1.2.1.ipsw",
+      "generation": "4th generation (iPod photo)",
+      "version": "1.2.1",
+      "description": "Last stock Apple-released firmware for iPod photo (family 5)"
+    },
+    {
+      "file": "Gen4_color/iPod_11.1.2.1.ipsw",
+      "generation": "4th generation (iPod with color display)",
+      "version": "1.2.1",
+      "description": "Last stock Apple-released firmware for the family-11 color-display revision"
+    }
+  ]
+}
