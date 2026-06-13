@@ -181,14 +181,6 @@ sync && udisksctl unmount -b /dev/sdX2
 
 ## Notes
 
-- **FireWire iPods (gen-1/2):** the bridge crashes on large or queued
-  reads, and the safe block-queue settings (`max_sectors_kb=4`,
-  `read_ahead_kb=0`, `queue_depth=1`) reset on every re-attach. Before any
-  operation `flashpod` checks them and pins them itself via sudo (you may get
-  a password prompt); if that fails it refuses to run and prints the
-  manual fix (`--unsafe-queue` overrides). A udev rule can pin them
-  automatically on attach instead — see
-  `contrib/99-flashpod-firewire-ipod.rules`.
 - Close Rhythmbox before syncing/ejecting — its libgpod plugin grabs the
   iPod mount and blocks unmount.
 - Each `./flashpod add` rewrites the whole iTunesDB per track; fine at hundreds of
