@@ -28,28 +28,28 @@ confirms before using its guess**:
   mount it via udisks — no root needed
 - not running on a terminal → refuses; pass `--mount` explicitly
 
-### `flashpod ls` (alias: `flashpod list`)
+### `./flashpod ls` (alias: `./flashpod list`)
 
 ```
-$ flashpod ls                 # artist → album tree with track counts
+$ ./flashpod ls                 # artist → album tree with track counts
 iPod "iPod": 68 tracks, 1 artists, 5 albums
 New Order
   Power, Corruption & Lies (8 tracks)
   Substance (12 tracks)
 
-$ flashpod ls all             # same tree + every track (id, track no., duration)
+$ ./flashpod ls all             # same tree + every track (id, track no., duration)
 New Order
   Substance
         52   1. Ceremony                 4:25
         53   2. Everything's Gone Green  5:31
 
-$ flashpod ls artist          # flat per-artist track counts (or `artists`)
-$ flashpod ls album           # flat per-album track counts (or `albums`)
+$ ./flashpod ls artist          # flat per-artist track counts (or `artists`)
+$ ./flashpod ls album           # flat per-album track counts (or `albums`)
 ```
 
-Track ids shown by `ls all` are what `flashpod rm <id>` takes.
+Track ids shown by `ls all` are what `./flashpod rm <id>` takes.
 
-### `flashpod add [path ...]`
+### `./flashpod add [path ...]`
 
 Add audio files and/or directories. Directories are scanned recursively in
 sorted order; macOS `._*` AppleDouble files and non-audio files are skipped.
@@ -64,9 +64,9 @@ duplicate when its size, duration, and title all match one already present
 copies have a different size and are added as new.
 
 ```
-$ flashpod add ~/music/Some\ Album            # a directory
-$ flashpod add a.mp3 b.mp3 ~/music/More/      # mix files and directories
-$ flashpod add                                # no args: prompts, with tab completion
+$ ./flashpod add ~/music/Some\ Album            # a directory
+$ ./flashpod add a.mp3 b.mp3 ~/music/More/      # mix files and directories
+$ ./flashpod add                                # no args: prompts, with tab completion
 ```
 
 Progress is one line per track, shown in a scrolling 4-line window so a big
@@ -84,34 +84,34 @@ window, are counted in the summary, and don't stop the batch:
 12 tracks added, 1 skipped (already on iPod), 1 failed in 1m02s
 ```
 
-### `flashpod rm`
+### `./flashpod rm`
 
 ```
-$ flashpod rm 52 53           # by track id (see `flashpod ls all`)
-$ flashpod rm artist Relic Pop      # every track by the artist
-$ flashpod rm album Thick As Thieves # every track in the album
+$ ./flashpod rm 52 53           # by track id (see `./flashpod ls all`)
+$ ./flashpod rm artist Relic Pop      # every track by the artist
+$ ./flashpod rm album Thick As Thieves # every track in the album
 ```
 
 Artist/album matching is case-insensitive exact match; multiword names need
 no quotes. `remove`, `delete`, and `erase` all work as synonyms for `rm`.
 **Removal is immediate — there is no confirmation prompt.**
 
-### `flashpod init [name]`
+### `./flashpod init [name]`
 
 Create the `iPod_Control` directory structure and an empty music database.
 Use on a freshly flashed/formatted card or after a wipe. Destroys any
 existing database, but not music files already in the `F##` folders.
 
-### `flashpod flash [/dev/sdX]`
+### `./flashpod flash [/dev/sdX]`
 
 Write the iPod firmware and partition layout to a CF/SD card. **Erases the
-card.** Needs root (`sudo flashpod flash`).
+card.** Needs root (`sudo ./flashpod flash`).
 
 ```
-$ sudo flashpod flash                  # interactive: pick from removable disks
-$ sudo flashpod flash /dev/sdb         # direct
-$ flashpod flash /dev/sdb --dry-run    # print the plan, write nothing (no root)
-$ flashpod flash --self-test           # validate layout logic, no hardware
+$ sudo ./flashpod flash                  # interactive: pick from removable disks
+$ sudo ./flashpod flash /dev/sdb         # direct
+$ ./flashpod flash /dev/sdb --dry-run    # print the plan, write nothing (no root)
+$ ./flashpod flash --self-test           # validate layout logic, no hardware
 ```
 
 With no `--firmware`, an interactive chooser lists the images from
@@ -191,7 +191,7 @@ sync && udisksctl unmount -b /dev/sdX2
   `contrib/99-flashpod-firewire-ipod.rules`.
 - Close Rhythmbox before syncing/ejecting — its libgpod plugin grabs the
   iPod mount and blocks unmount.
-- Each `flashpod add` rewrites the whole iTunesDB per track; fine at hundreds of
+- Each `./flashpod add` rewrites the whole iTunesDB per track; fine at hundreds of
   tracks, slow for huge libraries.
 - Don't trust `fsck.vfat` on iPod cards: dosfstools chokes on iPod boot
   sectors that the kernel mounts fine.
