@@ -178,23 +178,62 @@ def unmounted_candidates():
     return cands
 
 
-def mount_device(dev):
-    """Mount a partition via udisks (no root needed) and return its
-    mountpoint, or None."""
-    res = subprocess.run(["udisksctl", "mount", "-b", dev],
-                         capture_output=True, text=True)
-    if res.returncode != 0:
-        print(f"flashpod: mount failed: {(res.stderr or res.stdout).strip()}",
-              file=sys.stderr)
+def _sudo_mount(dev, label):
+    """Mount `dev` with a privileged `mount` when udisks is unavailable. On a
+    terminal, sudo prompts for the password. The FAT volume is mounted with
+    the invoking user's uid/gid so they can read and write. Returns the
+    mountpoint or None."""
+    import pwd
+    import shlex
+    user = os.environ.get("SUDO_USER") or pwd.getpwuid(os.getuid()).pw_name
+    name = (label or "").strip() or "IPOD"
+    mountpoint = "/media/%s/%s" % (user, name)
+    uid, gid = os.getuid(), os.getgid()
+    print("flashpod: udisks unavailable; mounting %s via sudo "
+          "(you may be prompted for your password)..." % dev, file=sys.stderr)
+    # one sudo invocation -> a single password prompt; mkdir is idempotent
+    script = "mkdir -p %s && mount -o uid=%d,gid=%d %s %s" % (
+        shlex.quote(mountpoint), uid, gid, shlex.quote(dev), shlex.quote(mountpoint))
+    if subprocess.run(["sudo", "sh", "-c", script]).returncode != 0:
+        print("flashpod: sudo mount of %s failed" % dev, file=sys.stderr)
         return None
-    # "Mounted /dev/sdb2 at /media/david/IPOD" (older udisks: trailing ".")
-    m = re.search(r" at (.+?)\.?\s*$", res.stdout)
-    if m:
-        print(res.stdout.strip(), file=sys.stderr)
-        return m.group(1)
-    print(f"flashpod: mounted {dev} but couldn't parse the mountpoint; "
-          f"pass --mount", file=sys.stderr)
-    return None
+    print("Mounted %s at %s" % (dev, mountpoint), file=sys.stderr)
+    return mountpoint
+
+
+def mount_device(dev, label=None):
+    """Mount a partition and return its mountpoint, or None.
+
+    Tries udisks first (no root needed); if the udisks daemon is missing or
+    unresponsive (a real failure mode on this machine — the FireWire iPod can
+    leave it timing out), falls back to `sudo mount`, which prompts for the
+    password on a terminal."""
+    res = None
+    try:
+        res = subprocess.run(["udisksctl", "mount", "-b", dev],
+                             capture_output=True, text=True, timeout=30)
+    except FileNotFoundError:
+        pass                              # no udisksctl -> go straight to sudo
+    except subprocess.TimeoutExpired:
+        print("flashpod: udisks timed out.", file=sys.stderr)
+    if res is not None and res.returncode == 0:
+        # "Mounted /dev/sdb2 at /media/david/IPOD" (older udisks: trailing ".")
+        m = re.search(r" at (.+?)\.?\s*$", res.stdout)
+        if m:
+            print(res.stdout.strip(), file=sys.stderr)
+            return m.group(1)
+        print(f"flashpod: mounted {dev} but couldn't parse the mountpoint; "
+              f"pass --mount", file=sys.stderr)
+        return None
+    if res is not None:
+        print(f"flashpod: udisks mount failed: {(res.stderr or res.stdout).strip()}",
+              file=sys.stderr)
+    # Fall back to a privileged mount, but only where we can prompt.
+    if not sys.stdin.isatty():
+        print("flashpod: cannot prompt for a sudo password here; mount the "
+              "partition manually and pass --mount.", file=sys.stderr)
+        return None
+    return _sudo_mount(dev, label)
 
 
 def offer_mount():
@@ -228,7 +267,7 @@ def offer_mount():
             return None
         if ans.strip().lower() not in ("", "y", "yes"):
             return None
-        return mount_device(cands[0][1])
+        return mount_device(cands[0][1], cands[0][2])
     print("Unmounted iPod-like partitions:")
     for i, c in enumerate(cands):
         print(f"  [{i}] {describe(c)}")
@@ -238,9 +277,9 @@ def offer_mount():
         print()
         return None
     if not choice:
-        return mount_device(cands[0][1])
+        return mount_device(cands[0][1], cands[0][2])
     if choice.isdigit() and int(choice) < len(cands):
-        return mount_device(cands[int(choice)][1])
+        return mount_device(cands[int(choice)][1], cands[int(choice)][2])
     print("flashpod: invalid selection", file=sys.stderr)
     return None
 
