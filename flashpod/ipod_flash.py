@@ -207,7 +207,7 @@ def run(cmd, check=True, capture=True, timeout=None):
     return subprocess.run(cmd, check=check,
                           stdout=subprocess.PIPE if capture else None,
                           stderr=subprocess.PIPE if capture else None,
-                          text=True, timeout=timeout)
+                          universal_newlines=True, timeout=timeout)
 
 def root_disk_names():
     """Kernel names (e.g. {'sda'}) of disks backing '/' and /boot, to never touch."""

@@ -47,6 +47,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller mutagen
 
+      - name: Python 3.6 compatibility check (macOS 10.8 build target)
+        shell: bash
+        run: sh scripts/check-py36-compat.sh
+
       - name: Build the binary
         run: pyinstaller --clean --noconfirm flashpod.spec
 
