@@ -59,47 +59,85 @@ recommended form for the **macOS 10.8** release — see below.
 The macOS target is **OS X 10.8 Mountain Lion** — a FireWire-equipped Mac is
 the native environment for these iPods. No GitHub runner or modern Python can
 produce a 10.8-compatible binary, so this one is built **by hand on 10.8
-hardware** and uploaded to the release afterwards.
+hardware** and uploaded to the release afterwards. The recipe below is
+battle-tested (it's how `flashpod-macos-10.8` is built).
 
-**Build it heavy.** Python 3.6 on 10.8 ships an OpenSSL too old to negotiate
-the TLS GitHub requires, so the on-demand firmware download won't work there.
-Bundle the firmware in (see "heavy builds" above) so the binary is fully
-self-contained — users won't need `--firmware` or a network.
+**Build it heavy** (firmware baked in). An end user's 10.8 machine generally
+can't do the runtime firmware download (a frozen binary's `urllib` has no CA
+bundle there), so bundle the images so the shipped binary needs no network and
+no `--firmware`. See "Self-contained builds" above.
 
-Steps (firmware images already dropped into `flashpod/firmware/`, see below):
+### The two non-obvious traps
 
-1. Install **Python 3.6** — the last CPython with an installer that runs on
-   10.6–10.8 (from python.org's archive). 3.7+ requires 10.9+.
-2. Install the matching toolchain (3.6-compatible):
+- **Use PyInstaller `4.2`, not a newer one.** PyInstaller 4.3+ added
+  Apple-Silicon macOS machinery that breaks on 10.8: it ad-hoc-`codesign`s every
+  bundled Mach-O (10.8's `codesign` is too old → *"object file format
+  unrecognized"*), and it reads each binary's `LC_VERSION_MIN_MACOSX`/
+  `LC_BUILD_VERSION` load command (10.6-built objects have none →
+  *"Expected exactly one … command"*). 4.2 predates all of it and still supports
+  Python 3.6.
+- **CA certificates.** A fresh python.org 3.6.8 has working TLS but no CA
+  bundle, so `urllib` downloads fail with `CERTIFICATE_VERIFY_FAILED`. `pip`
+  works anyway (it ships its own certs); fix `urllib` so you can fetch the
+  source/firmware with `python3.6`.
 
+### Steps (on the 10.8 Mac)
+
+1. **Install Python 3.6.8** — python.org's *"macOS 64-bit/32-bit installer"*
+   (runs on 10.6+; the 64-bit-only one needs 10.9+). 3.6.8 is the last 3.6 with
+   a macOS installer. If the Mac's browser can't reach python.org, download the
+   `.pkg` on a modern machine and copy it over.
+
+2. **Fix CA certs** so `python3.6` can download over HTTPS:
    ```sh
-   python3.6 -m pip install "pyinstaller==4.10" mutagen
+   /Applications/Python\ 3.6/Install\ Certificates.command
+   # …or, equivalently:
+   python3.6 -m pip install --upgrade certifi
+   export SSL_CERT_FILE="$(python3.6 -m certifi)"
    ```
 
-   PyInstaller 4.10 is the last release that supports Python 3.6.
-3. Put the firmware images in place (download them on a modern machine —
-   `gh release download firmware --dir flashpod/firmware` — and copy them to
-   the 10.8 Mac's `flashpod/firmware/`, since neither `gh` nor a TLS download
-   runs on 10.8).
-4. Build and smoke-test:
-
+3. **Install the build toolchain** (always use `python3.6 -m pip`, not a bare
+   `pip`):
    ```sh
+   python3.6 -m pip install "pyinstaller==4.2" mutagen
+   ```
+
+4. **Get the source + firmware onto the Mac.** Either fetch with `python3.6`
+   (TLS now works):
+   ```sh
+   python3.6 - <<'EOF'
+   import urllib.request as u, os
+   u.urlretrieve("https://github.com/davidbarnhart/flashpod/archive/refs/tags/v0.1.4.tar.gz","src.tgz")
+   base="https://github.com/davidbarnhart/flashpod/releases/download/firmware/"
+   os.makedirs("fw",exist_ok=True)
+   for f in ["iPod_1.1.5.ipsw","iPod_2.2.3.ipsw","iPod_4.3.1.1.ipsw","iPod_10.3.1.1.ipsw","iPod_5.1.2.1.ipsw","iPod_11.1.2.1.ipsw"]:
+       u.urlretrieve(base+f,"fw/"+f)
+   EOF
+   tar xf src.tgz && cp fw/*.ipsw flashpod-*/flashpod/firmware/
+   ```
+   …or copy a prepared tree over a network share. Either way, the six `.ipsw`
+   must be in `flashpod/firmware/` for a heavy build.
+
+5. **Build, smoke-test, name:**
+   ```sh
+   cd flashpod-*            # the unpacked source tree
    python3.6 -m PyInstaller --clean --noconfirm flashpod.spec
-   ./dist/flashpod flash --self-test
+   ./dist/flashpod flash --self-test                       # expect "self-test OK"
+   python3.6 -c "open('dummy.img','wb').truncate(64*1024*1024)"
+   ./dist/flashpod flash dummy.img --dry-run --yes         # must NOT say "downloading"
    mv dist/flashpod dist/flashpod-macos-10.8
    ```
 
-5. Attach it to the release (from any machine with `gh` authenticated — `gh`
-   itself won't run on 10.8):
-
+6. **Attach it to the release** from any machine with `gh` (gh won't run on
+   10.8 — copy the binary off via a share/USB):
    ```sh
-   gh release upload v0.1.3 dist/flashpod-macos-10.8
+   gh release upload v0.1.4 dist/flashpod-macos-10.8
    ```
 
-   …or drag it onto the release in the GitHub web UI.
-
-The single `flashpod.spec` is written to the kwargs common to PyInstaller 4.x
-and 6.x, so the same spec builds with the legacy 10.8 toolchain and on CI.
+> If you're forced onto a newer PyInstaller, you'd need a `codesign` no-op
+> stub on `PATH` (`printf '#!/bin/sh\nexit 0\n' > ~/bin/codesign; chmod +x
+> ~/bin/codesign`) — but that only dodges the signing trap, not the
+> `LC_VERSION_MIN` one. Sticking to 4.2 is the supported path.
 
 > A binary built on a newer macOS via CI would only run on that macOS and
 > newer — it would **not** reach 10.8 — which is why the supported macOS build

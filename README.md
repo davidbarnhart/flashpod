@@ -30,6 +30,16 @@ images aren't in the binary — `flashpod flash` downloads the one you pick, or
 you supply your own with `--firmware`.) (Building these is documented in
 [BUILD.md](BUILD.md), including the manual macOS 10.8 build.)
 
+**Vintage Macs (OS X 10.8):** use `flashpod-macos-10.8`. It has the firmware
+**baked in** (no network needed), so `flashpod flash` works offline and
+`--firmware` is optional. After downloading, make it runnable and clear the
+Gatekeeper quarantine (it's unsigned):
+
+```sh
+chmod +x flashpod-macos-10.8
+xattr -d com.apple.quarantine flashpod-macos-10.8   # or right-click → Open once
+```
+
 ### Or install from source with pip
 
 Install from a checkout — this puts a `flashpod` command on your PATH:
