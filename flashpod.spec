@@ -20,6 +20,8 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 # Bundle package data so resources.py finds it under sys._MEIPASS/flashpod/...
+# Only the firmware *catalog* (firmware.json) and the udev rule ship inside the
+# binary; the .ipsw images are GitHub release assets fetched on demand.
 datas = [
     (os.path.join(ROOT, "flashpod", "firmware"), "flashpod/firmware"),
     (os.path.join(ROOT, "flashpod", "contrib"), "flashpod/contrib"),

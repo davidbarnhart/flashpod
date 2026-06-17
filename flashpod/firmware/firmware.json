@@ -1,39 +1,52 @@
 {
-  "_comment": "Apple ipsw naming is iPod_<family>.<version>.ipsw (family 1 = 1G/2G, 2 = 3G, 4/10 = 4G grayscale, 5 = photo, 11 = color). Paths are relative to this directory. `flashpod flash` offers this list when no --firmware is given; the entry marked default is preselected (and used outright in non-interactive runs).",
+  "_comment": "Catalog of stock Apple iPod firmware for `flashpod flash`. When no --firmware is given, flashpod offers this list, downloads the chosen image from base_url + file, caches it under ~/.cache/flashpod, and verifies it against sha256. The .ipsw files are NOT bundled with flashpod (they are Apple's copyright); they are hosted as GitHub release assets. You can always bring your own with `--firmware <file>` (no network). Apple ipsw naming: iPod_<family>.<version>.ipsw (family 1 = 1G/2G, 2 = 3G, 4/10 = 4G grayscale, 5 = photo, 11 = color).",
+  "base_url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware",
   "firmwares": [
     {
-      "file": "Gen1and2/iPod_1.1.5.ipsw",
+      "file": "iPod_1.1.5.ipsw",
+      "sha256": "0edbb2d512bc84d333c0749f4d51398890b3a5934476311dd67e2314809e9103",
+      "size": 2092355,
       "generation": "1st/2nd generation (FireWire)",
       "version": "1.5",
       "description": "Last stock Apple-released firmware for 1G/2G iPods",
       "default": true
     },
     {
-      "file": "Gen3/iPod_2.2.3.ipsw",
+      "file": "iPod_2.2.3.ipsw",
+      "sha256": "bec081f2bacd4099dcfc533048a6844c8fafb50197c60d9d7ef95075cf2c6e92",
+      "size": 2018057,
       "generation": "3rd generation (dock connector)",
       "version": "2.3",
       "description": "Last stock Apple-released firmware for 3G"
     },
     {
-      "file": "Gen4_non_photo/iPod_4.3.1.1.ipsw",
+      "file": "iPod_4.3.1.1.ipsw",
+      "sha256": "576e05def7800e28cfd9a28ec36518964ab7a356f3b035e3fc223b0816be9ed9",
+      "size": 2952848,
       "generation": "4th generation (grayscale)",
       "version": "3.1.1",
       "description": "Last stock Apple-released firmware for 4G grayscale (family 4)"
     },
     {
-      "file": "Gen4_non_photo/iPod_10.3.1.1.ipsw",
+      "file": "iPod_10.3.1.1.ipsw",
+      "sha256": "b526ccf1c99406ee5863e2aba47d9a550699bfcab72c32cc97ec70137310070f",
+      "size": 2952859,
       "generation": "4th generation (grayscale, late board revision)",
       "version": "3.1.1",
       "description": "Last stock Apple-released firmware for the family-10 4G grayscale hardware revision"
     },
     {
-      "file": "Gen4_photo/iPod_5.1.2.1.ipsw",
+      "file": "iPod_5.1.2.1.ipsw",
+      "sha256": "03643928fd4b5d180f92396382680c48e745826b8b170bf2e298bef2bbe26464",
+      "size": 3831893,
       "generation": "4th generation (iPod photo)",
       "version": "1.2.1",
       "description": "Last stock Apple-released firmware for iPod photo (family 5)"
     },
     {
-      "file": "Gen4_color/iPod_11.1.2.1.ipsw",
+      "file": "iPod_11.1.2.1.ipsw",
+      "sha256": "d8d566b7038b59cbcb07b41875eb3fe2ddb2f53cc6bff18dd18584a39c706349",
+      "size": 3831903,
       "generation": "4th generation (iPod with color display)",
       "version": "1.2.1",
       "description": "Last stock Apple-released firmware for the family-11 color-display revision"

@@ -33,9 +33,10 @@ flashpod = "flashpod.cli:main"
 include = ["flashpod*"]
 
 [tool.setuptools.package-data]
-# Firmware images + manifest and the Linux udev rule ship inside the package.
+# Only the firmware *catalog* and the udev rule ship in the package; the
+# .ipsw images are hosted as GitHub release assets and fetched on demand
+# (or supplied with --firmware).
 flashpod = [
     "firmware/firmware.json",
-    "firmware/*/*.ipsw",
     "contrib/*.rules",
 ]
