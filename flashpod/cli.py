@@ -23,6 +23,7 @@ The iTunesDB is read/written natively (itunesdb.py) — no libgpod.
 
 import argparse
 import collections
+import errno
 import json
 import os
 import re
@@ -275,6 +276,41 @@ def remount_as_user(mount):
         print(f"flashpod: could not unmount {mount}.", file=sys.stderr)
         return None
     return _sudo_mount(dev, label)
+
+
+def _report_io_error(mount, exc):
+    """Print a clean, actionable message for an OSError hitting the iPod,
+    instead of letting a traceback escape."""
+    if getattr(exc, "errno", None) == errno.EIO:
+        print(f"flashpod: I/O error talking to the iPod at {mount} — it likely "
+              f"disconnected, or the cable/connector is flaky. Reconnect it, "
+              f"remount, and retry. If it persists the filesystem may be "
+              f"damaged (reformat with `flashpod flash`).", file=sys.stderr)
+    else:
+        print(f"flashpod: cannot access {mount}: {exc}", file=sys.stderr)
+
+
+def _attached_ipod_count():
+    """Best-effort count of attached Apple iPod disks (Linux/lsblk). Returns
+    None when it can't tell."""
+    try:
+        out = subprocess.run(
+            ["lsblk", "-J", "-o", "NAME,TYPE,VENDOR,MODEL,LABEL"],
+            capture_output=True, text=True, timeout=10)
+        if out.returncode != 0:
+            return None
+        data = json.loads(out.stdout)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+    n = 0
+    for d in data.get("blockdevices", []):
+        if d.get("type") != "disk":
+            continue
+        ident = (" ".join(str(d.get(k) or "") for k in ("vendor", "model"))).lower()
+        labels = " ".join((c.get("label") or "") for c in (d.get("children") or [])).upper()
+        if "ipod" in ident or "apple" in ident or "IPOD" in labels:
+            n += 1
+    return n
 
 
 def offer_mount():
@@ -880,8 +916,27 @@ def main():
                                 do_format=not opts.no_format,
                                 before_eject=offer)
 
+    # With more than one iPod attached, never let a destructive command guess
+    # which one — require an explicit --mount.
+    if opts.command in ("init", "rm", "remove", "delete", "erase") and not opts.mount:
+        n = _attached_ipod_count()
+        if n and n > 1:
+            print(f"flashpod: {n} iPods are attached and `{opts.command}` is "
+                  f"destructive — pass --mount <path> to choose one explicitly.",
+                  file=sys.stderr)
+            return 1
+
     mount = opts.mount or detect_mount()
     if not mount:
+        return 1
+
+    # The backing device vanished (e.g. the iPod disconnected) — the mount is a
+    # stale handle and touching it raises EIO. Detect it and bail cleanly.
+    dev = _device_for_mount(mount)
+    if dev and not os.path.exists(dev):
+        print(f"flashpod: {mount} is a stale mount — its device ({dev}) is gone "
+              f"(did the iPod disconnect?). Unmount it (sudo umount -l {mount}), "
+              f"reconnect the iPod, and retry.", file=sys.stderr)
         return 1
 
     # A mounted iPod we can't read (e.g. left mounted by root from an earlier
@@ -914,20 +969,24 @@ def main():
               "(--unsafe-queue overrides this check)", file=sys.stderr)
         return 1
 
-    if opts.command in ("ls", "list"):
-        lib = load_library(mount)
-        return cmd_ls(lib, opts.field) if lib else 1
+    try:
+        if opts.command in ("ls", "list"):
+            lib = load_library(mount)
+            return cmd_ls(lib, opts.field) if lib else 1
 
-    if opts.command in ("rm", "remove", "delete", "erase"):
-        lib = load_library(mount)
-        return cmd_rm(lib, mount, opts.what) if lib else 1
+        if opts.command in ("rm", "remove", "delete", "erase"):
+            lib = load_library(mount)
+            return cmd_rm(lib, mount, opts.what) if lib else 1
 
-    if opts.command == "init":
-        itunesdb.init_ipod(mount, opts.name or "iPod")
-        print(f"Initialized iPod directory structure at {mount}")
-        return 0
+        if opts.command == "init":
+            itunesdb.init_ipod(mount, opts.name or "iPod")
+            print(f"Initialized iPod directory structure at {mount}")
+            return 0
 
-    return cmd_add(mount, opts.files or [prompt_for_path()])
+        return cmd_add(mount, opts.files or [prompt_for_path()])
+    except OSError as exc:
+        _report_io_error(mount, exc)
+        return 1
 
 
 if __name__ == "__main__":
