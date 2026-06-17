@@ -118,20 +118,29 @@ no `--firmware`. See "Self-contained builds" above.
    …or copy a prepared tree over a network share. Either way, the six `.ipsw`
    must be in `flashpod/firmware/` for a heavy build.
 
-5. **Build, smoke-test, name:**
+5. **Build and smoke-test:**
    ```sh
    cd flashpod-*            # the unpacked source tree
    python3.6 -m PyInstaller --clean --noconfirm flashpod.spec
    ./dist/flashpod flash --self-test                       # expect "self-test OK"
    python3.6 -c "open('dummy.img','wb').truncate(64*1024*1024)"
    ./dist/flashpod flash dummy.img --dry-run --yes         # must NOT say "downloading"
-   mv dist/flashpod dist/flashpod-macos-10.8
    ```
 
-6. **Attach it to the release** from any machine with `gh` (gh won't run on
-   10.8 — copy the binary off via a share/USB):
+6. **Package it like the CI builds** — a tarball with the binary, README, and
+   license (so it isn't a lone mystery executable on the releases page):
    ```sh
-   gh release upload v0.1.4 dist/flashpod-macos-10.8
+   stage=flashpod-macos-10.8
+   mkdir -p "$stage"
+   cp dist/flashpod "$stage/flashpod" && chmod +x "$stage/flashpod"
+   cp packaging/macos/README.txt LICENSE "$stage/"
+   tar czf flashpod-macos-10.8.tar.gz "$stage"
+   ```
+
+7. **Attach it to the release** from any machine with `gh` (gh won't run on
+   10.8 — copy the tarball off via a share/USB):
+   ```sh
+   gh release upload v0.1.4 flashpod-macos-10.8.tar.gz
    ```
 
 > If you're forced onto a newer PyInstaller, you'd need a `codesign` no-op
