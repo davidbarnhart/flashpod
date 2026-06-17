@@ -1,31 +1,22 @@
 """Flash-card writer for early iPods — backs `flashpod flash`.
 
-Import and call flash() / self_test(); the `flashpod` script owns the
+Import and call flash() / self_test(); the `flashpod` package owns the
 command-line interface.
 
-Reproduces the on-disk layout of an Apple-formatted early iPod onto a fresh
-CompactFlash / SD card and installs the firmware.
-
-Windows flavor (default):
+Reproduces the on-disk layout of a Windows-formatted early iPod onto a fresh
+CompactFlash / SD card and installs the firmware:
 
     sector 0           DOS MBR (0xFEFFFF placeholder CHS)
     sectors 63..65598  firmware partition, type 0x00 (32 MiB)  <- raw firmware
     sectors 65599..    FAT32 data partition, type 0x0B, ending TAIL_RESERVE
                        sectors before the disk end (see below)
 
-Mac flavor, from a real 5 GB Mac iPod (see ipod5GB* captures):
+This MBR + FAT32 layout is what these tools write; a Windows-formatted iPod
+works on both Mac and Windows hosts. (The old Mac APM + HFS+ flavor was
+dropped — it depended on mkfs.hfsplus and never gained a pure-Python
+formatter; FAT32 covers every pre-2007 iPod.)
 
-    block 0            Driver Descriptor Record  ("ER", big-endian)
-    blocks 1..62       Apple_partition_map  "partition map"   (the APM itself)
-    blocks 63..65598   Apple_MDFW           "firmware"        (32 MiB)  <- raw firmware
-    blocks 65599..     Apple_HFS            "disk"            (rest minus
-                       TAIL_RESERVE)                          <- HFS+ data
-
-The Apple Partition Map and DDR are big-endian, 512-byte blocks; the real map
-sets only pmSig/pmMapBlkCnt/pmPyPartStart/pmPartBlkCnt/pmPartName/pmParType,
-leaving every boot/status field zero, so we reproduce exactly that.
-
-Both flavors leave the last TAIL_RESERVE sectors unallocated: iPod disk paths
+The layout leaves the last TAIL_RESERVE sectors unallocated: iPod disk paths
 can report the disk smaller than a card reader does (the 3G hides one sector),
 and a data partition overhanging the iPod's view makes the firmware reject it
 and demand a sync (found the hard way, 2026-06-12).
@@ -34,8 +25,7 @@ SAFETY: this ERASES the selected device. The tool only offers removable/USB
 disks, never the disk holding '/', unmounts first, requires an explicit typed
 confirmation, and supports --dry-run. Run as root.
 
-Default layout is Windows (MBR + FAT32); flavor "mac" gives APM + HFS+. After
-the images are written the firmware region is read back and compared
+After the images are written the firmware region is read back and compared
 byte-for-byte to the image before the card is ejected, so a bad write is
 caught immediately.
 """
@@ -45,13 +35,10 @@ from . import fat32
 from . import platform as _plat
 
 SECTOR        = 512
-MAP_START     = 1
-MAP_BLOCKS    = 62
 FW_START      = 63
-FW_BLOCKS     = 65536            # 32 MiB firmware partition (Mac/APM flavor)
-DATA_START    = FW_START + FW_BLOCKS   # 65599 (Mac/APM flavor)
+FW_BLOCKS     = 65536            # 32 MiB firmware partition
+DATA_START    = FW_START + FW_BLOCKS   # 65599
 LBA28_MAX     = 0x10000000       # 2^28 sectors = 128 GiB ceiling of the iPod ATA driver
-N_MAP_ENTRIES = 3
 # iPod disk paths (bridge or flash adapter) can report the disk smaller than
 # a card reader does — the 3G's path hides exactly 1 sector, and a partition
 # that overhangs that view makes the firmware demand a sync. Apple leaves the
@@ -67,53 +54,10 @@ def color(s, c):
 # ----------------------------------------------------------------------------
 # Partition-table construction (pure, testable)
 # ----------------------------------------------------------------------------
-def build_ddr(total_sectors):
-    """Driver Descriptor Record, block 0 (big-endian)."""
-    b = bytearray(SECTOR)
-    struct.pack_into(">H", b, 0, 0x4552)                  # sbSig "ER"
-    struct.pack_into(">H", b, 2, SECTOR)                  # sbBlkSize
-    struct.pack_into(">I", b, 4, total_sectors & 0xFFFFFFFF)  # sbBlkCount
-    # sbDevType/sbDevID/sbData/sbDrvrCount all 0 -> minimal, driverless DDR
-    return bytes(b)
-
-def build_pm_entry(py_start, blk_cnt, name, ptype):
-    """One Apple Partition Map entry, 512 bytes (big-endian)."""
-    b = bytearray(SECTOR)
-    struct.pack_into(">H", b, 0, 0x504D)                  # pmSig "PM"
-    struct.pack_into(">I", b, 4, N_MAP_ENTRIES)           # pmMapBlkCnt
-    struct.pack_into(">I", b, 8, py_start)                # pmPyPartStart
-    struct.pack_into(">I", b, 12, blk_cnt)                # pmPartBlkCnt
-    b[16:16+len(name)]  = name.encode("ascii")            # pmPartName
-    b[48:48+len(ptype)] = ptype.encode("ascii")           # pmParType
-    return bytes(b)
-
-def build_partition_layout(total_sectors):
-    """Return (header_bytes for blocks 0..DATA_START-1, data_start, data_blocks).
-
-    The header covers the DDR + APM + the rest of the partition-map partition;
-    the firmware and data regions are written separately.
-    """
-    data_end    = min(total_sectors - TAIL_RESERVE, LBA28_MAX)
-    data_blocks = data_end - DATA_START
-    if data_blocks <= 0:
-        raise ValueError("device too small for an iPod data partition")
-    entries = [
-        build_pm_entry(MAP_START,  MAP_BLOCKS, "partition map", "Apple_partition_map"),
-        build_pm_entry(FW_START,   FW_BLOCKS,  "firmware",      "Apple_MDFW"),
-        build_pm_entry(DATA_START, data_blocks,"disk",          "Apple_HFS"),
-    ]
-    # blocks: [0]=DDR, [1..3]=entries, [4..62]=zero (rest of the 62-blk map part)
-    header = bytearray(FW_START * SECTOR)
-    header[0:SECTOR] = build_ddr(total_sectors)
-    for i, e in enumerate(entries):
-        off = (MAP_START + i) * SECTOR
-        header[off:off+SECTOR] = e
-    return bytes(header), DATA_START, data_blocks
-
 def build_mbr_layout(total_sectors):
-    """Windows-flavored layout: DOS MBR with firmware partition (type 0x00)
-    at sector 63 and FAT32 data (type 0x0B) from sector 65599, stopping
-    TAIL_RESERVE sectors short of the disk end.
+    """DOS MBR with a firmware partition (type 0x00) at sector 63 and FAT32
+    data (type 0x0B) from sector 65599, stopping TAIL_RESERVE sectors short
+    of the disk end.
 
     Returns (mbr_512_bytes, data_start, data_blocks).
     """
@@ -403,22 +347,17 @@ def choose_device():
             return "/dev/" + cands[int(sel)]["name"]
         print(color("  invalid selection", C_RED), file=sys.stderr)
 
-def confirm(dev, total_sectors, assume_yes, flavor):
-    if flavor == "windows":
-        _, data_start, data_blocks = build_mbr_layout(total_sectors)
-        scheme, fs, dtype = "MBR (Windows)", "FAT32", "type 0x0B"
-    else:
-        _, data_start, data_blocks = build_partition_layout(total_sectors)
-        scheme, fs, dtype = "APM (Mac)", "HFS+", "Apple_HFS"
+def confirm(dev, total_sectors, assume_yes):
+    _, data_start, data_blocks = build_mbr_layout(total_sectors)
     fw_blocks = FW_BLOCKS
     print(color("\n  PLAN — this will ERASE %s" % dev, C_RED), file=sys.stderr)
-    print("    flavor      : %s" % scheme, file=sys.stderr)
+    print("    layout      : MBR + FAT32", file=sys.stderr)
     print("    device size : %s (%d sectors)" % (fmt_size(total_sectors*SECTOR), total_sectors),
           file=sys.stderr)
     print("    firmware     : sectors %d..%d   (%s)" %
           (FW_START, FW_START+fw_blocks-1, fmt_size(fw_blocks*SECTOR)), file=sys.stderr)
-    print("    data (%-5s) : sectors %d..%d  %s  (%s)" %
-          (fs, data_start, data_start+data_blocks-1, dtype, fmt_size(data_blocks*SECTOR)),
+    print("    data (FAT32) : sectors %d..%d  type 0x0B  (%s)" %
+          (data_start, data_start+data_blocks-1, fmt_size(data_blocks*SECTOR)),
           file=sys.stderr)
     if total_sectors > LBA28_MAX:
         print(color("    NOTE: card exceeds 128 GiB; data capped at the iPod's LBA28 limit.",
@@ -472,36 +411,30 @@ def unmount_all(dev, dry):
         if not dry:
             run(["umount", part], check=False)
 
-def write_layout(dev, fw_bytes, total_sectors, dry, do_format, flavor):
-    if flavor == "windows":
-        header, data_start, data_blocks = build_mbr_layout(total_sectors)
-        mkfs_name = "pure-Python FAT32"
-    else:
-        header, data_start, data_blocks = build_partition_layout(total_sectors)
-        mkfs_name = "mkfs.hfsplus (HFS+)"
+def write_layout(dev, fw_bytes, total_sectors, dry, do_format):
+    header, data_start, data_blocks = build_mbr_layout(total_sectors)
     if dry:
-        print(color("  [dry-run] would wipe signatures, write %d-byte %s header, "
-                    "%d-byte firmware @ sector %d, %s on data"
-                    % (len(header), flavor, len(fw_bytes), FW_START, mkfs_name),
+        print(color("  [dry-run] would wipe signatures, write %d-byte MBR header, "
+                    "%d-byte firmware @ sector %d, pure-Python FAT32 on data"
+                    % (len(header), len(fw_bytes), FW_START),
                     C_DIM), file=sys.stderr)
         return
     plat = _plat.current()
-    # 1. kill any existing partition signatures (MBR/GPT/FAT/HFS)
+    # 1. kill any existing partition signatures (MBR/GPT/FAT)
     plat.wipe_signatures(dev, False)
     with plat.open_raw(dev, "r+b") as f:
-        # zero the leading area (old GPT/MBR/APM region) and the tail (GPT backup)
+        # zero the leading area (old GPT/MBR region) and the tail (GPT backup)
         f.seek(0); f.write(b"\x00" * (data_start * SECTOR))
         f.seek(max(0, total_sectors - 34) * SECTOR); f.write(b"\x00" * (34 * SECTOR))
-        # 2. partition table (DDR+APM for Mac, MBR for Windows)
+        # 2. partition table (MBR)
         f.seek(0); f.write(header)
         # 3. firmware image at the firmware partition's start (sector 63)
         f.seek(FW_START * SECTOR); f.write(fw_bytes)
         f.flush(); os.fsync(f.fileno())
-    print(color("  wrote %s partition table + firmware"
-                % ("MBR" if flavor == "windows" else "DDR+APM"), C_GRN), file=sys.stderr)
+    print(color("  wrote MBR partition table + firmware", C_GRN), file=sys.stderr)
     # 4. data filesystem written straight into the data region
     if do_format:
-        format_data(dev, data_start, data_blocks, flavor)
+        format_data(dev, data_start, data_blocks)
     # 5. re-read the partition table so the OS sees the new map.
     plat.reread_partition_table(dev)
 
@@ -518,34 +451,10 @@ def fat_sectors_per_cluster(data_blocks):
         spc //= 2
     return spc
 
-def format_data(dev, data_start, data_blocks, flavor):
-    if flavor == "windows":
-        format_fat32_data(dev, data_start, data_blocks)
-        return
-    # Mac flavor: HFS+ via mkfs.hfsplus over a loop mapping. Linux-only and
-    # slated for removal (see issue #1: the Mac/HFS+ flavor is being dropped).
-    if not have("mkfs.hfsplus"):
-        print(color("  mkfs.hfsplus not found (install hfsprogs) - skipping data "
-                    "format; iPod may show 'use iTunes to restore'.", C_YEL),
-              file=sys.stderr)
-        return
-    if not have("losetup"):
-        print(color("  losetup not found - skipping data format.", C_YEL), file=sys.stderr)
-        return
-    off, size = data_start * SECTOR, data_blocks * SECTOR
-    lo = run(["losetup", "--find", "--show", "--offset", str(off),
-              "--sizelimit", str(size), dev]).stdout.strip()
-    try:
-        run(["mkfs.hfsplus", "-v", "iPod", lo])
-        print(color("  formatted data partition (HFS+, label 'iPod')", C_GRN),
-              file=sys.stderr)
-    finally:
-        run(["losetup", "-d", lo], check=False)
-
-def format_fat32_data(dev, data_start, data_blocks):
-    """Format the data partition FAT32 in pure Python — no mkfs.vfat, no
-    losetup. Writes the filesystem structures straight onto the device at the
-    partition offset, so this is identical on Linux, macOS, and Windows."""
+def format_data(dev, data_start, data_blocks):
+    """Format the data partition FAT32 in pure Python — no mkfs, no losetup.
+    Writes the filesystem structures straight onto the device at the partition
+    offset, so this is identical on Linux, macOS, and Windows."""
     spc = fat_sectors_per_cluster(data_blocks)
     try:
         with _plat.current().open_raw(dev, "r+b") as f:
@@ -611,37 +520,18 @@ def eject(dev, dry):
 # ----------------------------------------------------------------------------
 def self_test():
     total = 9780743                       # the captured 5 GB iPod's total sectors
-    header, ds, db = build_partition_layout(total)
-    assert ds == 65599, ds
-    assert db == total - TAIL_RESERVE - 65599, "APM tail reserve"
-    # DDR
-    assert header[0:2] == b"ER", "DDR sig"
-    assert struct.unpack_from(">H", header, 2)[0] == 512
-    assert struct.unpack_from(">I", header, 4)[0] == total
-    # APM entries match the real captured iPod (starts/names/types; the data
-    # partition is TAIL_RESERVE shorter than the capture by design)
-    expect = [(1, 62, "partition map", "Apple_partition_map"),
-              (63, 65536, "firmware", "Apple_MDFW"),
-              (65599, db, "disk", "Apple_HFS")]
-    for i, (st, cnt, nm, tp) in enumerate(expect):
-        b = header[(1+i)*SECTOR:(2+i)*SECTOR]
-        assert b[0:2] == b"PM"
-        assert struct.unpack_from(">I", b, 4)[0] == 3
-        assert struct.unpack_from(">I", b, 8)[0] == st, (nm, "start")
-        assert struct.unpack_from(">I", b, 12)[0] == cnt, (nm, "count")
-        assert b[16:48].split(b"\0")[0].decode() == nm
-        assert b[48:80].split(b"\0")[0].decode() == tp
-    # large-card LBA28 cap
-    _, _, big_db = build_partition_layout(LBA28_MAX * 4)
-    assert DATA_START + big_db == LBA28_MAX, "LBA28 cap"
-    # Windows MBR layout
+    # MBR + FAT32 layout
     mbr, mds, mdb = build_mbr_layout(total)
+    assert mds == DATA_START == 65599, mds
     assert mbr[510:512] == b"\x55\xaa", "MBR sig"
     assert mbr[446+4] == 0x00 and mbr[462+4] == 0x0b, "MBR partition types"
     assert struct.unpack_from("<I", mbr, 446+8)[0] == FW_START, "fw start"
     assert struct.unpack_from("<I", mbr, 446+12)[0] == FW_BLOCKS, "fw size"
     assert struct.unpack_from("<I", mbr, 462+8)[0] == mds == DATA_START
     assert mds + mdb == total - TAIL_RESERVE, "MBR tail reserve"
+    # large-card LBA28 cap
+    _, _, big_db = build_mbr_layout(LBA28_MAX * 4)
+    assert DATA_START + big_db == LBA28_MAX, "LBA28 cap"
     # FAT32 cluster sizing: Apple's 16 KiB on big cards, shrunk below the
     # 65525-cluster FAT32 validity floor (978 MiB card needs 8 KiB clusters)
     assert fat_sectors_per_cluster(246867514) == 32, "big card keeps Apple spc"
@@ -681,11 +571,11 @@ def self_test():
             "aupd id fixup (0 = pending flash update -> boot loop)"
         assert struct.unpack_from("<I", fixed, base + 76)[0] == 0x28000000, \
             "aupd loadAddr fixup"
-    print(color("self-test OK: APM+DDR layout; MBR layout + tail reserve; "
+    print(color("self-test OK: MBR + FAT32 layout + tail reserve; "
                 "firmware loadAddr fixup + checksum; LBA28 cap.", C_GRN))
 
 # ----------------------------------------------------------------------------
-def flash(device=None, firmware=None, flavor="windows",
+def flash(device=None, firmware=None,
           assume_yes=False, dry_run=False, do_format=True, before_eject=None):
     """Flash a card end-to-end; the `ipod flash` entry point.
     Exits via sys.exit() on errors and aborted confirmations.
@@ -709,9 +599,9 @@ def flash(device=None, firmware=None, flavor="windows",
     total_sectors = plat.device_sectors(dev)
     if total_sectors <= 0:
         sys.exit(color("could not determine size of %s" % dev, C_RED))
-    confirm(dev, total_sectors, assume_yes or dry_run, flavor)
+    confirm(dev, total_sectors, assume_yes or dry_run)
     plat.unmount_all(dev, dry_run)
-    write_layout(dev, fw, total_sectors, dry_run, do_format, flavor)
+    write_layout(dev, fw, total_sectors, dry_run, do_format)
     verify_firmware(dev, fw, dry_run)
     if before_eject and not dry_run:
         before_eject(dev)
