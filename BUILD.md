@@ -34,7 +34,25 @@ pyinstaller --clean --noconfirm flashpod.spec
 ./dist/flashpod flash --self-test       # smoke test
 ```
 
-The result is `dist/flashpod` (`dist/flashpod.exe` on Windows).
+The result is `dist/flashpod` (`dist/flashpod.exe` on Windows). By default this
+is a **light** build: the firmware `.ipsw` images are *not* inside it; at flash
+time flashpod downloads the chosen one from the firmware release (or you pass
+`--firmware`).
+
+### Self-contained ("heavy") builds
+
+To bake the firmware into the binary so it never needs the network, just place
+the `.ipsw` files next to the manifest before building — the spec bundles the
+whole `flashpod/firmware/` directory, and at runtime flashpod prefers a bundled
+copy (verified against its SHA-256) over downloading:
+
+```sh
+gh release download firmware --dir flashpod/firmware    # the six .ipsw images
+pyinstaller --clean --noconfirm flashpod.spec           # now a heavy build
+```
+
+(The `.ipsw` files are gitignored, so this doesn't dirty the repo.) This is the
+recommended form for the **macOS 10.8** release — see below.
 
 ## macOS — manual (target: OS X 10.8)
 
@@ -43,7 +61,12 @@ the native environment for these iPods. No GitHub runner or modern Python can
 produce a 10.8-compatible binary, so this one is built **by hand on 10.8
 hardware** and uploaded to the release afterwards.
 
-On the 10.8 Mac:
+**Build it heavy.** Python 3.6 on 10.8 ships an OpenSSL too old to negotiate
+the TLS GitHub requires, so the on-demand firmware download won't work there.
+Bundle the firmware in (see "heavy builds" above) so the binary is fully
+self-contained — users won't need `--firmware` or a network.
+
+Steps (firmware images already dropped into `flashpod/firmware/`, see below):
 
 1. Install **Python 3.6** — the last CPython with an installer that runs on
    10.6–10.8 (from python.org's archive). 3.7+ requires 10.9+.
@@ -54,7 +77,11 @@ On the 10.8 Mac:
    ```
 
    PyInstaller 4.10 is the last release that supports Python 3.6.
-3. Build and smoke-test:
+3. Put the firmware images in place (download them on a modern machine —
+   `gh release download firmware --dir flashpod/firmware` — and copy them to
+   the 10.8 Mac's `flashpod/firmware/`, since neither `gh` nor a TLS download
+   runs on 10.8).
+4. Build and smoke-test:
 
    ```sh
    python3.6 -m PyInstaller --clean --noconfirm flashpod.spec
@@ -62,10 +89,11 @@ On the 10.8 Mac:
    mv dist/flashpod dist/flashpod-macos-10.8
    ```
 
-4. Attach it to the release (from any machine with `gh` authenticated):
+5. Attach it to the release (from any machine with `gh` authenticated — `gh`
+   itself won't run on 10.8):
 
    ```sh
-   gh release upload v0.1.0 dist/flashpod-macos-10.8
+   gh release upload v0.1.3 dist/flashpod-macos-10.8
    ```
 
    …or drag it onto the release in the GitHub web UI.

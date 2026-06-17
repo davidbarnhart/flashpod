@@ -9,6 +9,10 @@ venv/
 /build/
 /dist/
 
+# Firmware images dropped in for a "heavy" (self-contained) build — they live
+# on the firmware release, not in the repo
+/flashpod/firmware/*.ipsw
+
 # Compiled libgpod oracle (build from ipodctl.c when needed)
 /ipodctl
 
