@@ -4,4 +4,4 @@
 Pure Python, no libgpod. See the README for usage.
 """
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
