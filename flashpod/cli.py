@@ -761,9 +761,12 @@ def main():
         if opts.self_test:
             ipod_flash.self_test()
             return 0
-        if os.geteuid() != 0 and not opts.dry_run:
-            print("flashpod flash: writing a card needs root — rerun as:\n"
-                  f"  sudo {' '.join(sys.argv)}", file=sys.stderr)
+        plat = platform.current()
+        if not opts.dry_run and not plat.is_admin():
+            msg = "flashpod flash: " + plat.privilege_hint()
+            if os.name != "nt":           # offer the exact sudo rerun on POSIX
+                msg += "\n  sudo " + " ".join(sys.argv)
+            print(msg, file=sys.stderr)
             return 1
         firmware = opts.firmware or choose_firmware()
         if not firmware:
