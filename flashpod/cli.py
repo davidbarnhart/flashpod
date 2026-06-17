@@ -33,12 +33,12 @@ import time
 
 import mutagen
 
-import ipod_flash
-import itunesdb
+from . import ipod_flash
+from . import itunesdb
+from . import resources
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-FIRMWARE_DIR = os.path.join(HERE, "firmware")
-FIRMWARE_MANIFEST = os.path.join(FIRMWARE_DIR, "firmware.json")
+FIRMWARE_DIR = resources.firmware_dir()
+FIRMWARE_MANIFEST = resources.firmware_manifest()
 
 
 def choose_firmware():
@@ -711,6 +711,7 @@ def offer_init_after_flash(dev):
 
 def main():
     parser = argparse.ArgumentParser(
+        prog="flashpod",
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mount", default=None,
                         help="iPod mountpoint (default: auto-detect from "
@@ -802,7 +803,7 @@ def main():
         problem = firewire_queue_problem(mount)  # verify, don't trust
     if problem and not opts.unsafe_queue:
         disk, bad = problem
-        rule = os.path.join(HERE, "contrib", "99-flashpod-firewire-ipod.rules")
+        rule = resources.udev_rule()
         print(f"flashpod: {mount} is a FireWire iPod and the host I/O settings "
               f"are UNSAFE for it:\n  " + ", ".join(bad) + "\n"
               "Large/queued reads can crash early iPod FireWire bridges and "

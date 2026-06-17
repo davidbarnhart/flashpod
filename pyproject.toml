@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flashpod"
+version = "0.1.0"
+description = "Command-line iPod sync + card-flashing tooling for early FireWire-era iPods, pure Python"
+readme = "README.md"
+requires-python = ">=3.6"
+license = { text = "MIT" }
+authors = [{ name = "David Barnhart" }]
+keywords = ["ipod", "itunesdb", "firmware", "flash", "compactflash"]
+classifiers = [
+    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+dependencies = ["mutagen"]
+
+[project.urls]
+Homepage = "https://github.com/davidbarnhart/flashpod"
+Issues = "https://github.com/davidbarnhart/flashpod/issues"
+
+[project.scripts]
+flashpod = "flashpod.cli:main"
+
+[tool.setuptools]
+packages = ["flashpod"]
+
+[tool.setuptools.package-data]
+# Firmware images + manifest and the Linux udev rule ship inside the package.
+flashpod = [
+    "firmware/firmware.json",
+    "firmware/*/*.ipsw",
+    "contrib/*.rules",
+]

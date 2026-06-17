@@ -41,7 +41,7 @@ caught immediately.
 """
 import json, os, struct, subprocess, sys, zipfile
 
-import fat32
+from . import fat32
 
 SECTOR        = 512
 MAP_START     = 1
