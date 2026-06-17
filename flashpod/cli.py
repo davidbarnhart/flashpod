@@ -746,8 +746,6 @@ def main():
     p_fl.add_argument("--firmware", default=None,
                       help="firmware .ipsw (default: choose from "
                            "firmware/firmware.json)")
-    p_fl.add_argument("--flavor", choices=("mac", "windows"), default="windows",
-                      help="windows = MBR + FAT32 (default); mac = APM + HFS+")
     p_fl.add_argument("--yes", action="store_true",
                       help="skip the typed ERASE confirmation")
     p_fl.add_argument("--dry-run", action="store_true",
@@ -771,13 +769,12 @@ def main():
         if not firmware:
             return 1
         # Offer init on the fresh card only when it will work: interactive,
-        # a real write, and a FAT32 data partition to mount (Linux can't
-        # reliably write the mac flavor's HFS+).
+        # a real write, and a FAT32 data partition to mount.
         offer = offer_init_after_flash if (
             sys.stdin.isatty() and not opts.dry_run
-            and opts.flavor == "windows" and not opts.no_format) else None
+            and not opts.no_format) else None
         return ipod_flash.flash(device=opts.device, firmware=firmware,
-                                flavor=opts.flavor, assume_yes=opts.yes,
+                                assume_yes=opts.yes,
                                 dry_run=opts.dry_run,
                                 do_format=not opts.no_format,
                                 before_eject=offer)

@@ -12,8 +12,8 @@ for 1G through 4G models) ship inside the package.
 
 - Python 3.6+ and `mutagen` (tag extraction; installed automatically by
   `pip install`, or use the distro `python3-mutagen` when running from source)
-- FAT32 formatting during flash is built in (pure Python — no `dosfstools`
-  needed); `hfsprogs` is required only for the legacy `--flavor mac` (HFS+)
+- FAT32 formatting during flash is built in (pure Python) — no external
+  filesystem tools needed
 - Pre-2007 iPods only — newer models need an iTunesDB checksum/hash that
   these tools don't generate.
 
@@ -152,10 +152,8 @@ Options:
 | Flag | Meaning |
 |------|---------|
 | `--firmware <file>` | firmware `.ipsw` (default: chooser over `flashpod/firmware/firmware.json`) |
-| `--flavor windows`  | MBR + FAT32 layout (default) |
-| `--flavor mac`      | APM + HFS+ layout |
 | `--yes`             | skip the typed `ERASE sdX` confirmation |
-| `--no-format`       | don't mkfs the data partition |
+| `--no-format`       | don't format the data partition |
 | `--dry-run`         | show the plan only |
 | `--self-test`       | check layout-building logic and exit |
 
@@ -166,11 +164,10 @@ After writing, the firmware region is read back and compared byte-for-byte
 before the card is ejected. Cards larger than 128 GiB are capped at the
 iPod's LBA28 addressing limit.
 
-After a successful flash (interactive, default `windows` flavor), flashpod
-offers to run init on the new card right away, and after that to load music
-onto it too — answer Y (the default) to both and the card comes out of the
-flash step ready to play. The offers are skipped for `--dry-run`,
-`--no-format`, `--flavor mac`, and non-interactive runs.
+After a successful interactive flash, flashpod offers to run init on the new
+card right away, and after that to load music onto it too — answer Y (the
+default) to both and the card comes out of the flash step ready to play. The
+offers are skipped for `--dry-run`, `--no-format`, and non-interactive runs.
 
 ## Typical workflows
 
