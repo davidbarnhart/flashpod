@@ -39,11 +39,14 @@ FW_START      = 63
 FW_BLOCKS     = 65536            # 32 MiB firmware partition
 DATA_START    = FW_START + FW_BLOCKS   # 65599
 LBA28_MAX     = 0x10000000       # 2^28 sectors = 128 GiB ceiling of the iPod ATA driver
-# Early iPods address at most LBA28 (128 GiB); a real card is <= that. A
-# device claiming much more is reporting a bogus capacity — the documented
-# symptom of a loose IDE/CF connector or a flaky USB bridge (CLAUDE.md). Warn
-# above a generous margin so legitimate 128 GiB cards don't trip it.
-CAPACITY_SANE_MAX = LBA28_MAX * 3 // 2          # ~192 GiB
+# Early iPods address at most LBA28 = 128 GiB. A card larger than that is
+# unusable: the iPod's ATA layer can't reach past 2^28 sectors, and an
+# oversized card (e.g. 256 GB in a 3G) typically makes the bridge report a
+# wrapped/garbage capacity and read back an unreadable filesystem. Anything
+# strictly above LBA28 is therefore suspect. (Marketed sizes are decimal, so
+# a "128 GB" card is ~119 GiB — comfortably under this; the next common size
+# up, 256 GB, is ~238 GiB or garbage — well over.)
+CAPACITY_SANE_MAX = LBA28_MAX                    # 128 GiB (the LBA28 ceiling)
 # iPod disk paths (bridge or flash adapter) can report the disk smaller than
 # a card reader does — the 3G's path hides exactly 1 sector, and a partition
 # that overhangs that view makes the firmware demand a sync. Apple leaves the
@@ -57,19 +60,24 @@ def color(s, c):
     return c + s + C_RST if sys.stderr.isatty() else s
 
 def implausible_capacity(total_sectors):
-    """True if `total_sectors` is too large to be a real early-iPod volume —
-    the documented symptom of a loose IDE/CF connector or a flaky USB bridge
-    reporting garbage."""
+    """True if the device is larger than an early iPod can address (LBA28 /
+    128 GiB) — an oversized card the iPod can't use, or a bogus capacity
+    reading from one."""
     return total_sectors > CAPACITY_SANE_MAX
 
 def capacity_warning(total_sectors):
-    """One-line warning if the reported capacity is implausible, else ''."""
+    """One-line warning if the reported capacity exceeds the iPod's limit,
+    else ''."""
     if not implausible_capacity(total_sectors):
         return ""
-    return ("reports %s — implausibly large for an early iPod (max 128 GiB). "
-            "This usually means a loose IDE/CF connector or a flaky USB bridge; "
-            "reads/writes will be unreliable. Reseat the connector, or try "
-            "another cable/card, before trusting it." % fmt_size(total_sectors * SECTOR))
+    return ("reports %s — past the 128 GiB (LBA28) limit these early iPods can "
+            "address. An oversized card (256 GB+) is the usual cause: the iPod "
+            "can't reach beyond 128 GiB, so it misreports capacity (often a "
+            "wrapped, much-larger number) and reads back an unreadable "
+            "filesystem — even though flashpod caps the data partition at "
+            "128 GiB. Use a 128 GB-or-smaller card. (A loose IDE/CF connector "
+            "can produce similar bogus readings, so reseat if the card really "
+            "is small enough.)" % fmt_size(total_sectors * SECTOR))
 
 # ----------------------------------------------------------------------------
 # Partition-table construction (pure, testable)
@@ -385,9 +393,8 @@ def confirm(dev, total_sectors, assume_yes):
     warn = capacity_warning(total_sectors)
     if warn:
         print(color("    ⚠ WARNING: %s %s" % (dev, warn), C_RED), file=sys.stderr)
-    elif total_sectors > LBA28_MAX:
-        print(color("    NOTE: card exceeds 128 GiB; data capped at the iPod's LBA28 limit.",
-                    C_YEL), file=sys.stderr)
+        print(color("    (data capped at the iPod's 128 GiB LBA28 limit.)", C_YEL),
+              file=sys.stderr)
     mps = _plat.current().device_mountpoints(dev)
     if mps:
         print(color("    mounted now : " + ", ".join("%s@%s" % m for m in mps), C_YEL),
