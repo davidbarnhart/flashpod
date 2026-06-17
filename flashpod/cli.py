@@ -24,6 +24,7 @@ The iTunesDB is read/written natively (itunesdb.py) — no libgpod.
 import argparse
 import collections
 import errno
+import hashlib
 import json
 import os
 import re
@@ -31,6 +32,8 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 
 import mutagen
 
@@ -39,45 +42,41 @@ from . import itunesdb
 from . import platform
 from . import resources
 
-FIRMWARE_DIR = resources.firmware_dir()
 FIRMWARE_MANIFEST = resources.firmware_manifest()
 
 
-def choose_firmware():
-    """Pick a firmware image from firmware/firmware.json when `flash` got
-    no --firmware. Interactive chooser on a tty (manifest default
-    preselected); non-tty uses the default entry outright."""
+def _load_manifest():
+    """Parse the bundled firmware catalog, or print why we can't."""
     try:
         with open(FIRMWARE_MANIFEST) as f:
-            entries = json.load(f)["firmwares"]
-    except (OSError, ValueError, KeyError) as exc:
-        print(f"flashpod flash: no --firmware given and {FIRMWARE_MANIFEST} "
-              f"is unusable ({exc})", file=sys.stderr)
-        return None
-    available = []
-    for e in entries:
-        if os.path.exists(os.path.join(FIRMWARE_DIR, e["file"])):
-            available.append(e)
-        else:
-            print(f"flashpod flash: manifest entry {e['file']} not found "
-                  "on disk, skipping", file=sys.stderr)
-    if not available:
-        print("flashpod flash: no firmware files available; pass --firmware",
+            return json.load(f)
+    except (OSError, ValueError) as exc:
+        print(f"flashpod flash: firmware manifest unusable ({exc}); pass --firmware",
               file=sys.stderr)
         return None
 
-    default = next((i for i, e in enumerate(available) if e.get("default")), 0)
+
+def choose_firmware(manifest):
+    """Pick a firmware entry (dict) from the manifest. Interactive chooser on
+    a tty (default preselected); non-tty uses the default outright. The .ipsw
+    itself is fetched later by ensure_firmware()."""
+    entries = manifest.get("firmwares") or []
+    if not entries:
+        print("flashpod flash: no firmware listed in the manifest; pass --firmware",
+              file=sys.stderr)
+        return None
+    default = next((i for i, e in enumerate(entries) if e.get("default")), 0)
     if not sys.stdin.isatty():
-        e = available[default]
+        e = entries[default]
         print(f"flashpod flash: using default firmware {e['file']} "
               f"({e['generation']}, {e['version']})", file=sys.stderr)
-        return os.path.join(FIRMWARE_DIR, e["file"])
-
+        return e
     print("Available firmware:")
-    for i, e in enumerate(available):
+    for i, e in enumerate(entries):
         mark = "  [default]" if i == default else ""
+        size = " (~%.1f MiB)" % (e["size"] / (1 << 20)) if e.get("size") else ""
         print(f"  [{i}] {e['generation']} — version {e['version']}{mark}\n"
-              f"      {e['description']}")
+              f"      {e['description']}{size}")
     try:
         choice = input(f"Select firmware [{default}]: ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -85,10 +84,107 @@ def choose_firmware():
         return None
     if not choice:
         choice = str(default)
-    if not (choice.isdigit() and int(choice) < len(available)):
+    if not (choice.isdigit() and int(choice) < len(entries)):
         print("flashpod flash: invalid selection", file=sys.stderr)
         return None
-    return os.path.join(FIRMWARE_DIR, available[int(choice)]["file"])
+    return entries[int(choice)]
+
+
+def _firmware_cache_dir():
+    base = os.environ.get("XDG_CACHE_HOME") or \
+        os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "flashpod", "firmware")
+
+
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _download(url, dst, total=None):
+    """Stream `url` to `dst` with a progress line. Raises on network/IO error."""
+    req = urllib.request.Request(url, headers={"User-Agent": "flashpod"})
+    with urllib.request.urlopen(req) as resp, open(dst, "wb") as out:
+        total = total or int(resp.headers.get("Content-Length") or 0)
+        done = 0
+        last = 0.0
+        while True:
+            chunk = resp.read(1 << 16)
+            if not chunk:
+                break
+            out.write(chunk)
+            done += len(chunk)
+            if sys.stderr.isatty():
+                now = time.monotonic()
+                if now - last >= 0.2:
+                    pct = "%d%% " % (done * 100 // total) if total else ""
+                    sys.stderr.write("\r  %s(%.1f/%.1f MiB)   "
+                                     % (pct, done / (1 << 20),
+                                        (total or done) / (1 << 20)))
+                    sys.stderr.flush()
+                    last = now
+        if sys.stderr.isatty():
+            sys.stderr.write("\n")
+
+
+def ensure_firmware(entry, base_url):
+    """Resolve a manifest entry to a local .ipsw path: reuse the verified
+    cache copy, else download it, verify its sha256, and cache it. Returns the
+    path or None (with an actionable message) on any failure."""
+    name = entry["file"]
+    want = entry.get("sha256")
+    dst = os.path.join(_firmware_cache_dir(), name)
+    url = entry.get("url") or (base_url.rstrip("/") + "/" + name if base_url else None)
+
+    if os.path.exists(dst):
+        if not want or _sha256(dst) == want:
+            return dst
+        print(f"flashpod flash: cached {name} failed checksum; re-downloading",
+              file=sys.stderr)
+        try:
+            os.remove(dst)
+        except OSError:
+            pass
+
+    if not url:
+        print(f"flashpod flash: no download URL for {name}; pass --firmware",
+              file=sys.stderr)
+        return None
+    try:
+        os.makedirs(_firmware_cache_dir(), exist_ok=True)
+    except OSError as exc:
+        print(f"flashpod flash: cannot create cache dir: {exc}", file=sys.stderr)
+        return None
+
+    print(f"flashpod flash: downloading {name}\n  from {url}", file=sys.stderr)
+    tmp = dst + ".part"
+    try:
+        _download(url, tmp, entry.get("size"))
+    except (urllib.error.URLError, OSError) as exc:
+        _rm(tmp)
+        print(f"flashpod flash: download failed ({exc}).\n"
+              f"  Download it yourself from {url} and pass it with --firmware.",
+              file=sys.stderr)
+        return None
+    if want and _sha256(tmp) != want:
+        _rm(tmp)
+        print(f"flashpod flash: {name} failed checksum verification — refusing "
+              f"to use it.\n  Re-run to retry, or download from {url} and pass "
+              f"--firmware.", file=sys.stderr)
+        return None
+    os.replace(tmp, dst)
+    print(f"flashpod flash: verified and cached {name}", file=sys.stderr)
+    return dst
+
+
+def _rm(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def load_library(mount):
@@ -902,9 +998,18 @@ def main():
                 msg += "\n  sudo " + " ".join(sys.argv)
             print(msg, file=sys.stderr)
             return 1
-        firmware = opts.firmware or choose_firmware()
-        if not firmware:
-            return 1
+        if opts.firmware:
+            firmware = opts.firmware          # bring-your-own; no network
+        else:
+            manifest = _load_manifest()
+            if not manifest:
+                return 1
+            entry = choose_firmware(manifest)
+            if not entry:
+                return 1
+            firmware = ensure_firmware(entry, manifest.get("base_url", ""))
+            if not firmware:
+                return 1
         # Offer init on the fresh card only when it will work: interactive,
         # a real write, and a FAT32 data partition to mount.
         offer = offer_init_after_flash if (

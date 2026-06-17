@@ -6,8 +6,9 @@ database, and sync music — no iTunes, no gtkpod. Runs on Linux, macOS, and
 Windows (Linux is the most-tested; the macOS/Windows disk backends are newer).
 
 The iTunesDB is read and written natively in pure Python — no libgpod, no
-compiled dependencies. Bundled firmware images (the last stock Apple releases
-for 1G through 4G models) ship inside the package.
+compiled dependencies. Firmware images (the last stock Apple releases for 1G
+through 4G models) are downloaded on demand from GitHub and verified by
+checksum, or you can supply your own with `--firmware`.
 
 ## Requirements
 
@@ -23,9 +24,10 @@ for 1G through 4G models) ship inside the package.
 ### Download a release binary (no Python needed)
 
 Grab the single self-contained executable for your OS from the
-[Releases page](https://github.com/davidbarnhart/flashpod/releases) — firmware
-images are bundled in, so it's the only file you need. On Linux/macOS, `chmod
-+x` it and run it; on Windows, run the `.exe`. (Building these is documented in
+[Releases page](https://github.com/davidbarnhart/flashpod/releases). On
+Linux/macOS, `chmod +x` it and run it; on Windows, run the `.exe`. (Firmware
+images aren't in the binary — `flashpod flash` downloads the one you pick, or
+you supply your own with `--firmware`.) (Building these is documented in
 [BUILD.md](BUILD.md), including the manual macOS 10.8 build.)
 
 ### Or install from source with pip
@@ -151,18 +153,26 @@ $ flashpod flash /dev/sdb --dry-run    # print the plan, write nothing (no root)
 $ flashpod flash --self-test           # validate layout logic, no hardware
 ```
 
-With no `--firmware`, an interactive chooser lists the images from
-`flashpod/firmware/firmware.json` with each one's iPod generation, version,
-and description; the manifest's default entry is preselected, and
-non-interactive runs use it outright. To add an image, drop the file under
-`flashpod/firmware/` and add a manifest entry (`file`, `generation`,
-`version`, `description`).
+**Firmware:** with no `--firmware`, an interactive chooser lists the images
+from the bundled catalog (`flashpod/firmware/firmware.json`) by iPod
+generation, version, and description (the default entry is preselected;
+non-interactive runs use it outright). The chosen `.ipsw` is then **downloaded
+from GitHub**, cached under `~/.cache/flashpod/`, and **verified against its
+SHA-256** before use; later flashes reuse the cached copy (no network). The
+images aren't bundled with flashpod — they're Apple's copyright, hosted as
+[release assets](https://github.com/davidbarnhart/flashpod/releases/tag/firmware).
+
+To use a firmware flashpod doesn't host (or to work fully offline), download
+an `.ipsw` yourself and pass it with `--firmware <file>` — that path never
+touches the network. To add an image to the catalog, upload it to the firmware
+release and add a manifest entry (`file`, `url`/`base_url`, `sha256`,
+`generation`, `version`, `description`).
 
 Options:
 
 | Flag | Meaning |
 |------|---------|
-| `--firmware <file>` | firmware `.ipsw` (default: chooser over `flashpod/firmware/firmware.json`) |
+| `--firmware <file>` | use a local `.ipsw` (bring-your-own; no download). Default: pick from the catalog and download it |
 | `--yes`             | skip the typed `ERASE sdX` confirmation |
 | `--no-format`       | don't format the data partition |
 | `--dry-run`         | show the plan only |
@@ -212,7 +222,7 @@ sync && udisksctl unmount -b /dev/sdX2
 | `flashpod/ipod_flash.py` | flashing engine (firmware + partition layout) |
 | `flashpod/fat32.py` | pure-Python FAT32 formatter |
 | `flashpod/platform/` | per-OS backends (disk enumerate / unmount / raw I/O / privilege) |
-| `flashpod/firmware/` | firmware images by generation + `firmware.json` manifest |
+| `flashpod/firmware/firmware.json` | firmware catalog (URLs + checksums; images are downloaded) |
 | `flashpod/contrib/` | the Linux FireWire udev rule |
 | `pyproject.toml` | packaging + `flashpod` entry point |
 | `ipodctl.c` | legacy libgpod C helper — kept only as a test oracle |
@@ -228,6 +238,7 @@ sync && udisksctl unmount -b /dev/sdX2
 
 ## License
 
-flashpod is released under the [MIT License](LICENSE). The Apple firmware
-images under `flashpod/firmware/` are Apple's copyright, not covered by that
-license — they are bundled here purely for convenience.
+flashpod is released under the [MIT License](LICENSE). The firmware `.ipsw`
+images that `flashpod flash` downloads are Apple's copyright, not covered by
+that license and not part of this source tree — they are hosted separately for
+convenience, and you may supply your own instead.
