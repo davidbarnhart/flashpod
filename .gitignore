@@ -5,6 +5,10 @@ __pycache__/
 .venv/
 venv/
 
+# Packaging / build output (setuptools, PyInstaller)
+/build/
+/dist/
+
 # Compiled libgpod oracle (build from ipodctl.c when needed)
 /ipodctl
 

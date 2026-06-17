@@ -4,17 +4,42 @@ Command-line tooling for early (1st/2nd/3rd-generation, FireWire-era) iPods
 on Linux: flash a CompactFlash/SD card with iPod firmware, initialize the
 music database, and sync music — no iTunes, no gtkpod.
 
-The iTunesDB is read and written natively in pure Python (`itunesdb.py`) —
-no libgpod, no compiled dependencies. Bundled firmware images live in
-`firmware/` — the last stock Apple releases for 1G through 4G models.
+The iTunesDB is read and written natively in pure Python — no libgpod, no
+compiled dependencies. Bundled firmware images (the last stock Apple releases
+for 1G through 4G models) ship inside the package.
 
 ## Requirements
 
-- Python 3 and `python3-mutagen` (tag extraction)
+- Python 3.6+ and `mutagen` (tag extraction; installed automatically by
+  `pip install`, or use the distro `python3-mutagen` when running from source)
 - FAT32 formatting during flash is built in (pure Python — no `dosfstools`
   needed); `hfsprogs` is required only for the legacy `--flavor mac` (HFS+)
 - Pre-2007 iPods only — newer models need an iTunesDB checksum/hash that
   these tools don't generate.
+
+## Install
+
+Install from a checkout — this puts a `flashpod` command on your PATH:
+
+```sh
+pip install .
+```
+
+Or run straight from the source tree without installing:
+
+```sh
+python -m flashpod ...        # run from the repo root
+```
+
+For development, an editable install keeps the command pointed at your checkout:
+
+```sh
+pip install -e .
+```
+
+> `flashpod flash` needs root. `sudo` uses root's PATH, so if `sudo flashpod`
+> isn't found, run `sudo "$(command -v flashpod)" flash` (or
+> `sudo python -m flashpod flash` from source).
 
 ## Commands
 
@@ -116,17 +141,17 @@ $ flashpod flash --self-test           # validate layout logic, no hardware
 ```
 
 With no `--firmware`, an interactive chooser lists the images from
-`firmware/firmware.json` with each one's iPod generation, version, and
-description; the manifest's default entry is preselected, and
+`flashpod/firmware/firmware.json` with each one's iPod generation, version,
+and description; the manifest's default entry is preselected, and
 non-interactive runs use it outright. To add an image, drop the file under
-`firmware/` and add a manifest entry (`file`, `generation`, `version`,
-`description`).
+`flashpod/firmware/` and add a manifest entry (`file`, `generation`,
+`version`, `description`).
 
 Options:
 
 | Flag | Meaning |
 |------|---------|
-| `--firmware <file>` | firmware `.ipsw` (default: chooser over `firmware/firmware.json`) |
+| `--firmware <file>` | firmware `.ipsw` (default: chooser over `flashpod/firmware/firmware.json`) |
 | `--flavor windows`  | MBR + FAT32 layout (default) |
 | `--flavor mac`      | APM + HFS+ layout |
 | `--yes`             | skip the typed `ERASE sdX` confirmation |
@@ -172,12 +197,15 @@ sync && udisksctl unmount -b /dev/sdX2
 
 ## Files
 
-| File | Role |
+| Path | Role |
 |------|------|
-| `flashpod` | the CLI (Python) — the only thing you run |
-| `itunesdb.py` | pure-Python classic iTunesDB reader/writer |
-| `ipod_flash.py` | flashing engine (module, imported by `flashpod`) |
-| `firmware/` | firmware images by generation + `firmware.json` manifest |
+| `flashpod/cli.py` | the command-line interface (entry point `flashpod`) |
+| `flashpod/itunesdb.py` | pure-Python classic iTunesDB reader/writer |
+| `flashpod/ipod_flash.py` | flashing engine (firmware + partition layout) |
+| `flashpod/fat32.py` | pure-Python FAT32 formatter |
+| `flashpod/firmware/` | firmware images by generation + `firmware.json` manifest |
+| `flashpod/contrib/` | the Linux FireWire udev rule |
+| `pyproject.toml` | packaging + `flashpod` entry point |
 | `ipodctl.c` | legacy libgpod C helper — kept only as a test oracle |
 
 ## Notes
@@ -192,5 +220,5 @@ sync && udisksctl unmount -b /dev/sdX2
 ## License
 
 flashpod is released under the [MIT License](LICENSE). The Apple firmware
-images under `firmware/` are Apple's copyright, not covered by that license —
-they are bundled here purely for convenience.
+images under `flashpod/firmware/` are Apple's copyright, not covered by that
+license — they are bundled here purely for convenience.
