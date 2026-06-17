@@ -17,6 +17,12 @@ on:
 permissions:
   contents: write
 
+# Run JavaScript actions on Node 24. checkout/setup-python are bumped to their
+# Node-24 majors below; this also covers the artifact + release actions, whose
+# current majors still ship a Node-20 entry point, so no deprecation warnings.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build:
     name: build (${{ matrix.os }})
@@ -30,9 +36,9 @@ jobs:
             artifact: flashpod-windows-x86_64.exe
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -53,7 +59,7 @@ jobs:
             mv dist/flashpod "dist/${{ matrix.artifact }}"
           fi
 
-      - name: Smoke test (self-test + bundled firmware)
+      - name: Smoke test (self-test + firmware download)
         shell: bash
         run: |
           BIN="dist/${{ matrix.artifact }}"
