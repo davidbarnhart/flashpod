@@ -512,7 +512,7 @@ def prompt_for_path():
     except ImportError:
         pass
     try:
-        path = input("File or directory to add: ").strip()
+        path = input("File or directory to add (TAB to complete): ").strip()
     except (EOFError, KeyboardInterrupt):
         print()
         return None
