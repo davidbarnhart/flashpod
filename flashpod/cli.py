@@ -236,6 +236,47 @@ def mount_device(dev, label=None):
     return _sudo_mount(dev, label)
 
 
+def _device_for_mount(mount):
+    """Block device currently mounted at `mount`, or None."""
+    for dev, mp, _fs in platform.current().mounted_filesystems():
+        if mp == mount:
+            return dev
+    return None
+
+
+def remount_as_user(mount):
+    """A detected iPod mount we can't read — typically left mounted by root
+    from an earlier `sudo` run (e.g. /media/root/IPOD). Offer to unmount it
+    and remount the device as the current user via the sudo fallback, so the
+    iTunesDB and music files are readable/writable. Returns the new
+    mountpoint or None."""
+    dev = _device_for_mount(mount)
+    if not sys.stdin.isatty():
+        hint = f"sudo umount {mount}" + ("" if dev else "")
+        print(f"flashpod: {mount} is mounted by another user and not readable "
+              f"here; unmount it ({hint}) and re-run, or pass --mount.",
+              file=sys.stderr)
+        return None
+    if not dev:
+        print(f"flashpod: {mount} isn't readable and its device couldn't be "
+              f"determined; unmount it and re-run.", file=sys.stderr)
+        return None
+    try:
+        ans = input(f"{mount} is mounted by another user and not readable. "
+                    f"Remount {dev} as you? [Y/n] ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+    if ans.strip().lower() not in ("", "y", "yes"):
+        return None
+    label = os.path.basename(mount.rstrip("/")) or "IPOD"
+    print(f"flashpod: unmounting {mount} (sudo)...", file=sys.stderr)
+    if subprocess.run(["sudo", "umount", mount]).returncode != 0:
+        print(f"flashpod: could not unmount {mount}.", file=sys.stderr)
+        return None
+    return _sudo_mount(dev, label)
+
+
 def offer_mount():
     """No mounted iPod found: look for an attached, unmounted one and
     offer to mount it. Returns the mountpoint or None."""
@@ -824,6 +865,16 @@ def main():
     mount = opts.mount or detect_mount()
     if not mount:
         return 1
+
+    # A mounted iPod we can't read (e.g. left mounted by root from an earlier
+    # sudo run, so /media/root is 0700 and we can't even traverse it) — offer
+    # to remount it as the current user. Gate on "in the mount table but not
+    # accessible" rather than os.path.isdir, which is itself False when the
+    # parent dir isn't traversable.
+    if not os.access(mount, os.R_OK | os.X_OK) and _device_for_mount(mount):
+        mount = remount_as_user(mount)
+        if not mount:
+            return 1
 
     problem = firewire_queue_problem(mount)
     if problem and not opts.unsafe_queue:
