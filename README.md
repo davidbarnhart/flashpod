@@ -11,7 +11,8 @@ no libgpod, no compiled dependencies. Bundled firmware images live in
 ## Requirements
 
 - Python 3 and `python3-mutagen` (tag extraction)
-- `dosfstools` (FAT32 format during flash), `hfsprogs` only for `--flavor mac`
+- FAT32 formatting during flash is built in (pure Python — no `dosfstools`
+  needed); `hfsprogs` is required only for the legacy `--flavor mac` (HFS+)
 - Pre-2007 iPods only — newer models need an iTunesDB checksum/hash that
   these tools don't generate.
 

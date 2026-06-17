@@ -41,6 +41,8 @@ caught immediately.
 """
 import json, os, struct, subprocess, sys, zipfile
 
+import fat32
+
 SECTOR        = 512
 MAP_START     = 1
 MAP_BLOCKS    = 62
@@ -472,7 +474,7 @@ def unmount_all(dev, dry):
 def write_layout(dev, fw_bytes, total_sectors, dry, do_format, flavor):
     if flavor == "windows":
         header, data_start, data_blocks = build_mbr_layout(total_sectors)
-        mkfs_name = "mkfs.vfat (FAT32)"
+        mkfs_name = "pure-Python FAT32"
     else:
         header, data_start, data_blocks = build_partition_layout(total_sectors)
         mkfs_name = "mkfs.hfsplus (HFS+)"
@@ -531,20 +533,13 @@ def fat_sectors_per_cluster(data_blocks):
 
 def format_data(dev, data_start, data_blocks, flavor):
     if flavor == "windows":
-        spc = fat_sectors_per_cluster(data_blocks)
-        if data_blocks // spc < 65525:
-            print(color("  card too small for a valid FAT32 (%d clusters even "
-                        "at 512-byte clusters); the iPod will likely reject "
-                        "it." % (data_blocks // spc), C_YEL), file=sys.stderr)
-        tool, desc = "mkfs.vfat", "FAT32"
-        cmd = ["mkfs.vfat", "-F", "32", "-n", "IPOD", "-s", str(spc)]
-        pkg = "dosfstools"
-    else:
-        tool, cmd, desc = "mkfs.hfsplus", ["mkfs.hfsplus", "-v", "iPod"], "HFS+"
-        pkg = "hfsprogs"
-    if not have(tool):
-        print(color("  %s not found (install %s) - skipping data format; "
-                    "iPod may show 'use iTunes to restore'." % (tool, pkg), C_YEL),
+        format_fat32_data(dev, data_start, data_blocks)
+        return
+    # Mac flavor: HFS+ via mkfs.hfsplus over a loop mapping. Linux-only and
+    # slated for removal (see issue #1: the Mac/HFS+ flavor is being dropped).
+    if not have("mkfs.hfsplus"):
+        print(color("  mkfs.hfsplus not found (install hfsprogs) - skipping data "
+                    "format; iPod may show 'use iTunes to restore'.", C_YEL),
               file=sys.stderr)
         return
     if not have("losetup"):
@@ -554,11 +549,31 @@ def format_data(dev, data_start, data_blocks, flavor):
     lo = run(["losetup", "--find", "--show", "--offset", str(off),
               "--sizelimit", str(size), dev]).stdout.strip()
     try:
-        run(cmd + [lo])
-        print(color("  formatted data partition (%s, label 'IPOD')" % desc, C_GRN),
+        run(["mkfs.hfsplus", "-v", "iPod", lo])
+        print(color("  formatted data partition (HFS+, label 'iPod')", C_GRN),
               file=sys.stderr)
     finally:
         run(["losetup", "-d", lo], check=False)
+
+def format_fat32_data(dev, data_start, data_blocks):
+    """Format the data partition FAT32 in pure Python — no mkfs.vfat, no
+    losetup. Writes the filesystem structures straight onto the device at the
+    partition offset, so this is identical on Linux, macOS, and Windows."""
+    spc = fat_sectors_per_cluster(data_blocks)
+    try:
+        with open(dev, "r+b") as f:
+            geo = fat32.format_fat32(f, data_start, data_blocks, spc, label="IPOD")
+    except ValueError as e:
+        print(color("  %s - skipping data format; the iPod will likely reject "
+                    "the card." % e, C_YEL), file=sys.stderr)
+        return
+    except (OSError, IOError) as e:
+        print(color("  could not write FAT32 to %s: %s - skipping data format."
+                    % (dev, e), C_YEL), file=sys.stderr)
+        return
+    print(color("  formatted data partition (FAT32, %d clusters @ %d KiB, "
+                "label 'IPOD')" % (geo["clusters"], spc * SECTOR // 1024), C_GRN),
+          file=sys.stderr)
 
 def verify_firmware(dev, fw_bytes, dry):
     """Read the firmware region back off the card and compare it byte-for-byte to the image we
