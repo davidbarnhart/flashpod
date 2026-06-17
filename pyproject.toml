@@ -29,8 +29,8 @@ Issues = "https://github.com/davidbarnhart/flashpod/issues"
 [project.scripts]
 flashpod = "flashpod.cli:main"
 
-[tool.setuptools]
-packages = ["flashpod"]
+[tool.setuptools.packages.find]
+include = ["flashpod*"]
 
 [tool.setuptools.package-data]
 # Firmware images + manifest and the Linux udev rule ship inside the package.

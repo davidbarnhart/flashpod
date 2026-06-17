@@ -42,6 +42,7 @@ caught immediately.
 import json, os, struct, subprocess, sys, zipfile
 
 from . import fat32
+from . import platform as _plat
 
 SECTOR        = 512
 MAP_START     = 1
@@ -422,7 +423,7 @@ def confirm(dev, total_sectors, assume_yes, flavor):
     if total_sectors > LBA28_MAX:
         print(color("    NOTE: card exceeds 128 GiB; data capped at the iPod's LBA28 limit.",
                     C_YEL), file=sys.stderr)
-    mps = device_mountpoints(dev)
+    mps = _plat.current().device_mountpoints(dev)
     if mps:
         print(color("    mounted now : " + ", ".join("%s@%s" % m for m in mps), C_YEL),
               file=sys.stderr)
@@ -484,10 +485,10 @@ def write_layout(dev, fw_bytes, total_sectors, dry, do_format, flavor):
                     % (len(header), flavor, len(fw_bytes), FW_START, mkfs_name),
                     C_DIM), file=sys.stderr)
         return
+    plat = _plat.current()
     # 1. kill any existing partition signatures (MBR/GPT/FAT/HFS)
-    if have("wipefs"):
-        run(["wipefs", "-a", dev], check=False)
-    with open(dev, "r+b") as f:
+    plat.wipe_signatures(dev, False)
+    with plat.open_raw(dev, "r+b") as f:
         # zero the leading area (old GPT/MBR/APM region) and the tail (GPT backup)
         f.seek(0); f.write(b"\x00" * (data_start * SECTOR))
         f.seek(max(0, total_sectors - 34) * SECTOR); f.write(b"\x00" * (34 * SECTOR))
@@ -498,25 +499,11 @@ def write_layout(dev, fw_bytes, total_sectors, dry, do_format, flavor):
         f.flush(); os.fsync(f.fileno())
     print(color("  wrote %s partition table + firmware"
                 % ("MBR" if flavor == "windows" else "DDR+APM"), C_GRN), file=sys.stderr)
-    # 4. data filesystem via a loop mapping of the data region
+    # 4. data filesystem written straight into the data region
     if do_format:
         format_data(dev, data_start, data_blocks, flavor)
-    # 5. re-read the partition table so the kernel sees the new map. The
-    # BLKRRPART ioctl that creates the partition nodes is fast, but partprobe
-    # then runs `udevadm settle`, which can stall for minutes per partition on
-    # a slow reader with a large FAT32 (the node is already there by then).
-    # Cap partprobe and fall through to `blockdev --rereadpt`, which does the
-    # same re-read without waiting on udev.
-    settled = False
-    if have("partprobe"):
-        try:
-            run(["partprobe", dev], check=False, timeout=15)
-            settled = True
-        except subprocess.TimeoutExpired:
-            print(color("  partprobe stalled on udev settle; the partition map "
-                        "is already in place, continuing.", C_YEL), file=sys.stderr)
-    if not settled and have("blockdev"):
-        run(["blockdev", "--rereadpt", dev], check=False)
+    # 5. re-read the partition table so the OS sees the new map.
+    plat.reread_partition_table(dev)
 
 def fat_sectors_per_cluster(data_blocks):
     """Largest Apple-style cluster size that still yields a VALID FAT32.
@@ -561,7 +548,7 @@ def format_fat32_data(dev, data_start, data_blocks):
     partition offset, so this is identical on Linux, macOS, and Windows."""
     spc = fat_sectors_per_cluster(data_blocks)
     try:
-        with open(dev, "r+b") as f:
+        with _plat.current().open_raw(dev, "r+b") as f:
             geo = fat32.format_fat32(f, data_start, data_blocks, spc, label="IPOD")
     except ValueError as e:
         print(color("  %s - skipping data format; the iPod will likely reject "
@@ -586,11 +573,10 @@ def verify_firmware(dev, fw_bytes, dry):
         return
     print(color("  verifying firmware on the card byte-for-byte (%d bytes @ sector %d) ..."
                 % (len(fw_bytes), FW_START), C_DIM), file=sys.stderr)
-    run(["sync"], check=False)
-    if have("blockdev"):
-        run(["blockdev", "--flushbufs", dev], check=False)   # drop cache -> read the real card
+    plat = _plat.current()
+    plat.flush_buffers(dev)                                   # drop cache -> read the real card
     n = len(fw_bytes)
-    with open(dev, "rb") as f:
+    with plat.open_raw(dev, "rb") as f:
         f.seek(FW_START * SECTOR)
         off = 0
         while off < n:
@@ -713,27 +699,22 @@ def flash(device=None, firmware=None, flavor="windows",
     print(color("firmware OK: %s (%d bytes, structure validated)"
                 % (os.path.basename(firmware), len(fw)), C_GRN), file=sys.stderr)
 
-    if os.geteuid() != 0 and not dry_run:
-        sys.exit(color("Run as root (sudo) to write to a block device.", C_RED))
+    plat = _plat.current()
+    if not plat.is_admin() and not dry_run:
+        sys.exit(color(plat.privilege_hint(), C_RED))
 
-    dev = device or choose_device()
-    if not os.path.exists(dev):
-        sys.exit(color("no such device: " + dev, C_RED))
-    if dev.rstrip("0123456789") != dev and not dev.startswith("/dev/mmcblk") \
-       and not dev.startswith("/dev/loop"):
-        sys.exit(color("refusing a partition node (%s); pass the whole disk." % dev, C_RED))
-    if os.path.basename(dev) in root_disk_names():
-        sys.exit(color("refusing: %s backs the running system." % dev, C_RED))
+    dev = device or plat.choose_device()
+    plat.validate_target(dev, dry_run)
 
-    total_sectors = device_sectors(dev)
+    total_sectors = plat.device_sectors(dev)
     if total_sectors <= 0:
         sys.exit(color("could not determine size of %s" % dev, C_RED))
     confirm(dev, total_sectors, assume_yes or dry_run, flavor)
-    unmount_all(dev, dry_run)
+    plat.unmount_all(dev, dry_run)
     write_layout(dev, fw, total_sectors, dry_run, do_format, flavor)
     verify_firmware(dev, fw, dry_run)
     if before_eject and not dry_run:
         before_eject(dev)
-    eject(dev, dry_run)
+    plat.eject(dev, dry_run)
     print(color("\nDone. %s is ready — insert it into the iPod." % dev, C_GRN), file=sys.stderr)
     return 0
