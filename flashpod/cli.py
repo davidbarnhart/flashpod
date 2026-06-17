@@ -131,11 +131,19 @@ def _download(url, dst, total=None):
 
 
 def ensure_firmware(entry, base_url):
-    """Resolve a manifest entry to a local .ipsw path: reuse the verified
-    cache copy, else download it, verify its sha256, and cache it. Returns the
-    path or None (with an actionable message) on any failure."""
+    """Resolve a manifest entry to a local .ipsw path: prefer a copy shipped
+    inside the build, then the verified cache, else download + verify + cache.
+    Returns the path or None (with an actionable message) on any failure."""
     name = entry["file"]
     want = entry.get("sha256")
+
+    # Shipped inside the binary? A "heavy" build bundles the .ipsw next to the
+    # manifest for fully-offline use — e.g. the macOS 10.8 release, where the
+    # HTTPS download can't negotiate the TLS that GitHub requires.
+    bundled = os.path.join(resources.firmware_dir(), name)
+    if os.path.exists(bundled) and (not want or _sha256(bundled) == want):
+        return bundled
+
     dst = os.path.join(_firmware_cache_dir(), name)
     url = entry.get("url") or (base_url.rstrip("/") + "/" + name if base_url else None)
 
