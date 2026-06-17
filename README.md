@@ -203,6 +203,7 @@ sync && udisksctl unmount -b /dev/sdX2
 | `flashpod/itunesdb.py` | pure-Python classic iTunesDB reader/writer |
 | `flashpod/ipod_flash.py` | flashing engine (firmware + partition layout) |
 | `flashpod/fat32.py` | pure-Python FAT32 formatter |
+| `flashpod/platform/` | per-OS backends (disk enumerate / unmount / raw I/O / privilege) |
 | `flashpod/firmware/` | firmware images by generation + `firmware.json` manifest |
 | `flashpod/contrib/` | the Linux FireWire udev rule |
 | `pyproject.toml` | packaging + `flashpod` entry point |

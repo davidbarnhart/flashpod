@@ -35,6 +35,7 @@ import mutagen
 
 from . import ipod_flash
 from . import itunesdb
+from . import platform
 from . import resources
 
 FIRMWARE_DIR = resources.firmware_dir()
@@ -119,37 +120,25 @@ MOUNTS_FILE = os.environ.get("FLASHPOD_MOUNTS_FILE", "/proc/mounts")
 
 
 def candidate_mounts():
-    """Plausible iPod mountpoints from the mounts table, best first.
-    Scoring: contains iPod_Control +10, 'ipod' in the name +5,
-    under /media or /run/media +1; score 0 entries (e.g. /boot/efi)
-    are dropped."""
+    """Plausible iPod mountpoints from the OS mount table, best first.
+    Scoring: contains iPod_Control +10, 'ipod' in the name +5, under a
+    removable-media root (/media, /run/media, /Volumes) +1; score 0 entries
+    are dropped. The mount table comes from the platform backend, so this is
+    the same on Linux, macOS, and Windows."""
     cands = []
-    try:
-        f = open(MOUNTS_FILE)
-    except OSError:  # no /proc/mounts (macOS) -> rely on --mount
-        return []
-    with f:
-        for line in f:
-            parts = line.split()
-            if len(parts) < 3:
-                continue
-            dev, mnt, fstype = parts[0], parts[1], parts[2]
-            if not dev.startswith("/dev/"):
-                continue
-            if fstype not in ("vfat", "exfat", "hfsplus"):
-                continue
-            # /proc/mounts octal-escapes spaces etc. as \040
-            mnt = re.sub(r"\\([0-7]{3})",
-                         lambda m: chr(int(m.group(1), 8)), mnt)
-            score = 0
-            if os.path.isdir(os.path.join(mnt, "iPod_Control")):
-                score += 10
-            if "ipod" in os.path.basename(mnt).lower():
-                score += 5
-            if mnt.startswith(("/media/", "/run/media/")):
-                score += 1
-            if score:
-                cands.append((score, mnt))
+    for dev, mnt, fstype in platform.current().mounted_filesystems():
+        ft = fstype.lower()
+        if not ("fat" in ft or "msdos" in ft or "hfs" in ft):
+            continue
+        score = 0
+        if os.path.isdir(os.path.join(mnt, "iPod_Control")):
+            score += 10
+        if "ipod" in os.path.basename(mnt.rstrip("/\\")).lower():
+            score += 5
+        if mnt.startswith(("/media/", "/run/media/", "/Volumes/")):
+            score += 1
+        if score:
+            cands.append((score, mnt))
     cands.sort(key=lambda c: -c[0])
     return cands
 
