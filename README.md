@@ -1,8 +1,9 @@
 # flashpod
 
-Command-line tooling for early (1st/2nd/3rd-generation, FireWire-era) iPods
-on Linux: flash a CompactFlash/SD card with iPod firmware, initialize the
-music database, and sync music — no iTunes, no gtkpod.
+Command-line tooling for early (1st/2nd/3rd-generation, FireWire-era) iPods:
+flash a CompactFlash/SD card with iPod firmware, initialize the music
+database, and sync music — no iTunes, no gtkpod. Runs on Linux, macOS, and
+Windows (Linux is the most-tested; the macOS/Windows disk backends are newer).
 
 The iTunesDB is read and written natively in pure Python — no libgpod, no
 compiled dependencies. Bundled firmware images (the last stock Apple releases
@@ -18,6 +19,16 @@ for 1G through 4G models) ship inside the package.
   these tools don't generate.
 
 ## Install
+
+### Download a release binary (no Python needed)
+
+Grab the single self-contained executable for your OS from the
+[Releases page](https://github.com/davidbarnhart/flashpod/releases) — firmware
+images are bundled in, so it's the only file you need. On Linux/macOS, `chmod
++x` it and run it; on Windows, run the `.exe`. (Building these is documented in
+[BUILD.md](BUILD.md), including the manual macOS 10.8 build.)
+
+### Or install from source with pip
 
 Install from a checkout — this puts a `flashpod` command on your PATH:
 
