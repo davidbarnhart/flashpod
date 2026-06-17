@@ -255,7 +255,7 @@ def unmounted_candidates():
     try:
         out = subprocess.run(
             ["lsblk", "-J", "-o", "NAME,TYPE,FSTYPE,LABEL,TRAN,RM,HOTPLUG,MOUNTPOINT"],
-            capture_output=True, text=True, check=True).stdout
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, check=True).stdout
     except (OSError, subprocess.CalledProcessError):
         return []
     cands = []
@@ -316,7 +316,7 @@ def mount_device(dev, label=None):
     res = None
     try:
         res = subprocess.run(["udisksctl", "mount", "-b", dev],
-                             capture_output=True, text=True, timeout=30)
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=30)
     except FileNotFoundError:
         pass                              # no udisksctl -> go straight to sudo
     except subprocess.TimeoutExpired:
@@ -400,7 +400,7 @@ def _attached_ipod_count():
     try:
         out = subprocess.run(
             ["lsblk", "-J", "-o", "NAME,TYPE,VENDOR,MODEL,LABEL"],
-            capture_output=True, text=True, timeout=10)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=10)
         if out.returncode != 0:
             return None
         data = json.loads(out.stdout)
@@ -488,7 +488,7 @@ def firewire_queue_problem(mount):
         return None
     disk = re.sub(r"p?\d+$", "", os.path.basename(dev))  # sdb2 -> sdb
     res = subprocess.run(["lsblk", "-dno", "TRAN", "/dev/" + disk],
-                         capture_output=True, text=True)
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
     if res.returncode != 0 or res.stdout.strip() not in ("sbp", "ieee1394"):
         return None
     bad = []
@@ -953,7 +953,8 @@ def main():
     parser.add_argument("--unsafe-queue", action="store_true", default=False,
                         help="proceed even if the FireWire host queue "
                              "settings are known-broken for the iPod")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
+    sub.required = True                       # 3.6: not a kwarg until 3.7
 
     p_ls = sub.add_parser("ls", aliases=["list"], help="list library",
                           parents=[common])
