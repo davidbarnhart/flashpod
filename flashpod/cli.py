@@ -657,6 +657,17 @@ class LineWindow:
         self.lines.append(line)
         self._draw()
 
+    def update(self, line):
+        """Replace the most recent add()ed line in place (for progress)."""
+        if not self.tty:
+            return                       # don't flood logs with progress ticks
+        if not self.lines:
+            self.add(line)
+            return
+        self._erase()
+        self.lines[-1] = line
+        self._draw()
+
     def note(self, line):
         if not self.tty:
             print(line, file=sys.stderr)
@@ -704,8 +715,15 @@ def cmd_add(mount, paths):
             continue
         label = track.title + (f" — {track.artist}" if track.artist else "")
         win.add(f"[{nr}/{total}] Adding: {label}...")
+
+        def _progress(done, total_bytes, _nr=nr, _label=label):
+            mib = 1 << 20
+            pct = (done * 100 // total_bytes) if total_bytes else 100
+            win.update(f"[{_nr}/{total}] Adding: {_label}... {pct}% "
+                       f"({done / mib:.1f}/{total_bytes / mib:.1f} MiB)")
+
         try:
-            track.location = itunesdb.copy_to_ipod(mount, path)
+            track.location = itunesdb.copy_to_ipod(mount, path, progress=_progress)
         except OSError as exc:
             win.note(f"[{nr}/{total}] FAILED {path}: {exc}")
             failures += 1

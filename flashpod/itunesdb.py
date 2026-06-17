@@ -282,9 +282,14 @@ def init_ipod(mount, name="iPod"):
     save(Library(name), mount)
 
 
-def copy_to_ipod(mount, src, ext=None):
+def copy_to_ipod(mount, src, ext=None, progress=None):
     """Copy a music file into a Music/F## dir; return its ':'-style
-    location. Spreads across F dirs; name collision-proofed."""
+    location. Spreads across F dirs; name collision-proofed.
+
+    `progress(done_bytes, total_bytes)` is called periodically during the
+    copy (throttled to ~4x/sec) so callers can show movement — important on
+    FireWire iPods, where the safe block-queue settings make writes slow and
+    a silent copy looks like a hang."""
     music = os.path.join(mount, "iPod_Control", "Music")
     fdirs = sorted(d for d in os.listdir(music) if d.startswith("F"))
     if not fdirs:
@@ -296,6 +301,9 @@ def copy_to_ipod(mount, src, ext=None):
         dst = os.path.join(music, fdir, name)
         if not os.path.exists(dst):
             break
+    total = os.path.getsize(src)
+    done = 0
+    last = 0.0
     # copy with modest buffers; shutil.copyfile is fine on a sane host but
     # the FireWire iPod path likes small sequential writes
     with open(src, "rb") as fin, open(dst, "wb") as fout:
@@ -304,6 +312,14 @@ def copy_to_ipod(mount, src, ext=None):
             if not chunk:
                 break
             fout.write(chunk)
+            done += len(chunk)
+            if progress:
+                now = time.monotonic()
+                if now - last >= 0.25:
+                    progress(done, total)
+                    last = now
+        if progress:
+            progress(done, total)        # final 100% before the (slow) flush
         fout.flush()
         os.fsync(fout.fileno())
     return ":".join(["", "iPod_Control", "Music", fdir, name])
