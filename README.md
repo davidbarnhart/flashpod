@@ -21,23 +21,38 @@ checksum, or you can supply your own with `--firmware`.
 
 ## Install
 
-### Download a release binary (no Python needed)
+### Download a release (no Python needed)
 
-Grab the single self-contained executable for your OS from the
-[Releases page](https://github.com/davidbarnhart/flashpod/releases). On
-Linux/macOS, `chmod +x` it and run it; on Windows, run the `.exe`. (Firmware
-images aren't in the binary — `flashpod flash` downloads the one you pick, or
-you supply your own with `--firmware`.) (Building these is documented in
-[BUILD.md](BUILD.md), including the manual macOS 10.8 build.)
+Grab the archive for your OS from the
+[Releases page](https://github.com/davidbarnhart/flashpod/releases) — each
+holds a single self-contained executable (no Python or other dependencies),
+plus a README and license.
 
-**Vintage Macs (OS X 10.8):** use `flashpod-macos-10.8`. It has the firmware
-**baked in** (no network needed), so `flashpod flash` works offline and
-`--firmware` is optional. After downloading, make it runnable and clear the
-Gatekeeper quarantine (it's unsigned):
+**Linux** (`flashpod-linux-x86_64.tar.gz`):
+```sh
+tar xzf flashpod-linux-x86_64.tar.gz
+cd flashpod-linux-x86_64
+./install.sh            # to ~/.local/bin (no root); or: sudo ./install.sh
+flashpod --help
+```
+
+**Windows** (`flashpod-windows-x86_64.zip`): unzip it and run `flashpod.exe`
+from a terminal (an Administrator terminal for `flash`).
+
+Firmware images aren't in the binary — `flashpod flash` downloads the one you
+pick (verified by checksum), or you supply your own with `--firmware`. Building
+the binaries is documented in [BUILD.md](BUILD.md).
+
+**Vintage Macs (OS X 10.8):** use `flashpod-macos-10.8.tar.gz`. That build has
+the firmware **baked in** (no network needed), so `flashpod flash` works
+offline and `--firmware` is optional. Extract it, then make the binary runnable
+and clear the Gatekeeper quarantine (it's unsigned):
 
 ```sh
-chmod +x flashpod-macos-10.8
-xattr -d com.apple.quarantine flashpod-macos-10.8   # or right-click → Open once
+tar xzf flashpod-macos-10.8.tar.gz && cd flashpod-macos-10.8
+chmod +x flashpod
+xattr -d com.apple.quarantine flashpod   # or right-click → Open once
+./flashpod --help
 ```
 
 ### Or install from source with pip

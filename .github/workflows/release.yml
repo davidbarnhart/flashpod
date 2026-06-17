@@ -31,9 +31,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04        # older glibc = runs on more Linux systems
-            artifact: flashpod-linux-x86_64
+            slug: linux-x86_64
+            bin: flashpod
+            archive: flashpod-linux-x86_64.tar.gz
           - os: windows-latest
-            artifact: flashpod-windows-x86_64.exe
+            slug: windows-x86_64
+            bin: flashpod.exe
+            archive: flashpod-windows-x86_64.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -54,27 +58,36 @@ jobs:
       - name: Build the binary
         run: pyinstaller --clean --noconfirm flashpod.spec
 
-      - name: Name the artifact
-        shell: bash
-        run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            mv dist/flashpod.exe "dist/${{ matrix.artifact }}"
-          else
-            mv dist/flashpod "dist/${{ matrix.artifact }}"
-          fi
-
       - name: Smoke test (self-test + firmware download)
         shell: bash
         run: |
-          BIN="dist/${{ matrix.artifact }}"
+          BIN="dist/${{ matrix.bin }}"
           "./$BIN" flash --self-test
           python -c "open('dummy.img','wb').truncate(64*1024*1024)"
           "./$BIN" flash dummy.img --dry-run --yes
 
+      - name: Package archive
+        shell: bash
+        run: |
+          stage="flashpod-${{ matrix.slug }}"
+          mkdir -p "$stage"
+          cp "dist/${{ matrix.bin }}" "$stage/${{ matrix.bin }}"
+          cp LICENSE "$stage/"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp packaging/windows/README.txt "$stage/"
+            7z a -tzip "${{ matrix.archive }}" "$stage" >/dev/null
+          else
+            cp packaging/linux/install.sh "$stage/" && chmod +x "$stage/install.sh"
+            cp packaging/linux/README.txt "$stage/"
+            chmod +x "$stage/${{ matrix.bin }}"
+            tar czf "${{ matrix.archive }}" "$stage"
+          fi
+          ls -l "${{ matrix.archive }}"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/${{ matrix.artifact }}
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
           if-no-files-found: error
 
   release:
