@@ -267,20 +267,6 @@ card right away, and after that to load music onto it too — answer Y (the
 default) to both and the card comes out of the flash step ready to play. The
 offers are skipped for `--dry-run`, `--no-format`, and non-interactive runs.
 
-## Files
-
-| Path | Role |
-|------|------|
-| `flashpod/cli.py` | the command-line interface (entry point `flashpod`) |
-| `flashpod/itunesdb.py` | pure-Python classic iTunesDB reader/writer |
-| `flashpod/ipod_flash.py` | flashing engine (firmware + partition layout) |
-| `flashpod/fat32.py` | pure-Python FAT32 formatter |
-| `flashpod/fatfs.py` | pure-Python FAT32 read/write driver for raw-device access (no OS mount) |
-| `flashpod/platform/` | per-OS backends (disk enumerate / unmount / raw I/O / privilege) |
-| `flashpod/firmware/firmware.json` | firmware catalog (URLs + checksums; images are downloaded) |
-| `flashpod/contrib/` | the Linux FireWire udev rule |
-| `pyproject.toml` | packaging + `flashpod` entry point |
-| `ipodctl.c` | legacy libgpod C helper — kept only as a test oracle |
 
 ## Notes
 
