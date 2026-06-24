@@ -37,6 +37,10 @@ import urllib.error
 import urllib.request
 
 import mutagen
+try:
+    from mutagen.mp3 import EasyMP3            # mutagen >= ~1.20
+except ImportError:                            # older layouts
+    from mutagen.easymp3 import EasyMP3
 
 from . import fatfs
 from . import ipod_flash
@@ -1121,13 +1125,29 @@ def fmt_duration(seconds):
     return f"{minutes}m{secs:02d}s" if minutes else f"{secs}s"
 
 
+def read_audio(path):
+    """Open `path` for tag/info reading. MP3s — the common case — skip
+    mutagen's format detection, which scores every handler and reads whole
+    files in the process (its APEv2 scorer reads to EOF), making it painfully
+    slow over network mounts. ``mutagen.File(easy=True)`` already returns an
+    EasyMP3 for an MP3, so going straight to EasyMP3 yields the identical
+    object minus the sniffing. Anything else — or an MP3 that won't parse,
+    e.g. a misnamed file — falls back to full format detection."""
+    if os.path.splitext(path)[1].lower() == ".mp3":
+        try:
+            return EasyMP3(path)
+        except Exception:
+            pass                      # mislabeled/corrupt — sniff it properly
+    return mutagen.File(path, easy=True)
+
+
 def make_track(lib, path, nr, total, report=None):
     """Read tags from `path` and build an itunesdb.Track (location unset).
     Reports the skip reason (default: stderr) and returns None on unusable
     files."""
     report = report or (lambda msg: print(msg, file=sys.stderr))
     try:
-        audio = mutagen.File(path, easy=True)
+        audio = read_audio(path)
     except Exception as exc:
         report(f"[{nr}/{total}] skipping {path}: unreadable ({exc})")
         return None
