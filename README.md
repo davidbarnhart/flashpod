@@ -1,12 +1,13 @@
 # flashpod
 
 flashpod is a command-line tool for putting flash storage cards into
-early-generation iPods and managing the music on them. It handles the whole
-setup without iTunes, so you can revive a vintage iPod and run it from a modern
-desktop: it writes the firmware to the card, creates the initial music
-database, and loads the card with music. Then, once you pop the card into an
-iPod and connect it over USB or FireWire, flashpod manages the library on the
-device too — adding and removing songs right on the iPod.
+early-generation iPods and managing the music on them. 
+
+It handles the whole setup without iTunes, so you can revive a vintage iPod 
+and run it from a modern desktop: it writes the firmware to the card, creates 
+the initial music database, and loads the card with music. Then, once you pop 
+the card into an iPod and connect it over USB or FireWire, flashpod manages 
+the library on the device too — adding and removing songs right on the iPod.
 
 ## Requirements
 
@@ -39,8 +40,7 @@ a modern machine and installed on the MacBook from there.
 
 Download the archive for your OS from the
 [Releases page](https://github.com/davidbarnhart/flashpod/releases) — each holds
-a single self-contained executable (no Python or anything else to install), plus
-a README and license.
+a single self-contained executable (no Python or anything else to install).
 
 **Linux** (`flashpod-linux-x86_64.tar.gz`):
 ```sh
@@ -58,10 +58,8 @@ downloads the image you pick (verified by checksum), or you supply your own with
 `--firmware`. (The **macOS 10.8** build is different — see below.) Building the
 binaries yourself is documented in [BUILD.md](BUILD.md).
 
-**Vintage Macs (OS X 10.8):** use `flashpod-macos-10.8.tar.gz`. That build has
-the firmware **baked in** (no network needed), so `flashpod flash` works
-offline and `--firmware` is optional. Extract it, then make the binary runnable
-and clear the Gatekeeper quarantine (it's unsigned):
+**Vintage Macs (OS X 10.8):** use `flashpod-macos-10.8.tar.gz`. Extract it, 
+then make the binary runnable and clear the Gatekeeper quarantine (it's unsigned):
 
 ```sh
 tar xzf flashpod-macos-10.8.tar.gz && cd flashpod-macos-10.8
@@ -97,7 +95,7 @@ $ flashpod ls
 flashpod: looking for an iPod means reading attached disks, which needs root — elevating via sudo...
 Password:
 Found iPod on /dev/rdisk1 — 82 tracks.
-iPod "David's iPod": 82 tracks, 2 artists, 6 albums
+iPod "David's iPod": 38 tracks, 2 artists, 2 albums
 New Order
   Power, Corruption & Lies (8 tracks)
   Substance (12 tracks)
