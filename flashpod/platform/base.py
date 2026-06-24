@@ -186,8 +186,38 @@ class Platform(object):
         POSIX device nodes; Windows overrides for ``\\\\.\\PhysicalDriveN``."""
         return open(dev, mode)
 
+    def raw_read_node(self, dev):
+        """The device path to open for UNBUFFERED reads of ``dev``. Default is
+        ``dev`` itself; macOS maps ``/dev/diskN`` → ``/dev/rdiskN`` so the FAT
+        driver never reads through the buffer cache (whose read-ahead is what
+        the gen-1 FireWire bridge corrupts into zeros)."""
+        return dev
+
+    def raw_max_xfer(self):
+        """Safe default transfer size (in 512-byte sectors) for the userspace
+        FAT driver, for BOTH reads and writes. 8 = 4 KiB, the Linux-kernel-
+        queue-proven ceiling for the FireWire bridge; macOS overrides this lower
+        (the raw device doesn't honour that queue cap, and only single-sector
+        transfers are proven safe over the bridge). Larger writes don't help
+        anyway — the bridge is bandwidth-limited. Override via
+        FLASHPOD_RAW_MAX_XFER (e.g. raise it on a USB reader)."""
+        return 8
+
     # -- sync-path mount detection ----------------------------------------
     def mounted_filesystems(self):
         """All mounted filesystems as ``(device, mountpoint, fstype)`` tuples
         — used to auto-detect an already-mounted iPod."""
         raise NotImplementedError
+
+    def fat_disk_candidates(self):
+        """Attached external/removable disks that have a FAT slice — the disks
+        worth PROBING for an iPod (the actual test, done by the caller, is
+        whether the FAT holds iPod_Control/iTunes/iTunesDB; a volume label or
+        bus type is too fragile to rely on).
+
+        Returns ``(node, description)`` tuples, where ``node`` is what
+        :func:`flashpod.cli.open_raw_fat` should open (the unbuffered raw node —
+        e.g. ``/dev/rdisk2`` on macOS — so OS read-ahead never re-enters the
+        picture). This step needs no root; reading the FATs does. Default:
+        nothing (platform can't enumerate)."""
+        return []
