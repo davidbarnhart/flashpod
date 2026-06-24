@@ -424,6 +424,13 @@ class RawTarget:
         if self.fs.exists(path):
             self.fs.remove(path)
 
+    # -- free space (for the add pre-flight) -------------------------------
+    def free_bytes(self):
+        """Free space in bytes, from the FAT layer (no OS mount to ask). Raises
+        OSError if it can't be determined, which the add core treats as 'skip
+        the pre-flight, proceed anyway'."""
+        return self.fs.free_bytes()
+
 
 def open_raw_target(device, writable=True):
     """Open `device` as a writable RawTarget, or print why and return None."""
@@ -452,7 +459,8 @@ def cmd_add_raw(target, paths):
         paths,
         load=target.load_library,
         copy=target.copy,
-        save=target.save_library)
+        save=target.save_library,
+        free_space=target.free_bytes)
 
 
 def cmd_rm_raw(target, what):
@@ -1472,8 +1480,10 @@ def _cmd_add_core(paths, load, copy, save, free_space=None):
     works the same over an OS mount (cmd_add) and over the raw device
     (cmd_add_raw): load() -> Library|None, copy(path, progress) -> location,
     save(Library) -> None. ``free_space() -> bytes`` enables the pre-flight
-    size check + winnow loop; the raw path passes none and skips it (issue
-    #30)."""
+    size check + winnow loop; the mount path supplies it from
+    ``shutil.disk_usage`` and the raw path from the FAT free-cluster count. A
+    ``free_space()`` that raises OSError (e.g. the count is unavailable) just
+    skips the pre-flight and proceeds."""
     if not paths or not paths[0]:
         return 1
     files = expand(paths)
@@ -1511,7 +1521,7 @@ def _cmd_add_core(paths, load, copy, save, free_space=None):
         pending.append((path, track))
     win.clear()
 
-    # Pre-flight: does the batch fit? (mount path only.)
+    # Pre-flight: does the batch fit? (mount and raw paths both supply this.)
     if pending and free_space is not None:
         try:
             budget = free_space() - _ADD_HEADROOM

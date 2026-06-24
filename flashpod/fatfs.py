@@ -312,6 +312,19 @@ class Fat32(object):
             except (OSError, ValueError):
                 pass
 
+    def free_bytes(self):
+        """Free space on the volume, in bytes — free clusters x cluster size,
+        which is the cluster-granular figure a caller's size check wants.
+
+        The free-cluster count comes from FSInfo (one sector); we never scan the
+        whole FAT, which over single-sector FireWire takes minutes. Raises
+        OSError if FSInfo carries no count (so a caller can degrade gracefully
+        rather than guess)."""
+        self._load_free_count()
+        if self._free_count < 0:
+            raise OSError("free-cluster count unavailable (FSInfo has none)")
+        return self._free_count * self._bytes_per_cluster()
+
     def _scan_free_clusters(self, n):
         """Find ``n`` free clusters, reading the FAT one SECTOR at a time (128
         entries each) starting near the allocation cursor. Returns the list."""
