@@ -1326,14 +1326,125 @@ def cmd_add(mount, paths):
         load=lambda: load_library(mount),
         copy=lambda path, progress: itunesdb.copy_to_ipod(mount, path,
                                                            progress=progress),
-        save=lambda lib: (itunesdb.save(lib, mount), os.sync()))
+        save=lambda lib: (itunesdb.save(lib, mount), os.sync()),
+        free_space=lambda: shutil.disk_usage(mount).free)
 
 
-def _cmd_add_core(paths, load, copy, save):
+# Leave a little slack free so the iTunesDB rewrite and FAT cluster overhead
+# don't tip a "just fits" batch over the edge.
+_ADD_HEADROOM = 2 << 20
+
+
+def fmt_size(nbytes):
+    """Human size in the tool's MiB convention, rolling over to GiB past
+    1024 MiB."""
+    mib = nbytes / (1 << 20)
+    if mib >= 1024:
+        return "%.2f GiB" % (mib / 1024)
+    return "%.1f MiB" % mib
+
+
+def _ellipsize(s, width):
+    return s if len(s) <= width else s[:width - 1] + "…"
+
+
+def _winnow(pending, budget):
+    """Interactively trim `pending` ([(path, track), ...]) to fit `budget`
+    bytes. Groups by artist when 2+ artists are present, otherwise by album,
+    and only ever toggles whole groups — a partial album/artist is never
+    written. Returns the kept subset (possibly empty, if the user clears the
+    selection) or None if they quit / nothing can fit."""
+    by_artist = len({orunknown(t.artist).casefold() for _, t in pending}) >= 2
+    label_of = (lambda t: orunknown(t.artist)) if by_artist \
+        else (lambda t: orunknown(t.album))
+    groups = {}
+    for path, t in pending:
+        groups.setdefault(label_of(t), []).append((path, t))
+    names = sorted(groups, key=str.casefold)
+    sizes = {n: sum(t.size or 0 for _, t in groups[n]) for n in names}
+    unit = "artist" if by_artist else "album"
+
+    if min(sizes.values()) > budget:
+        smallest = min(names, key=lambda n: sizes[n])
+        print(f"flashpod add: even your smallest {unit} \"{smallest}\" "
+              f"({fmt_size(sizes[smallest])}) is bigger than the "
+              f"{fmt_size(budget)} free. Nothing fits.", file=sys.stderr)
+        return None
+
+    # Recommended pre-selection: artists smallest-first (maximize the count
+    # that fits); albums alphabetical, adding until one doesn't fit.
+    checked = set()
+    room = budget
+    if by_artist:
+        for n in sorted(names, key=lambda n: sizes[n]):
+            if sizes[n] <= room:
+                checked.add(n)
+                room -= sizes[n]
+    else:
+        for n in names:
+            if sizes[n] > room:
+                break
+            checked.add(n)
+            room -= sizes[n]
+
+    batch = sum(sizes.values())
+    print(f"flashpod add: this batch is {fmt_size(batch)} but only "
+          f"{fmt_size(budget)} is free. I can fit {len(checked)} of your "
+          f"{len(names)} {unit}s — adjust below:")
+
+    while True:
+        for i, n in enumerate(names, 1):
+            print("  %2d  [%s]  %-32s %10s"
+                  % (i, "x" if n in checked else " ",
+                     _ellipsize(n, 32), fmt_size(sizes[n])))
+        total = sum(sizes[n] for n in checked)
+        over = total - budget
+        line = "              total: %10s" % fmt_size(total)
+        if over > 0:
+            line += "   over by %s" % fmt_size(over)
+            if sys.stdout.isatty():
+                line = "\033[31m" + line + "\033[0m"     # red while over budget
+        else:
+            line += "   (%s to spare)" % fmt_size(-over)
+        print(line)
+        try:
+            ans = input(f"Toggle 1-{len(names)}, (a)ll, (n)one, "
+                        "Enter=add, q=quit: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        if ans in ("q", "quit"):
+            return None
+        if ans == "a":
+            checked = set(names)
+            continue
+        if ans == "n":
+            checked = set()
+            continue
+        if ans == "":
+            if total > budget:
+                print("  still over budget — trim more, or q to cancel.")
+                continue
+            return [item for n in names if n in checked for item in groups[n]]
+        bad = False
+        for tok in re.split(r"[,\s]+", ans):
+            if not tok.isdigit() or not (1 <= int(tok) <= len(names)):
+                print(f"  ?  didn't understand '{tok}'")
+                bad = True
+                break
+            n = names[int(tok) - 1]
+            checked.discard(n) if n in checked else checked.add(n)
+        if bad:
+            continue
+
+
+def _cmd_add_core(paths, load, copy, save, free_space=None):
     """Batch-add files to the iPod. The backend is three callables so this
     works the same over an OS mount (cmd_add) and over the raw device
     (cmd_add_raw): load() -> Library|None, copy(path, progress) -> location,
-    save(Library) -> None."""
+    save(Library) -> None. ``free_space() -> bytes`` enables the pre-flight
+    size check + winnow loop; the raw path passes none and skips it (issue
+    #30)."""
     if not paths or not paths[0]:
         return 1
     files = expand(paths)
@@ -1344,26 +1455,67 @@ def _cmd_add_core(paths, load, copy, save):
     if not lib:
         return 1
     seen = {track_key(t) for t in lib.tracks}
-    start = time.monotonic()
-    total = len(files)
-    failures = 0
-    added = 0
-    skipped = 0
-    added_bytes = 0
     win = LineWindow()
+    nfiles = len(files)
+    failures = 0
+    skipped = 0
+    dropped = 0
+
+    # Pass 1: read tags + dedup, so we know the batch's true size (post-dedup)
+    # before copying a single byte.
+    pending = []
     for nr, path in enumerate(files, 1):
-        track = make_track(lib, path, nr, total, report=win.note)
+        track = make_track(lib, path, nr, nfiles, report=win.note)
         if not track:
             failures += 1
             continue
         key = track_key(track)
         if key in seen:
-            win.note(f"[{nr}/{total}] skipping {os.path.basename(path)}: "
+            win.note(f"[{nr}/{nfiles}] skipping {os.path.basename(path)}: "
                      f"already on iPod")
             skipped += 1
             continue
+        seen.add(key)
+        pending.append((path, track))
+
+    # Pre-flight: does the batch fit? (mount path only.)
+    if pending and free_space is not None:
+        try:
+            budget = free_space() - _ADD_HEADROOM
+        except OSError as exc:
+            win.note(f"flashpod add: couldn't check free space ({exc}); "
+                     "proceeding anyway")
+            budget = None
+        if budget is not None:
+            batch = sum(t.size or 0 for _, t in pending)
+            if batch <= budget:
+                print(f"flashpod add: this batch is {fmt_size(batch)}. You've "
+                      f"got {fmt_size(budget - batch)} more than you need, "
+                      f"Dude. That's gnarly!")
+            elif not sys.stdin.isatty():
+                print(f"flashpod add: batch is {fmt_size(batch)} but only "
+                      f"{fmt_size(budget)} free; trim the selection or free "
+                      "space (can't prompt here).", file=sys.stderr)
+                return 1
+            else:
+                kept = _winnow(pending, budget)
+                if kept is None:
+                    print("flashpod add: nothing added.")
+                    return 0
+                dropped = len(pending) - len(kept)
+                pending = kept
+                if not pending:
+                    print("flashpod add: nothing selected; nothing added.")
+                    return 0
+
+    # Pass 2: copy what survived.
+    start = time.monotonic()
+    npend = len(pending)
+    added = 0
+    added_bytes = 0
+    for nr, (path, track) in enumerate(pending, 1):
         label = track.title + (f" — {track.artist}" if track.artist else "")
-        win.add(f"[{nr}/{total}] Adding: {label}...")
+        win.add(f"[{nr}/{npend}] Adding: {label}...")
 
         last = [0.0]
 
@@ -1376,17 +1528,16 @@ def _cmd_add_core(paths, load, copy, save):
             _last[0] = now
             mib = 1 << 20
             pct = (done * 100 // total_bytes) if total_bytes else 100
-            win.update(f"[{_nr}/{total}] Adding: {_label}... {pct}% "
+            win.update(f"[{_nr}/{npend}] Adding: {_label}... {pct}% "
                        f"({done / mib:.1f}/{total_bytes / mib:.1f} MiB)")
 
         try:
             track.location = copy(path, _progress)
         except OSError as exc:
-            win.note(f"[{nr}/{total}] FAILED {path}: {exc}")
+            win.note(f"[{nr}/{npend}] FAILED {path}: {exc}")
             failures += 1
             continue
         lib.tracks.append(track)
-        seen.add(key)
         added += 1
         added_bytes += track.size or 0
     if added:
@@ -1394,6 +1545,8 @@ def _cmd_add_core(paths, load, copy, save):
     secs = time.monotonic() - start
     elapsed = fmt_duration(secs)
     parts = [f"{added} track{'s' if added != 1 else ''} added"]
+    if dropped:
+        parts.append(f"{dropped} dropped to fit free space")
     if skipped:
         parts.append(f"{skipped} skipped (already on iPod)")
     if failures:
