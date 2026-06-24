@@ -1323,9 +1323,13 @@ class LineWindow:
         self.drawn = len(self.lines)
         sys.stdout.flush()
 
-    def add(self, line):
+    def add(self, line, transient=False):
+        """Roll a new line into the window (oldest scrolls off). ``transient``
+        lines are mere progress, not a record, so they're suppressed on a
+        non-tty (where add() otherwise prints every line for logs/pipes)."""
         if not self.tty:
-            print(line, flush=True)
+            if not transient:
+                print(line, flush=True)
             return
         self._erase()
         self.lines.append(line)
@@ -1517,15 +1521,20 @@ def _cmd_add_core(paths, load, copy, save, free_space=None):
     # we're on — otherwise the scan looks like a hang.
     pending = []
     for nr, path in enumerate(files, 1):
-        win.update(f"[{nr}/{nfiles}] Reading tags: {os.path.basename(path)}...")
+        win.add(f"[{nr}/{nfiles}] Reading tags: {os.path.basename(path)}...",
+                transient=True)
         track = make_track(lib, path, nr, nfiles, report=win.note)
         if not track:
             failures += 1
             continue
         key = track_key(track)
         if key in seen:
-            win.note(f"[{nr}/{nfiles}] skipping {os.path.basename(path)}: "
-                     f"already on iPod")
+            # routine, high-volume on a big library — roll it through the live
+            # window (replacing this file's "Reading tags" line) instead of
+            # persisting it; the count lands in the summary. (make_track's own
+            # reports — unreadable / not audio — still persist via win.note.)
+            win.update(f"[{nr}/{nfiles}] skipping {os.path.basename(path)}: "
+                       f"already on iPod")
             skipped += 1
             continue
         seen.add(key)
