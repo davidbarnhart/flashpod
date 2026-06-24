@@ -113,6 +113,50 @@ $ flashpod ls album           # flat per-album track counts (or `albums`)
 
 Track ids shown by `ls all` are what `flashpod rm <id>` takes.
 
+**Reading the iPod directly (the default):** unless an iPod is already
+mounted, `flashpod ls` finds one by **scanning** attached disks and reading
+each with its own FAT driver — the iPod is the one whose filesystem actually
+holds an iTunes database (no guessing from volume labels or bus type). Scanning
+reads raw devices, which needs root, so it elevates with sudo for you — you
+don't type `sudo` yourself:
+
+```
+$ flashpod ls
+flashpod: looking for an iPod means reading attached disks, which needs root — elevating via sudo...
+Password:
+Found iPod on /dev/rdisk1 (iPod, FireWire) — 82 tracks.
+iPod "David's iPod": 82 tracks, ...
+```
+
+This is more robust than mounting: the driver issues only small, direct
+transfers, so it doesn't need the FireWire queue tuning on Linux — and it's the
+*only* way on macOS, where some early FireWire iPods can't be mounted at all
+(the bridge corrupts the OS's read-ahead into zeros).
+
+This works for **every command** — `add`, `rm`, and `init` manage the iPod over
+the raw device too (with a pure-Python FAT writer), so you can fully manage an
+iPod the OS can't mount:
+
+```
+$ flashpod add ~/Music/album    # scans, finds the iPod, elevates, writes
+$ flashpod rm 52                # remove a track by id
+$ flashpod init                 # set up a freshly-flashed card
+```
+
+You can also name the device explicitly with `--raw` (the data partition or
+the whole disk); it elevates the same way:
+
+```
+$ flashpod ls --raw /dev/rdisk1s2       # macOS: the iPod's data partition
+$ flashpod add --raw /dev/sdb2 ~/Music  # Linux works too
+```
+
+> **Speed note:** writing over the FireWire bridge is **slow** (~270 KiB/s — a
+> hardware limit of these early bridges, not something a setting can fix). For
+> **bulk** loads, pull the card into a USB reader and `add` over the normal
+> mount — USB bypasses the bridge and is far faster. Use the raw FireWire path
+> for quick incremental edits where pulling the card isn't worth it.
+
 ### `flashpod add [path ...]`
 
 Add audio files and/or directories. Directories are scanned recursively in

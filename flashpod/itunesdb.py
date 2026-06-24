@@ -117,7 +117,12 @@ def _parse_mhit(buf, off):
 
 def parse(path):
     """Parse an iTunesDB file into a Library."""
-    buf = open(path, "rb").read()
+    return parse_bytes(open(path, "rb").read())
+
+
+def parse_bytes(buf):
+    """Parse raw iTunesDB bytes into a Library (used by the raw-device path,
+    which reads the DB through the userspace FAT driver rather than a file)."""
     if buf[0:4] != b"mhbd":
         raise ValueError("not an iTunesDB (no mhbd header)")
     lib = Library()

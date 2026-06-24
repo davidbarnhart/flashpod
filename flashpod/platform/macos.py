@@ -170,6 +170,60 @@ class MacOSPlatform(Platform):
             else "/dev/r" + os.path.basename(dev)
         return AlignedRawIO(open(raw_name, mode, buffering=0))
 
+    def raw_read_node(self, dev):
+        """/dev/disk2 → /dev/rdisk2 (unbuffered): reads must dodge the buffer
+        cache, whose read-ahead the FireWire bridge zeroes. Files pass through."""
+        if os.path.isfile(dev):
+            return dev
+        base = os.path.basename(dev)
+        if base.startswith("rdisk"):
+            return dev
+        return "/dev/r" + base
+
+    def raw_max_xfer(self):
+        """Single-sector transfers, reads AND writes. The gen-1 iPod FireWire
+        bridge corrupts raw transfers larger than one sector in BOTH directions
+        (proven the hard way: single-sector round-trips, but 8-sector reads come
+        back zeroed and 8-sector writes corrupt). Unlike Linux there's no
+        per-device queue cap on macOS, so the driver self-limits. Larger writes
+        wouldn't help anyway — the bridge is bandwidth-limited (~270 KiB/s).
+        FLASHPOD_RAW_MAX_XFER can raise it on a USB reader (no bridge)."""
+        return 1
+
+    def fat_disk_candidates(self):
+        """Every whole disk except the one backing the running system, as
+        unbuffered ``/dev/rdiskN`` nodes for the caller to probe.
+
+        Deliberately does NOT pre-filter on bus, label, or diskutil's partition
+        "Content" — those proved unreliable on 10.8 (a misparsed Content made
+        the iPod invisible). Our own FAT driver is the judge: open_raw_fat walks
+        the MBR and rejects non-FAT disks, and the real iPod test is whether the
+        FAT holds iPod_Control/iTunes/iTunesDB. Probing a non-iPod disk is a
+        couple of harmless sector reads."""
+        try:
+            pl = _diskutil_plist(["list"])
+        except OSError:
+            return []
+        try:
+            boot = _whole_disk(_diskutil_info("/").get("ParentWholeDisk", ""))
+        except OSError:
+            boot = None
+        out = []
+        for d in pl.get("WholeDisks") or []:
+            if d and d == boot:
+                continue
+            desc = d
+            try:
+                info = _diskutil_info("/dev/" + d)
+                media = str(info.get("MediaName")
+                            or info.get("IORegistryEntryName") or "").strip()
+                bus = str(info.get("BusProtocol") or info.get("Bus") or "").strip()
+                desc = ", ".join(b for b in (media, bus) if b) or d
+            except OSError:
+                pass
+            out.append(("/dev/r" + d, desc))
+        return out
+
     # -- sync-path mount detection ----------------------------------------
     def mounted_filesystems(self):
         """Parse `mount`:  /dev/disk2s2 on /Volumes/IPOD (msdos, local, ...)."""

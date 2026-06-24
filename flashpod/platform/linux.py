@@ -120,3 +120,35 @@ class LinuxPlatform(Platform):
         except OSError:
             pass
         return out
+
+    def fat_disk_candidates(self):
+        """FAT (vfat) partitions on removable/USB/FireWire disks, as raw
+        partition nodes (e.g. ``/dev/sdb2``) for the caller to probe. Restricted
+        to external/removable transports so we never read the system disk; the
+        real iPod test (iPod_Control/iTunes/iTunesDB) is done by the caller, not
+        by any label or transport heuristic."""
+        import json
+        try:
+            out = subprocess.run(
+                ["lsblk", "-J", "-o", "NAME,TYPE,FSTYPE,LABEL,TRAN,RM,HOTPLUG,SIZE"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                universal_newlines=True, check=True).stdout
+        except (OSError, subprocess.CalledProcessError):
+            return []
+        cands = []
+
+        def walk(node, tran, removable):
+            tran = node.get("tran") or tran or ""
+            removable = removable or bool(node.get("rm")) or bool(node.get("hotplug"))
+            external = removable or tran in ("usb", "sbp", "ieee1394")
+            if (node.get("type") == "part" and external
+                    and (node.get("fstype") or "") in ("vfat", "exfat")):
+                label = node.get("label") or ""
+                bits = [b for b in (label, tran, node.get("size")) if b]
+                cands.append(("/dev/" + node["name"], " ".join(bits)))
+            for child in node.get("children") or []:
+                walk(child, tran, removable)
+
+        for dev in json.loads(out)["blockdevices"]:
+            walk(dev, None, False)
+        return cands
