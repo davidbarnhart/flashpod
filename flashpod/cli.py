@@ -1508,8 +1508,12 @@ def _cmd_add_core(paths, load, copy, save, free_space=None):
             continue
         key = track_key(track)
         if key in seen:
-            win.note(f"[{nr}/{nfiles}] skipping {os.path.basename(path)}: "
-                     f"already on iPod")
+            # routine, high-volume on a big library — roll it through the live
+            # window (replacing this file's "Reading tags" line) instead of
+            # persisting it; the count lands in the summary. (make_track's own
+            # reports — unreadable / not audio — still persist via win.note.)
+            win.update(f"[{nr}/{nfiles}] skipping {os.path.basename(path)}: "
+                       f"already on iPod")
             skipped += 1
             continue
         seen.add(key)
