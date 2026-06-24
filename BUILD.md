@@ -8,7 +8,8 @@ only file a user needs.
 ## Linux & Windows — automated
 
 Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the
-Linux and Windows binaries and attaches them to a GitHub Release:
+Linux and Windows binaries (attached to a GitHub Release) **and publishes the
+pure-Python package to PyPI** (see [Releasing to PyPI](#releasing-to-pypi)):
 
 ```sh
 git tag v0.1.0
@@ -25,6 +26,39 @@ Artifacts:
 |------|----------|
 | `flashpod-linux-x86_64` | Linux (built on glibc 2.35 / Ubuntu 22.04, runs on that and newer) |
 | `flashpod-windows-x86_64.exe` | Windows 10/11 x86-64 |
+
+## Releasing to PyPI
+
+The same `v*` tag also publishes the pure-Python package to
+[PyPI](https://pypi.org/project/flashpod/) via **Trusted Publishing** (OIDC — no
+API tokens, no stored secrets). The `pypi` job in `release.yml` builds the
+sdist + wheel and uploads them.
+
+**One-time setup** on PyPI (Account settings → *Publishing* → add a *pending*
+publisher, since the project doesn't exist on PyPI until the first release):
+
+| Field | Value |
+|-------|-------|
+| PyPI Project Name | `flashpod` |
+| Owner | `davidbarnhart` |
+| Repository name | `flashpod` |
+| Workflow name | `release.yml` |
+| Environment name | `pypi` |
+
+The **Workflow name** and **Environment name** must match `release.yml` exactly
+— the `pypi` job declares `environment: pypi`. The first tagged build creates
+the project on PyPI automatically.
+
+**Cutting a release** (PyPI versions are immutable and can't be re-uploaded, so
+bump the version first):
+
+```sh
+# 1. bump `version` in pyproject.toml (e.g. 0.1.5 -> 0.1.6) and commit
+# 2. optionally verify the package builds:
+pip install build twine && python -m build && twine check dist/*
+# 3. tag — this triggers the binaries + the PyPI publish together:
+git tag v0.1.6 && git push origin v0.1.6
+```
 
 ## Building locally (any platform)
 

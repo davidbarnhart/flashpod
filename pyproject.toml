@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,17 +8,26 @@ version = "0.1.5"
 description = "Command-line iPod sync + card-flashing tooling for early FireWire-era iPods, pure Python"
 readme = "README.md"
 requires-python = ">=3.6"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "David Barnhart" }]
 keywords = ["ipod", "itunesdb", "firmware", "flash", "compactflash"]
 classifiers = [
+    "Development Status :: 4 - Beta",
     "Environment :: Console",
-    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: End Users/Desktop",
     "Operating System :: POSIX :: Linux",
-    "Operating System :: MacOS :: MacOS X",
-    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Utilities",
 ]
 dependencies = ["mutagen"]
 
