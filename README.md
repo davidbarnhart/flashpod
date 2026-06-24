@@ -1,32 +1,46 @@
 # flashpod
 
-Command-line tooling for early (1st/2nd/3rd-generation, FireWire-era) iPods:
-flash a CompactFlash/SD card with iPod firmware, initialize the music
-database, and sync music — no iTunes, no gtkpod. Runs on Linux, macOS, and
-Windows (Linux is the most-tested; the macOS/Windows disk backends are newer).
-
-The iTunesDB is read and written natively in pure Python — no libgpod, no
-compiled dependencies. Firmware images (the last stock Apple releases for 1G
-through 4G models) are downloaded on demand from GitHub and verified by
-checksum, or you can supply your own with `--firmware`.
+flashpod is a command-line tool for putting flash storage cards into
+early-generation iPods and managing the music on them. It handles the whole
+setup without iTunes, so you can revive a vintage iPod and run it from a modern
+desktop: it writes the firmware to the card, creates the initial music
+database, and loads the card with music. Then, once you pop the card into an
+iPod and connect it over USB or FireWire, flashpod manages the library on the
+device too — adding and removing songs right on the iPod.
 
 ## Requirements
 
-- Python 3.6+ and `mutagen` (tag extraction; installed automatically by
-  `pip install`, or use the distro `python3-mutagen` when running from source)
-- FAT32 formatting during flash is built in (pure Python) — no external
-  filesystem tools needed
-- Pre-2007 iPods only — newer models need an iTunesDB checksum/hash that
-  these tools don't generate.
+- **iPod:** Gen 1, 2, or 3 (tested successfully); Gen 4 should work but isn't
+  tested yet. Later models (2007 and newer) aren't supported — they need an
+  iTunesDB checksum/hash flashpod doesn't generate.
+- **Operating system:** Linux and macOS (tested). Windows has a backend but
+  isn't tested yet.
+
+flashpod was originally written to run from a modern Linux desktop. The
+one-time flashing operation only needs a working USB card reader. For a 3rd- or
+4th-gen iPod, a modern machine can flash the card and manage the iPod. For a 1st-
+or 2nd-gen iPod, you can still flash the card from a modern machine, but you'll
+need a FireWire interface to manage the music on the iPod afterward.
+
+## FireWire
+
+A FireWire interface is a rarity these days. On a desktop, the easiest option
+is to add a FireWire card — Linux still supports FireWire well, so a Linux
+machine with a FireWire card lets flashpod manage a 1st- or 2nd-gen iPod.
+
+That's not the only option, though. Older Macs shipped with FireWire built in,
+and flashpod was deliberately written with as few external dependencies as
+possible — and against a relatively old Python — to stay runnable on vintage
+Mac hardware. It's been tested on a MacBook running OS X 10.8 so far. Since old
+Macs often can't get online, the macOS release can be copied to a USB drive on
+a modern machine and installed on the MacBook from there.
 
 ## Install
 
-### Download a release (no Python needed)
-
-Grab the archive for your OS from the
-[Releases page](https://github.com/davidbarnhart/flashpod/releases) — each
-holds a single self-contained executable (no Python or other dependencies),
-plus a README and license.
+Download the archive for your OS from the
+[Releases page](https://github.com/davidbarnhart/flashpod/releases) — each holds
+a single self-contained executable (no Python or anything else to install), plus
+a README and license.
 
 **Linux** (`flashpod-linux-x86_64.tar.gz`):
 ```sh
@@ -39,9 +53,10 @@ flashpod --help
 **Windows** (`flashpod-windows-x86_64.zip`): unzip it and run `flashpod.exe`
 from a terminal (an Administrator terminal for `flash`).
 
-Firmware images aren't in the binary — `flashpod flash` downloads the one you
-pick (verified by checksum), or you supply your own with `--firmware`. Building
-the binaries is documented in [BUILD.md](BUILD.md).
+The **Linux and Windows** builds don't bundle firmware — `flashpod flash`
+downloads the image you pick (verified by checksum), or you supply your own with
+`--firmware`. (The **macOS 10.8** build is different — see below.) Building the
+binaries yourself is documented in [BUILD.md](BUILD.md).
 
 **Vintage Macs (OS X 10.8):** use `flashpod-macos-10.8.tar.gz`. That build has
 the firmware **baked in** (no network needed), so `flashpod flash` works
@@ -55,42 +70,76 @@ xattr -d com.apple.quarantine flashpod   # or right-click → Open once
 ./flashpod --help
 ```
 
-### Or install from source with pip
-
-Install from a checkout — this puts a `flashpod` command on your PATH:
-
-```sh
-pip install .
-```
-
-Or run straight from the source tree without installing:
-
-```sh
-python -m flashpod ...        # run from the repo root
-```
-
-For development, an editable install keeps the command pointed at your checkout:
-
-```sh
-pip install -e .
-```
-
 > `flashpod flash` needs root. `sudo` uses root's PATH, so if `sudo flashpod`
-> isn't found, run `sudo "$(command -v flashpod)" flash` (or
-> `sudo python -m flashpod flash` from source).
+> isn't found, run it by full path — `sudo "$(command -v flashpod)" flash`, or
+> `cd` into the extracted folder and run `sudo ./flashpod flash`.
+
+## Typical workflow
+
+**Set the card up in a USB reader first — transfers are far faster there than
+over FireWire.** Flash it, then let flashpod initialize the database and load
+your music, all in one sitting:
+
+```sh
+sudo flashpod flash    # flash firmware + format the card; then answer Y to
+                       # init the database, and Y to load your music onto it
+```
+
+Load the **bulk** of your library now, while the card is in the reader. Once the
+card is in the iPod, music transfers over FireWire are much slower — fine for a
+song or two, painful for a discography. So front-load it here.
+
+Now pop the card into the iPod and connect the iPod to your computer. flashpod
+finds it on its own — no mounting, no device paths, no `sudo` to type:
+
+```
+$ flashpod ls
+flashpod: looking for an iPod means reading attached disks, which needs root — elevating via sudo...
+Password:
+Found iPod on /dev/rdisk1 — 82 tracks.
+iPod "David's iPod": 82 tracks, 2 artists, 6 albums
+New Order
+  Power, Corruption & Lies (8 tracks)
+  Substance (12 tracks)
+The Cure
+  Kiss Me, Kiss Me, Kiss Me (18 tracks)
+```
+
+Add or remove the odd track right on the device:
+
+```
+$ flashpod add ~/music/New\ Order\ -\ Blue\ Monday.mp3
+Found iPod on /dev/rdisk1 — 82 tracks.
+[1/1] Adding: Blue Monday — New Order... 100% (6.8/6.8 MiB)
+1 track added in 26s (6.8 MiB at 268 KiB/s)
+
+$ flashpod rm album Substance
+Found iPod on /dev/rdisk1 — 83 tracks.
+Removed: New Order - Ceremony
+Removed: New Order - Temptation
+…
+Removed 12 tracks
+```
 
 ## Commands
 
-All commands take `--mount <path>` (before or after the subcommand). Without
-it, the tool scans mounted filesystems for something iPod-like and **always
-confirms before using its guess**:
+flashpod finds your iPod for you. With no flags, it uses one that's already
+mounted; otherwise it scans the attached disks and picks out the iPod by the
+iTunes database on it (no guessing from volume labels), then reads and writes it
+**directly over the raw device** with its own FAT driver — no OS mount required.
+That raw path is what lets flashpod manage an iPod the OS *can't* mount, like a
+flash-modded FireWire iPod on a Mac (macOS's read-ahead corrupts the boot
+sector, so it refuses the volume). Raw access needs root, so flashpod re-runs
+itself under sudo and prompts for your password — you never type `sudo`
+yourself.
 
-- one candidate → `Using iPod mounted at /media/you/IPOD — continue? [Y/n]`
-- several candidates → a numbered chooser, most probable first
-- nothing iPod-like mounted → scans attached disks for an unmounted iPod
-  partition (FAT-family; label/FireWire/removable heuristics) and offers to
-  mount it via udisks — no root needed
-- not running on a terminal → refuses; pass `--mount` explicitly
+To skip detection, name the target explicitly — `--mount <path>` for a
+mountpoint or `--raw <device>` for a raw device (the data partition or the whole
+disk), before or after the subcommand. On Linux you can also just mount the iPod
+yourself and let flashpod find the mount. On a non-terminal, flashpod won't
+guess — pass one of these.
+
+All four library commands — `ls`, `add`, `rm`, `init` — work this way.
 
 ### `flashpod ls` (alias: `flashpod list`)
 
@@ -112,50 +161,6 @@ $ flashpod ls album           # flat per-album track counts (or `albums`)
 ```
 
 Track ids shown by `ls all` are what `flashpod rm <id>` takes.
-
-**Reading the iPod directly (the default):** unless an iPod is already
-mounted, `flashpod ls` finds one by **scanning** attached disks and reading
-each with its own FAT driver — the iPod is the one whose filesystem actually
-holds an iTunes database (no guessing from volume labels or bus type). Scanning
-reads raw devices, which needs root, so it elevates with sudo for you — you
-don't type `sudo` yourself:
-
-```
-$ flashpod ls
-flashpod: looking for an iPod means reading attached disks, which needs root — elevating via sudo...
-Password:
-Found iPod on /dev/rdisk1 (iPod, FireWire) — 82 tracks.
-iPod "David's iPod": 82 tracks, ...
-```
-
-This is more robust than mounting: the driver issues only small, direct
-transfers, so it doesn't need the FireWire queue tuning on Linux — and it's the
-*only* way on macOS, where some early FireWire iPods can't be mounted at all
-(the bridge corrupts the OS's read-ahead into zeros).
-
-This works for **every command** — `add`, `rm`, and `init` manage the iPod over
-the raw device too (with a pure-Python FAT writer), so you can fully manage an
-iPod the OS can't mount:
-
-```
-$ flashpod add ~/Music/album    # scans, finds the iPod, elevates, writes
-$ flashpod rm 52                # remove a track by id
-$ flashpod init                 # set up a freshly-flashed card
-```
-
-You can also name the device explicitly with `--raw` (the data partition or
-the whole disk); it elevates the same way:
-
-```
-$ flashpod ls --raw /dev/rdisk1s2       # macOS: the iPod's data partition
-$ flashpod add --raw /dev/sdb2 ~/Music  # Linux works too
-```
-
-> **Speed note:** writing over the FireWire bridge is **slow** (~270 KiB/s — a
-> hardware limit of these early bridges, not something a setting can fix). For
-> **bulk** loads, pull the card into a USB reader and `add` over the normal
-> mount — USB bypasses the bridge and is far faster. Use the raw FireWire path
-> for quick incremental edits where pulling the card isn't worth it.
 
 ### `flashpod add [path ...]`
 
@@ -191,6 +196,11 @@ window, are counted in the summary, and don't stop the batch:
 [14/14] Adding: Thick as Thieves — Relic Pop...    ⌟
 12 tracks added, 1 skipped (already on iPod), 1 failed in 1m02s
 ```
+
+> **Adding over FireWire is slow** (~270 KiB/s — a hardware limit of these early
+> bridges, not something a setting can fix). For **bulk** loads, pull the card
+> into a USB reader and `add` over the normal mount — USB bypasses the bridge
+> and is far faster. Keep the raw FireWire path for quick incremental edits.
 
 ### `flashpod rm`
 
@@ -259,29 +269,6 @@ card right away, and after that to load music onto it too — answer Y (the
 default) to both and the card comes out of the flash step ready to play. The
 offers are skipped for `--dry-run`, `--no-format`, and non-interactive runs.
 
-## Typical workflows
-
-**Build a new card from scratch:**
-
-```sh
-sudo flashpod flash                 # flash + FAT32 format (label IPOD);
-                                      # answer Y to the init offer, then Y to
-                                      # load music — done in one sitting
-# put the card in the iPod and play
-```
-
-(If you declined the offers — or flashed non-interactively — mount the card
-and run `flashpod init`, then `flashpod add`, as separate steps.)
-
-**Sync music to an existing iPod:**
-
-```sh
-udisksctl mount -b /dev/sdX2      # find X via: lsblk -o NAME,TRAN,LABEL
-flashpod add ~/music/Some\ Album
-flashpod ls
-sync && udisksctl unmount -b /dev/sdX2
-```
-
 ## Files
 
 | Path | Role |
@@ -290,6 +277,7 @@ sync && udisksctl unmount -b /dev/sdX2
 | `flashpod/itunesdb.py` | pure-Python classic iTunesDB reader/writer |
 | `flashpod/ipod_flash.py` | flashing engine (firmware + partition layout) |
 | `flashpod/fat32.py` | pure-Python FAT32 formatter |
+| `flashpod/fatfs.py` | pure-Python FAT32 read/write driver for raw-device access (no OS mount) |
 | `flashpod/platform/` | per-OS backends (disk enumerate / unmount / raw I/O / privilege) |
 | `flashpod/firmware/firmware.json` | firmware catalog (URLs + checksums; images are downloaded) |
 | `flashpod/contrib/` | the Linux FireWire udev rule |
@@ -300,8 +288,10 @@ sync && udisksctl unmount -b /dev/sdX2
 
 - Close Rhythmbox before syncing/ejecting — its libgpod plugin grabs the
   iPod mount and blocks unmount.
-- Each `flashpod add` rewrites the whole iTunesDB per track; fine at hundreds of
-  tracks, slow for huge libraries.
+- A batch `flashpod add` writes the database **once**, at the end — not per
+  track. If a batch is interrupted, you may be left with orphaned music files
+  but an unchanged database; just re-run the same `add` (files already present
+  are skipped).
 - Don't trust `fsck.vfat` on iPod cards: dosfstools chokes on iPod boot
   sectors that the kernel mounts fine.
 
