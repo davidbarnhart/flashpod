@@ -1400,6 +1400,173 @@ def _ellipsize(s, width):
     return s if len(s) <= width else s[:width - 1] + "…"
 
 
+# Width of the artist/album name column in the winnow selectors.
+_NAME_W = 48
+
+
+def _can_cursor_select():
+    """True if we can run the raw-terminal cursor selector here."""
+    if os.name == "nt" or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    try:
+        import termios  # noqa: F401
+        import tty       # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _read_key(fd):
+    """Read one keypress (cbreak mode) and normalize it: 'up','down','space',
+    'accept','all','none','cancel', or None. Decodes arrow-key escape
+    sequences; a lone Esc is 'cancel'."""
+    import select
+    ch = os.read(fd, 1)
+    if ch == b"\x1b":                          # arrow-key escape, or a lone Esc
+        ready, _, _ = select.select([fd], [], [], 0.05)
+        if not ready:
+            return "cancel"
+        return {b"[A": "up", b"[B": "down"}.get(os.read(fd, 2))
+    if ch in (b"\r", b"\n"):
+        return "accept"
+    if ch == b" ":
+        return "space"
+    if ch == b"\x03":                          # Ctrl-C
+        return "cancel"
+    return {b"k": "up", b"j": "down", b"a": "all",
+            b"n": "none", b"q": "cancel"}.get(ch.lower())
+
+
+def _select_cursor(names, sizes, checked, budget):
+    """Cursor/space-bar selector: up/down move, space toggles the highlighted
+    row, a/n select all/none, Enter confirms (when it fits), q/Esc cancels.
+    Returns the final `checked` set, or None. Only the lines that actually
+    change are rewritten — no full redraw per keystroke. Caller printed the
+    intro."""
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    cursor = 0
+    n_rows = len(names)
+    msg = [""]                                 # transient note on the help line
+
+    def row_text(i):
+        n = names[i]
+        s = " %s [%s]  %-*s %10s" % (
+            "›" if i == cursor else " ", "x" if n in checked else " ",
+            _NAME_W, _ellipsize(n, _NAME_W), fmt_size(sizes[n]))
+        return "\x1b[7m%s\x1b[0m" % s if i == cursor else s
+
+    def total_text():
+        total = sum(sizes[n] for n in checked)
+        over = total - budget
+        t = "       total: %10s" % fmt_size(total)
+        if over > 0:
+            return "\x1b[31m%s   over by %s\x1b[0m" % (t, fmt_size(over))
+        return "%s   (%s to spare)" % (t, fmt_size(-over))
+
+    def help_text():
+        return ("\x1b[2m  ↑/↓ move · space toggle · a all · n none · "
+                "enter add · q cancel\x1b[0m" + ("   " + msg[0] if msg[0] else ""))
+
+    # The cursor parks on the blank line just below the block ("home"). A row is
+    # `n_rows + 2 - i` lines up; the total line is 2 up; the help line is 1 up.
+    def at(up, text):
+        """Rewrite the line `up` rows above home in place, then return home."""
+        sys.stdout.write("\x1b[%dA\r\x1b[2K%s\x1b[%dB\r" % (up, text, up))
+
+    try:
+        tty.setcbreak(fd)
+        # one full draw; the trailing newline leaves the cursor at home
+        sys.stdout.write("\n".join([row_text(i) for i in range(n_rows)]
+                                   + [total_text(), help_text()]) + "\n")
+        sys.stdout.flush()
+        while True:
+            key = _read_key(fd)
+            had_msg = bool(msg[0])
+            msg[0] = ""
+            if key in ("up", "down"):
+                prev = cursor
+                cursor = (cursor + (1 if key == "down" else -1)) % n_rows
+                at(n_rows + 2 - prev, row_text(prev))      # un-highlight old row
+                at(n_rows + 2 - cursor, row_text(cursor))  # highlight new row
+            elif key == "space":
+                n = names[cursor]
+                (checked.discard if n in checked else checked.add)(n)
+                at(n_rows + 2 - cursor, row_text(cursor))
+                at(2, total_text())
+            elif key in ("all", "none"):
+                checked = set(names) if key == "all" else set()
+                for i in range(n_rows):
+                    at(n_rows + 2 - i, row_text(i))
+                at(2, total_text())
+            elif key == "accept":
+                if sum(sizes[n] for n in checked) <= budget:
+                    return checked
+                msg[0] = "\x1b[31mstill over budget\x1b[0m"
+            elif key == "cancel":
+                return None
+            if had_msg or msg[0]:                          # help-line note changed
+                at(1, help_text())
+            sys.stdout.flush()
+    except KeyboardInterrupt:
+        return None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+
+def _select_lines(names, sizes, checked, budget):
+    """Fallback selector: numbered toggles via input() (no raw terminal).
+    Returns the final `checked` set, or None."""
+    while True:
+        for i, n in enumerate(names, 1):
+            print("  %2d  [%s]  %-*s %10s"
+                  % (i, "x" if n in checked else " ",
+                     _NAME_W, _ellipsize(n, _NAME_W), fmt_size(sizes[n])))
+        total = sum(sizes[n] for n in checked)
+        over = total - budget
+        line = "              total: %10s" % fmt_size(total)
+        if over > 0:
+            line += "   over by %s" % fmt_size(over)
+            if sys.stdout.isatty():
+                line = "\033[31m" + line + "\033[0m"
+        else:
+            line += "   (%s to spare)" % fmt_size(-over)
+        print(line)
+        try:
+            ans = input(f"Toggle 1-{len(names)}, (a)ll, (n)one, "
+                        "Enter=add, q=quit: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        if ans in ("q", "quit"):
+            return None
+        if ans == "a":
+            checked = set(names)
+            continue
+        if ans == "n":
+            checked = set()
+            continue
+        if ans == "":
+            if total > budget:
+                print("  still over budget — trim more, or q to cancel.")
+                continue
+            return checked
+        bad = False
+        for tok in re.split(r"[,\s]+", ans):
+            if not tok.isdigit() or not (1 <= int(tok) <= len(names)):
+                print(f"  ?  didn't understand '{tok}'")
+                bad = True
+                break
+            n = names[int(tok) - 1]
+            (checked.discard if n in checked else checked.add)(n)
+        if bad:
+            continue
+
+
 def _winnow(pending, budget):
     """Interactively trim `pending` ([(path, track), ...]) to fit `budget`
     bytes. Groups by artist when 2+ artists are present, otherwise by album,
@@ -1442,52 +1609,17 @@ def _winnow(pending, budget):
     batch = sum(sizes.values())
     print(f"flashpod add: this batch is {fmt_size(batch)} but only "
           f"{fmt_size(budget)} is free. I can fit {len(checked)} of your "
-          f"{len(names)} {unit}s — adjust below:")
+          f"{len(names)} {unit}s — pick what to keep:")
 
-    while True:
-        for i, n in enumerate(names, 1):
-            print("  %2d  [%s]  %-32s %10s"
-                  % (i, "x" if n in checked else " ",
-                     _ellipsize(n, 32), fmt_size(sizes[n])))
-        total = sum(sizes[n] for n in checked)
-        over = total - budget
-        line = "              total: %10s" % fmt_size(total)
-        if over > 0:
-            line += "   over by %s" % fmt_size(over)
-            if sys.stdout.isatty():
-                line = "\033[31m" + line + "\033[0m"     # red while over budget
-        else:
-            line += "   (%s to spare)" % fmt_size(-over)
-        print(line)
-        try:
-            ans = input(f"Toggle 1-{len(names)}, (a)ll, (n)one, "
-                        "Enter=add, q=quit: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return None
-        if ans in ("q", "quit"):
-            return None
-        if ans == "a":
-            checked = set(names)
-            continue
-        if ans == "n":
-            checked = set()
-            continue
-        if ans == "":
-            if total > budget:
-                print("  still over budget — trim more, or q to cancel.")
-                continue
-            return [item for n in names if n in checked for item in groups[n]]
-        bad = False
-        for tok in re.split(r"[,\s]+", ans):
-            if not tok.isdigit() or not (1 <= int(tok) <= len(names)):
-                print(f"  ?  didn't understand '{tok}'")
-                bad = True
-                break
-            n = names[int(tok) - 1]
-            checked.discard(n) if n in checked else checked.add(n)
-        if bad:
-            continue
+    # The cursor TUI addresses rows by relative cursor moves, so it needs the
+    # whole list on screen; fall back to the scrolling numbered selector when
+    # the list is taller than the terminal.
+    fits = len(names) + 3 <= shutil.get_terminal_size((80, 24)).lines
+    select = _select_cursor if (_can_cursor_select() and fits) else _select_lines
+    kept = select(names, sizes, set(checked), budget)
+    if kept is None:
+        return None
+    return [item for n in names if n in kept for item in groups[n]]
 
 
 def _cmd_add_core(paths, load, copy, save, free_space=None):
