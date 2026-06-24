@@ -268,6 +268,18 @@ def _sudo_reexec(extra):
     # would be lost across elevation. Re-assert them in the child via `env`.
     passthru = ["%s=%s" % (k, v) for k, v in sorted(os.environ.items())
                 if k.startswith("FLASHPOD_")]
+    # A `pip install --user` puts the flashpod package under ~/.local/lib/...,
+    # which is NOT importable once sudo re-runs the script as root: sudo resets
+    # HOME to /root, so that user's site-packages drops off sys.path and the
+    # child dies with ModuleNotFoundError. Hand the package's parent directory
+    # (its site-packages) to the child via PYTHONPATH so the import survives
+    # elevation. The frozen PyInstaller binary bundles its own modules and needs
+    # none of this.
+    if not getattr(sys, "frozen", False):
+        pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        existing = os.environ.get("PYTHONPATH", "")
+        passthru.append("PYTHONPATH=" + (pkg_dir + os.pathsep + existing
+                                         if existing else pkg_dir))
     prefix = ["sudo"] + (["env"] + passthru if passthru else [])
     cmd = prefix + _self_cmd() + extra
     try:
