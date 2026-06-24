@@ -1311,6 +1311,15 @@ class LineWindow:
         sys.stdout.write(line + "\n")
         self._draw()
 
+    def clear(self):
+        """Erase the live region and forget it, so later plain prints (or a
+        fresh add()) start from a clean cursor instead of clobbering text that
+        scrolled in between."""
+        if not self.tty:
+            return
+        self._erase()
+        self.lines.clear()
+
 
 def track_key(t):
     """Dedup identity: same byte length + duration + title. Catches the same
@@ -1462,9 +1471,12 @@ def _cmd_add_core(paths, load, copy, save, free_space=None):
     dropped = 0
 
     # Pass 1: read tags + dedup, so we know the batch's true size (post-dedup)
-    # before copying a single byte.
+    # before copying a single byte. Tag reading can be slow (mutagen sniffs by
+    # reading whole files; painful over a network mount), so show which file
+    # we're on — otherwise the scan looks like a hang.
     pending = []
     for nr, path in enumerate(files, 1):
+        win.update(f"[{nr}/{nfiles}] Reading tags: {os.path.basename(path)}...")
         track = make_track(lib, path, nr, nfiles, report=win.note)
         if not track:
             failures += 1
@@ -1477,6 +1489,7 @@ def _cmd_add_core(paths, load, copy, save, free_space=None):
             continue
         seen.add(key)
         pending.append((path, track))
+    win.clear()
 
     # Pre-flight: does the batch fit? (mount path only.)
     if pending and free_space is not None:
