@@ -1304,9 +1304,13 @@ class LineWindow:
         self.drawn = len(self.lines)
         sys.stdout.flush()
 
-    def add(self, line):
+    def add(self, line, transient=False):
+        """Roll a new line into the window (oldest scrolls off). ``transient``
+        lines are mere progress, not a record, so they're suppressed on a
+        non-tty (where add() otherwise prints every line for logs/pipes)."""
         if not self.tty:
-            print(line, flush=True)
+            if not transient:
+                print(line, flush=True)
             return
         self._erase()
         self.lines.append(line)
@@ -1496,7 +1500,8 @@ def _cmd_add_core(paths, load, copy, save, free_space=None):
     # we're on — otherwise the scan looks like a hang.
     pending = []
     for nr, path in enumerate(files, 1):
-        win.update(f"[{nr}/{nfiles}] Reading tags: {os.path.basename(path)}...")
+        win.add(f"[{nr}/{nfiles}] Reading tags: {os.path.basename(path)}...",
+                transient=True)
         track = make_track(lib, path, nr, nfiles, report=win.note)
         if not track:
             failures += 1
