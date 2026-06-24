@@ -903,6 +903,17 @@ def _cmd_args(opts):
         return [c] + list(getattr(opts, "what", None) or [])
     if c == "init":
         return [c] + ([opts.name] if getattr(opts, "name", None) else [])
+    if c == "flash":
+        a = [c]
+        if getattr(opts, "device", None):
+            a.append(opts.device)
+        if getattr(opts, "firmware", None):
+            a += ["--firmware", opts.firmware]
+        if getattr(opts, "yes", False):
+            a.append("--yes")
+        if getattr(opts, "no_format", False):
+            a.append("--no-format")
+        return a
     return [c]
 
 
@@ -1733,9 +1744,16 @@ def main():
             return 0
         plat = platform.current()
         if not opts.dry_run and not plat.is_admin():
+            # Writing to a disk needs root — elevate via sudo (prompts for the
+            # password on a terminal) rather than just bailing, like the raw
+            # data commands do.
+            if os.name != "nt" and sys.stdin.isatty():
+                print("flashpod flash: writing to a disk needs root — "
+                      "elevating via sudo...", file=sys.stderr)
+                _sudo_reexec(_cmd_args(opts))    # re-execs; returns only if sudo is missing
             msg = "flashpod flash: " + plat.privilege_hint()
             if os.name != "nt":           # offer the exact sudo rerun on POSIX
-                msg += "\n  sudo " + " ".join(sys.argv)
+                msg += "\n  sudo " + " ".join(_self_cmd() + _cmd_args(opts))
             print(msg, file=sys.stderr)
             return 1
         if opts.firmware:
