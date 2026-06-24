@@ -1400,6 +1400,10 @@ def _ellipsize(s, width):
     return s if len(s) <= width else s[:width - 1] + "…"
 
 
+# Width of the artist/album name column in the winnow selectors.
+_NAME_W = 48
+
+
 def _can_cursor_select():
     """True if we can run the raw-terminal cursor selector here."""
     if os.name == "nt" or not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -1449,9 +1453,9 @@ def _select_cursor(names, sizes, checked, budget):
 
     def row_text(i):
         n = names[i]
-        s = " %s [%s]  %-32s %10s" % (
+        s = " %s [%s]  %-*s %10s" % (
             "›" if i == cursor else " ", "x" if n in checked else " ",
-            _ellipsize(n, 32), fmt_size(sizes[n]))
+            _NAME_W, _ellipsize(n, _NAME_W), fmt_size(sizes[n]))
         return "\x1b[7m%s\x1b[0m" % s if i == cursor else s
 
     def total_text():
@@ -1519,9 +1523,9 @@ def _select_lines(names, sizes, checked, budget):
     Returns the final `checked` set, or None."""
     while True:
         for i, n in enumerate(names, 1):
-            print("  %2d  [%s]  %-32s %10s"
+            print("  %2d  [%s]  %-*s %10s"
                   % (i, "x" if n in checked else " ",
-                     _ellipsize(n, 32), fmt_size(sizes[n])))
+                     _NAME_W, _ellipsize(n, _NAME_W), fmt_size(sizes[n])))
         total = sum(sizes[n] for n in checked)
         over = total - budget
         line = "              total: %10s" % fmt_size(total)
