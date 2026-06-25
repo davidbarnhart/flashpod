@@ -50,7 +50,17 @@ class BlockDev(object):
         # writes don't help — and it corrupts transfers above the read-safe
         # size in BOTH directions. So writes just use the proven-safe read cap.
         self.max_xfer = max_xfer
-        self._fd = os.open(path, os.O_RDWR if writable else os.O_RDONLY)
+        flags = os.O_RDWR if writable else os.O_RDONLY
+        if writable:
+            # O_DSYNC: each write reaches the device before returning, instead
+            # of sitting in the OS page cache. On Linux's buffered block device
+            # that buffering makes the per-file progress race to 100% while the
+            # real (slow) FireWire transfer is deferred to one big silent fsync
+            # at the end of the batch. With O_DSYNC the progress paces with the
+            # actual writes and there's no surprise wait. (macOS already writes
+            # the unbuffered /dev/rdiskN, so this is a no-op there.)
+            flags |= getattr(os, "O_DSYNC", 0)
+        self._fd = os.open(path, flags)
 
     def close(self):
         if self._fd is not None:
