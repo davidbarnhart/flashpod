@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>flashpod — revive a vintage iPod from your terminal</title>
+  <meta name="description" content="flashpod is a command-line tool for putting flash storage cards into early-generation iPods and managing the music on them — no iTunes required." />
+
+  <!-- Open Graph / social preview -->
+  <meta property="og:title" content="flashpod" />
+  <meta property="og:description" content="Put a flash card in a vintage iPod and manage its music from the terminal. No iTunes." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://flashpod.dev/" />
+  <meta property="og:image" content="assets/og-image.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#top">
+      <span class="brand-wheel" aria-hidden="true"></span>
+      <span class="brand-name">flashpod</span>
+    </a>
+    <nav class="site-nav">
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a href="#workflow">Workflow</a>
+      <a class="nav-gh" href="https://github.com/davidbarnhart/flashpod">GitHub ↗</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <!-- HERO -->
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Vintage iPod, modern desktop</p>
+        <h1>Bring a dead iPod<br />back to life.</h1>
+        <p class="lede">
+          flashpod is a command-line tool that puts a flash storage card into an
+          early-generation iPod and manages the music on it — writing the firmware,
+          building the database, and loading songs. <strong>No iTunes, ever.</strong>
+        </p>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="#install">Install flashpod</a>
+          <a class="btn btn-ghost" href="https://github.com/davidbarnhart/flashpod">View on GitHub</a>
+        </div>
+        <p class="hero-meta">MIT licensed · Linux &amp; macOS · self-contained binary</p>
+      </div>
+
+      <div class="hero-art" aria-hidden="true">
+        <div class="ipod">
+          <div class="ipod-screen">
+            <div class="ipod-statusbar">
+              <span>iPod</span><span>▶</span>
+            </div>
+            <ul class="ipod-menu">
+              <li class="active">Music</li>
+              <li>New Order</li>
+              <li>The Cure</li>
+              <li>Now Playing</li>
+            </ul>
+          </div>
+          <div class="ipod-wheel">
+            <span class="wheel-label top">MENU</span>
+            <span class="wheel-label left">⏮</span>
+            <span class="wheel-label right">⏭</span>
+            <span class="wheel-label bottom">⏯</span>
+            <span class="wheel-center"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FEATURES -->
+    <section id="features" class="features">
+      <h2 class="section-title">What it does</h2>
+      <div class="feature-grid">
+        <article class="card">
+          <h3>Flash the card</h3>
+          <p>
+            Writes the iPod firmware and partition layout to a CF/SD card, verifies
+            it byte-for-byte, and refuses to touch the disk running your system.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Build the database</h3>
+          <p>
+            Creates the <code>iPod_Control</code> structure and an empty music
+            database from scratch — no iTunes, no libgpod plugin required.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Load your music</h3>
+          <p>
+            Adds files or whole folders, reads tags automatically, skips duplicates,
+            and front-loads your library fast over a USB reader.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Manage on the device</h3>
+          <p>
+            Lists, adds, and removes tracks right on the iPod over USB or FireWire —
+            it finds the device for you, no mounting or device paths.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Raw device access</h3>
+          <p>
+            Reads and writes directly over the raw device with its own FAT driver,
+            so it can manage iPods the OS can&rsquo;t even mount.
+          </p>
+        </article>
+        <article class="card">
+          <h3>One self-contained binary</h3>
+          <p>
+            Download a single executable for your OS — no Python, no dependencies
+            to install. Built to run on hardware as old as OS X 10.8.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <!-- TERMINAL DEMO -->
+    <section id="workflow" class="demo">
+      <div class="demo-copy">
+        <h2 class="section-title">A whole library, from the command line</h2>
+        <p>
+          Flash the card in a USB reader, let flashpod initialize the database and
+          load the bulk of your music, then pop it into the iPod. From there,
+          flashpod finds the device on its own — add or remove the odd track in
+          seconds.
+        </p>
+      </div>
+      <div class="terminal" role="img" aria-label="Example flashpod terminal session">
+        <div class="terminal-bar">
+          <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+          <span class="terminal-title">flashpod</span>
+        </div>
+        <pre class="terminal-body"><span class="p">$</span> <span class="c">flashpod ls</span>
+flashpod: looking for an iPod means reading attached disks,
+which needs root — elevating via sudo...
+Found iPod on /dev/rdisk1 — 82 tracks.
+iPod "David's iPod": 38 tracks, 2 artists, 2 albums
+<span class="o">New Order</span>
+  Power, Corruption &amp; Lies (8 tracks)
+  Substance (12 tracks)
+<span class="o">The Cure</span>
+  Kiss Me, Kiss Me, Kiss Me (18 tracks)
+
+<span class="p">$</span> <span class="c">flashpod add ~/music/New\ Order\ -\ Blue\ Monday.mp3</span>
+Found iPod on /dev/rdisk1 — 82 tracks.
+[1/1] Adding: Blue Monday — New Order... <span class="g">100% (6.8/6.8 MiB)</span>
+<span class="g">1 track added in 26s (6.8 MiB at 268 KiB/s)</span></pre>
+      </div>
+    </section>
+
+    <!-- SCREENSHOTS -->
+    <section id="screenshots" class="shots">
+      <h2 class="section-title">Screenshots</h2>
+      <p class="shots-note">
+        Drop your own images into <code>site/assets/</code> and update the
+        <code>src</code> paths below.
+      </p>
+      <div class="shot-grid">
+        <figure class="shot">
+          <img src="assets/screenshot-flash.png" alt="flashpod flashing a card" loading="lazy" />
+          <figcaption>Flashing a CF card</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/screenshot-add.png" alt="flashpod adding music" loading="lazy" />
+          <figcaption>Loading an album</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/screenshot-ipod.png" alt="A flash-modded iPod" loading="lazy" />
+          <figcaption>The finished iPod</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- INSTALL -->
+    <section id="install" class="install">
+      <h2 class="section-title">Install</h2>
+      <p class="install-intro">
+        Download the archive for your OS from the
+        <a href="https://github.com/davidbarnhart/flashpod/releases">Releases page</a>
+        — each holds a single self-contained executable.
+      </p>
+
+      <!-- Pure-CSS tabs -->
+      <div class="tabs">
+        <input type="radio" name="os" id="tab-linux" checked />
+        <input type="radio" name="os" id="tab-macos" />
+        <input type="radio" name="os" id="tab-win" />
+
+        <div class="tab-labels">
+          <label for="tab-linux">Linux</label>
+          <label for="tab-macos">macOS (10.8)</label>
+          <label for="tab-win">Windows</label>
+        </div>
+
+        <div class="tab-panels">
+          <div class="tab-panel" data-os="linux">
+<pre class="code">tar xzf flashpod-linux-x86_64.tar.gz
+cd flashpod-linux-x86_64
+./install.sh            # to ~/.local/bin (no root); or: sudo ./install.sh
+flashpod --help</pre>
+          </div>
+          <div class="tab-panel" data-os="macos">
+<pre class="code">tar xzf flashpod-macos-10.8.tar.gz &amp;&amp; cd flashpod-macos-10.8
+chmod +x flashpod
+xattr -d com.apple.quarantine flashpod   # or right-click → Open once
+./flashpod --help</pre>
+          </div>
+          <div class="tab-panel" data-os="win">
+<pre class="code"># Unzip flashpod-windows-x86_64.zip, then from a terminal:
+flashpod.exe --help
+
+# Run an Administrator terminal for the `flash` command.</pre>
+          </div>
+        </div>
+      </div>
+
+      <p class="install-note">
+        Building the binaries yourself is documented in
+        <a href="https://github.com/davidbarnhart/flashpod/blob/main/BUILD.md">BUILD.md</a>.
+      </p>
+    </section>
+
+    <!-- REQUIREMENTS -->
+    <section id="requirements" class="requirements">
+      <h2 class="section-title">Requirements</h2>
+      <div class="req-grid">
+        <div class="req">
+          <h3>iPod</h3>
+          <p>
+            Gen 1, 2, or 3 (tested); Gen 4 should work but isn&rsquo;t tested yet.
+            Models from 2007 on aren&rsquo;t supported.
+          </p>
+        </div>
+        <div class="req">
+          <h3>Operating system</h3>
+          <p>
+            Linux and macOS are tested. Windows has a backend but isn&rsquo;t tested
+            yet.
+          </p>
+        </div>
+        <div class="req">
+          <h3>Hardware</h3>
+          <p>
+            A USB card reader for flashing. Gen 1&ndash;2 iPods need a FireWire
+            interface to manage music on the device afterward.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="final-cta">
+      <h2>Got a drawer iPod and a spare CF card?</h2>
+      <p>That&rsquo;s all you need. Grab a release and bring it back.</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="https://github.com/davidbarnhart/flashpod/releases">Download a release</a>
+        <a class="btn btn-ghost" href="https://github.com/davidbarnhart/flashpod">Read the docs</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <span class="brand-name">flashpod</span>
+      <nav>
+        <a href="https://github.com/davidbarnhart/flashpod">GitHub</a>
+        <a href="https://github.com/davidbarnhart/flashpod/releases">Releases</a>
+        <a href="https://github.com/davidbarnhart/flashpod/blob/main/LICENSE">MIT License</a>
+      </nav>
+      <p class="footer-fine">
+        iPod is a trademark of Apple Inc. flashpod is an independent project and
+        is not affiliated with or endorsed by Apple.
+      </p>
+    </div>
+  </footer>
+</body>
+</html>
