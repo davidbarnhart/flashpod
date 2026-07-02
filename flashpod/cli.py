@@ -1176,7 +1176,11 @@ def make_track(lib, path, nr, total, report=None):
 
     tags = audio.tags or {}
     t = itunesdb.Track()
-    t.id = lib.next_track_id()
+    # NB: the unique track id is assigned at append time (cmd_add), not here.
+    # During a batch the tracks aren't in lib.tracks yet, so next_track_id()
+    # would hand every track in the batch the same id — which collapses them
+    # to one entry in the iPod's playlist (all tracks show the first one's
+    # name). Leave t.id at its default (0) until the track is committed.
     t.title = (first(tags, "title")
                or os.path.splitext(os.path.basename(path))[0])
     t.artist = first(tags, "artist")
@@ -1732,6 +1736,10 @@ def _cmd_add_core(paths, load, copy, save, free_space=None):
             win.note(f"[{nr}/{npend}] FAILED {path}: {exc}")
             failures += 1
             continue
+        # Assign the id now that the track is actually being committed: each
+        # next_track_id() sees the tracks appended earlier in this batch, so
+        # the ids are unique. (Failed copies above are skipped and burn no id.)
+        track.id = lib.next_track_id()
         lib.tracks.append(track)
         added += 1
         added_bytes += track.size or 0
