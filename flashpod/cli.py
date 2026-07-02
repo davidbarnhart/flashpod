@@ -913,6 +913,8 @@ def _cmd_args(opts):
             a.append("--yes")
         if getattr(opts, "no_format", False):
             a.append("--no-format")
+        if getattr(opts, "lba48", False):
+            a.append("--lba48")
         return a
     return [c]
 
@@ -1874,6 +1876,9 @@ def main():
                       help="show the plan, write nothing")
     p_fl.add_argument("--no-format", action="store_true",
                       help="don't mkfs the data partition")
+    p_fl.add_argument("--lba48", action="store_true",
+                      help="EXPERIMENTAL: use the whole card for data, past the "
+                           "128 GiB LBA28 cap (only works on an LBA48-patched iPod)")
     p_fl.add_argument("--self-test", action="store_true",
                       help="validate layout logic and exit (no hardware)")
 
@@ -1918,7 +1923,8 @@ def main():
                                 assume_yes=opts.yes,
                                 dry_run=opts.dry_run,
                                 do_format=not opts.no_format,
-                                before_eject=offer)
+                                before_eject=offer,
+                                lba48=opts.lba48)
 
     # Explicit raw-device path: operate on the FAT ourselves, bypassing the OS
     # mount and all the mount-detection / FireWire-queue machinery (the whole

@@ -82,14 +82,22 @@ def capacity_warning(total_sectors):
 # ----------------------------------------------------------------------------
 # Partition-table construction (pure, testable)
 # ----------------------------------------------------------------------------
-def build_mbr_layout(total_sectors):
+def build_mbr_layout(total_sectors, lba48=False):
     """DOS MBR with a firmware partition (type 0x00) at sector 63 and FAT32
     data (type 0x0B) from sector 65599, stopping TAIL_RESERVE sectors short
     of the disk end.
 
+    Normally the data partition is capped at LBA28_MAX (128 GiB) because early
+    iPods can't address past 2^28 sectors. `lba48=True` removes that cap and
+    uses ALL remaining space — only correct on an iPod running an LBA48 patch;
+    an unpatched iPod cannot reach the extra sectors. (The MBR sector-count
+    field is 32-bit, so this still tops out at 2 TiB.)
+
     Returns (mbr_512_bytes, data_start, data_blocks).
     """
-    data_end    = min(total_sectors - TAIL_RESERVE, LBA28_MAX)
+    data_end    = total_sectors - TAIL_RESERVE
+    if not lba48:
+        data_end = min(data_end, LBA28_MAX)
     data_blocks = data_end - DATA_START
     if data_blocks <= 0:
         raise ValueError("device too small for an iPod data partition")
@@ -378,8 +386,8 @@ def choose_device():
             return "/dev/" + cands[int(sel)]["name"]
         print(color("  invalid selection", C_RED), file=sys.stderr)
 
-def confirm(dev, total_sectors, assume_yes):
-    _, data_start, data_blocks = build_mbr_layout(total_sectors)
+def confirm(dev, total_sectors, assume_yes, lba48=False):
+    _, data_start, data_blocks = build_mbr_layout(total_sectors, lba48)
     fw_blocks = FW_BLOCKS
     print(color("\n  PLAN — this will ERASE %s" % dev, C_RED), file=sys.stderr)
     print("    layout      : MBR + FAT32", file=sys.stderr)
@@ -390,11 +398,21 @@ def confirm(dev, total_sectors, assume_yes):
     print("    data (FAT32) : sectors %d..%d  type 0x0B  (%s)" %
           (data_start, data_start+data_blocks-1, fmt_size(data_blocks*SECTOR)),
           file=sys.stderr)
-    warn = capacity_warning(total_sectors)
-    if warn:
-        print(color("    ⚠ WARNING: %s %s" % (dev, warn), C_RED), file=sys.stderr)
-        print(color("    (data capped at the iPod's 128 GiB LBA28 limit.)", C_YEL),
-              file=sys.stderr)
+    if lba48:
+        if implausible_capacity(total_sectors):
+            print(color("    ⚠ EXPERIMENTAL: --lba48 — data partition spans the "
+                        "FULL %s, past the 128 GiB LBA28 limit. This ONLY works "
+                        "on an iPod running an LBA48 patch; an unpatched iPod "
+                        "cannot address the extra sectors and will misread the "
+                        "card." % fmt_size(total_sectors * SECTOR), C_RED),
+                  file=sys.stderr)
+    else:
+        warn = capacity_warning(total_sectors)
+        if warn:
+            print(color("    ⚠ WARNING: %s %s" % (dev, warn), C_RED), file=sys.stderr)
+            print(color("    (data capped at the iPod's 128 GiB LBA28 limit; "
+                        "pass --lba48 to use the whole card.)", C_YEL),
+                  file=sys.stderr)
     mps = _plat.current().device_mountpoints(dev)
     if mps:
         print(color("    mounted now : " + ", ".join("%s@%s" % m for m in mps), C_YEL),
@@ -444,8 +462,8 @@ def unmount_all(dev, dry):
         if not dry:
             run(["umount", part], check=False)
 
-def write_layout(dev, fw_bytes, total_sectors, dry, do_format):
-    header, data_start, data_blocks = build_mbr_layout(total_sectors)
+def write_layout(dev, fw_bytes, total_sectors, dry, do_format, lba48=False):
+    header, data_start, data_blocks = build_mbr_layout(total_sectors, lba48)
     if dry:
         print(color("  [dry-run] would wipe signatures, write %d-byte MBR header, "
                     "%d-byte firmware @ sector %d, pure-Python FAT32 on data"
@@ -565,6 +583,9 @@ def self_test():
     # large-card LBA28 cap
     _, _, big_db = build_mbr_layout(LBA28_MAX * 4)
     assert DATA_START + big_db == LBA28_MAX, "LBA28 cap"
+    # --lba48: no cap, full card minus the tail reserve
+    _, _, lba48_db = build_mbr_layout(LBA28_MAX * 4, lba48=True)
+    assert DATA_START + lba48_db == LBA28_MAX * 4 - TAIL_RESERVE, "lba48 uncapped"
     # FAT32 cluster sizing: Apple's 16 KiB on big cards, shrunk below the
     # 65525-cluster FAT32 validity floor (978 MiB card needs 8 KiB clusters)
     assert fat_sectors_per_cluster(246867514) == 32, "big card keeps Apple spc"
@@ -609,7 +630,8 @@ def self_test():
 
 # ----------------------------------------------------------------------------
 def flash(device=None, firmware=None,
-          assume_yes=False, dry_run=False, do_format=True, before_eject=None):
+          assume_yes=False, dry_run=False, do_format=True, before_eject=None,
+          lba48=False):
     """Flash a card end-to-end; the `ipod flash` entry point.
     Exits via sys.exit() on errors and aborted confirmations.
     `before_eject(dev)` runs after the firmware verify, while the partition
@@ -632,9 +654,9 @@ def flash(device=None, firmware=None,
     total_sectors = plat.device_sectors(dev)
     if total_sectors <= 0:
         sys.exit(color("could not determine size of %s" % dev, C_RED))
-    confirm(dev, total_sectors, assume_yes or dry_run)
+    confirm(dev, total_sectors, assume_yes or dry_run, lba48)
     plat.unmount_all(dev, dry_run)
-    write_layout(dev, fw, total_sectors, dry_run, do_format)
+    write_layout(dev, fw, total_sectors, dry_run, do_format, lba48)
     verify_firmware(dev, fw, dry_run)
     if before_eject and not dry_run:
         before_eject(dev)
