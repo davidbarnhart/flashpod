@@ -264,6 +264,18 @@ class Fat32(object):
             return None
         return self.read_chain(entry.first_cluster)[:entry.size]
 
+    def open_file(self, path):
+        """Return a lazy, seekable :class:`_FatFile` for ``path`` (None if it's
+        absent or a directory). Unlike read_file, it reads clusters ON DEMAND —
+        so a consumer that only touches a file's head and tail (e.g. mutagen
+        sniffing tags) pulls just those clusters off the device, not the whole
+        file. The cluster chain is pre-mapped up front, but that's FAT reads
+        only (cached), not data, so a seek-to-end is cheap."""
+        entry = self.resolve(path)
+        if entry is None or (entry.attr & ATTR_DIRECTORY):
+            return None
+        return _FatFile(self, path, entry.first_cluster, entry.size)
+
     # ======================================================================
     # WRITE PATH
     #
@@ -724,6 +736,77 @@ class Fat32(object):
                     return
                 lfn_slots = []
         raise IOError("no such file: %r" % path)
+
+
+class _FatFile(object):
+    """A lazy, seekable, read-only file over a FAT cluster chain. Reads clusters
+    ON DEMAND (caching the most recent one), so a consumer that only touches a
+    file's head and tail — like mutagen sniffing an MP3's ID3 + first frame, then
+    seeking to EOF for the size and a trailing ID3v1/APEv2 tag — pulls just those
+    one or two clusters off the device instead of the whole multi-MB file. The
+    chain is pre-mapped in __init__, but that's cached FAT reads, not data, so a
+    seek-to-end jumps straight to the last cluster. Implements the subset of the
+    file protocol mutagen needs: read/seek/tell/seekable (+ name, close, with)."""
+
+    def __init__(self, fs, name, first_cluster, size):
+        self._fs = fs
+        self.name = name              # mutagen reads this for a format hint
+        self.size = size
+        # Pre-map the chain — FAT-table reads only (cheap, cached), no data.
+        self._clusters = list(fs.chain(first_cluster)) if first_cluster >= 2 \
+            else []
+        self._cbytes = fs._bytes_per_cluster()
+        self._pos = 0
+        self._cache_idx = -1          # chain index currently in _cache
+        self._cache = b""
+
+    def _cluster_at(self, idx):
+        if idx != self._cache_idx:
+            self._cache = self._fs.read_cluster(self._clusters[idx])
+            self._cache_idx = idx
+        return self._cache
+
+    def seekable(self):
+        return True
+
+    def seek(self, offset, whence=0):
+        if whence == 0:
+            self._pos = offset
+        elif whence == 1:
+            self._pos += offset
+        elif whence == 2:
+            self._pos = self.size + offset
+        else:
+            raise ValueError("invalid whence: %r" % whence)
+        if self._pos < 0:
+            self._pos = 0
+        return self._pos
+
+    def tell(self):
+        return self._pos
+
+    def read(self, n=-1):
+        end = self.size if n is None or n < 0 else min(self.size, self._pos + n)
+        out = bytearray()
+        while self._pos < end:
+            idx = self._pos // self._cbytes
+            if idx >= len(self._clusters):
+                break
+            within = self._pos % self._cbytes
+            take = min(self._cbytes - within, end - self._pos)
+            out += self._cluster_at(idx)[within:within + take]
+            self._pos += take
+        return bytes(out)
+
+    def close(self):
+        self._cache = b""
+        self._cache_idx = -1
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
 
 
 # ---------------------------------------------------------------------------

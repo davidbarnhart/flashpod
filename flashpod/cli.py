@@ -359,6 +359,12 @@ def load_library_raw(device):
         return None
 
 
+class CorruptLibrary(Exception):
+    """The iTunesDB file is present but won't parse (e.g. a torn write left
+    garbage in its clusters). The device is still an iPod — the database just
+    needs rebuilding — so this is distinct from "no database at all"."""
+
+
 class RawTarget:
     """An iPod managed DIRECTLY over its raw device with the userspace FAT
     driver — no OS mount. Provides the read/write operations the data commands
@@ -373,8 +379,70 @@ class RawTarget:
 
     # -- library -----------------------------------------------------------
     def load_library(self):
+        """Parse the iTunesDB. Returns a Library, None if there's no DB at all,
+        or raises CorruptLibrary if the DB is present but unparseable."""
         data = self.fs.read_file(self.DB)
-        return itunesdb.parse_bytes(data) if data is not None else None
+        if data is None:
+            return None
+        try:
+            return itunesdb.parse_bytes(data)
+        except (ValueError, IndexError, struct.error) as exc:
+            raise CorruptLibrary(str(exc))
+
+    def iter_music_files(self):
+        """Yield (relpath, location) for every track file physically present
+        under iPod_Control/Music/F## — the raw view the rebuild reconstructs
+        the database from. relpath is the FAT path (for reading); location is
+        the ':'-style iTunesDB location."""
+        music = "iPod_Control/Music"
+        for d in sorted(self.fs.listdir(music) or [], key=lambda e: e.name):
+            if not (d.attr & fatfs.ATTR_DIRECTORY) \
+                    or not d.name.upper().startswith("F"):
+                continue
+            for f in sorted(self.fs.listdir(music + "/" + d.name) or [],
+                            key=lambda e: e.name):
+                if f.attr & fatfs.ATTR_DIRECTORY:
+                    continue
+                yield ("%s/%s/%s" % (music, d.name, f.name),
+                       ":".join(["", "iPod_Control", "Music", d.name, f.name]))
+
+    def read_track_file(self, relpath):
+        """Build a Track from a file's own tags, reading it LAZILY off the FAT
+        (open_file + mutagen's seek-based access pulls only the head/tail, not
+        the whole file — the difference between seconds and minutes over
+        FireWire). Returns None if the file isn't recognizable audio."""
+        fh = self.fs.open_file(relpath)
+        if fh is None:
+            return None
+        audio = read_audio_stream(fh, os.path.splitext(relpath)[1])
+        if audio is None:
+            return None
+        return _track_from_audio(
+            audio, os.path.splitext(os.path.basename(relpath))[0], fh.size)
+
+    def rebuild_library(self, name="iPod", progress=None, report=None):
+        """Reconstruct the library from the track files already on the card:
+        ensure the directory structure, then read every Music/F## file's tags
+        and build a fresh Library pointing at them. Recovers a corrupt-DB iPod
+        without re-copying or losing music. Returns the rebuilt Library (the
+        caller saves it). Does NOT write the DB itself, so `add` can append to
+        the result before its single save."""
+        self._ensure_dirs()
+        files = list(self.iter_music_files())
+        located = []
+        total = len(files)
+        for nr, (relpath, location) in enumerate(files, 1):
+            if progress:
+                progress(nr, total, relpath)
+            try:
+                t = self.read_track_file(relpath)
+            except (OSError, ValueError) as exc:
+                t = None
+                if report:
+                    report(f"skipping {relpath}: {exc}")
+            if t is not None:
+                located.append((location, t))
+        return _library_from_located(name, located)
 
     def save_library(self, lib):
         self.fs.write_file(self.DB, itunesdb.serialize(lib))
@@ -388,9 +456,12 @@ class RawTarget:
             if not self.fs.exists(cur):
                 self.fs.mkdir(cur)
 
-    def init_structure(self, name):
+    def _ensure_dirs(self):
         for sub in ["iTunes", "Device"] + ["Music/F%02d" % i for i in range(50)]:
             self._makedirs("iPod_Control/" + sub)
+
+    def init_structure(self, name):
+        self._ensure_dirs()
         self.save_library(itunesdb.Library(name))
         self.fs.sync()
 
@@ -454,17 +525,49 @@ def cmd_init_raw(target, name):
     return 0
 
 
+def _raw_rebuild(target, name="iPod"):
+    """Reconstruct target's library from the files on the card, showing a
+    progress line (it reads every track off the iPod — slow over FireWire)."""
+    win = LineWindow()
+    lib = target.rebuild_library(
+        name,
+        progress=lambda nr, total, rp:
+            win.update(f"[{nr}/{total}] recovering "
+                       f"{os.path.basename(rp)}..."),
+        report=win.note)
+    win.clear()
+    return lib
+
+
+def cmd_rebuild_raw(target, name=None):
+    """`flashpod rebuild` over the raw device: rebuild the iTunesDB from the
+    music files physically present on the iPod."""
+    lib = _raw_rebuild(target, name or "iPod")
+    target.save_library(lib)
+    n = len(lib.tracks)
+    print(f"Rebuilt the iTunesDB on {target.node}: {n} "
+          f"track{'s' if n != 1 else ''} recovered from the card.")
+    return 0
+
+
 def cmd_add_raw(target, paths):
     return _cmd_add_core(
         paths,
         load=target.load_library,
         copy=target.copy,
         save=target.save_library,
-        free_space=target.free_bytes)
+        free_space=target.free_bytes,
+        rebuild=lambda: _raw_rebuild(target))
 
 
 def cmd_rm_raw(target, what):
-    lib = target.load_library()
+    try:
+        lib = target.load_library()
+    except CorruptLibrary as exc:
+        print(f"flashpod: the iTunesDB on {target.node} is corrupt ({exc}) — "
+              "run `flashpod rebuild` to rebuild it from the files on the "
+              "card.", file=sys.stderr)
+        return 1
     if lib is None:
         print(f"flashpod: no iTunesDB on {target.node} (run `flashpod init` "
               "first?)", file=sys.stderr)
@@ -808,26 +911,42 @@ def pin_firewire_queue(disk):
 
 
 def scan_for_ipod(cands):
-    """Probe each (node, desc) candidate with our FAT driver and keep the ones
-    that actually hold an iPod database (iPod_Control/iTunes/iTunesDB) — the
-    only reliable iPod fingerprint. Returns [(node, desc, library), ...]. Needs
-    root (it reads raw devices); a candidate that isn't FAT, can't be read, or
-    has no DB is silently skipped."""
+    """Probe each (node, desc) candidate and keep the ones whose FAT holds the
+    iPod fingerprint: the iPod_Control/iTunes/iTunesDB *path exists*. We do NOT
+    parse the database here — a present-but-corrupt DB (e.g. a torn write) is
+    still an iPod, and is dealt with at the point of use (e.g. add offers to
+    rebuild it) rather than silently hidden as "not an iPod". Returns
+    [(node, desc), ...]. Needs root (it reads raw devices); a candidate that
+    isn't FAT or can't be read is silently skipped."""
     found = []
     for node, desc in cands:
         try:
             fs = open_raw_fat(node)
-            data = fs.read_file("iPod_Control/iTunes/iTunesDB")
+            present = fs.exists("iPod_Control/iTunes/iTunesDB")
         except (OSError, ValueError):
             continue
-        if data is None:
-            continue
-        try:
-            lib = itunesdb.parse_bytes(data)
-        except (ValueError, IndexError, struct.error):
-            continue
-        found.append((node, desc, lib))
+        if present:
+            found.append((node, desc))
     return found
+
+
+def _count_music_files(fs):
+    """Count the physical track files under iPod_Control/Music/F##, without
+    touching the iTunesDB — so ls can recognize a corrupt-DB iPod's contents
+    from the directory tree alone. Best-effort: returns what it can, 0 on
+    error."""
+    total = 0
+    try:
+        for d in fs.listdir("iPod_Control/Music") or []:
+            if not (d.attr & fatfs.ATTR_DIRECTORY) \
+                    or not d.name.upper().startswith("F"):
+                continue
+            files = fs.listdir("iPod_Control/Music/" + d.name) or []
+            total += sum(1 for f in files
+                         if not (f.attr & fatfs.ATTR_DIRECTORY))
+    except (OSError, ValueError):
+        pass
+    return total
 
 
 def detect_ls_source(opts):
@@ -874,21 +993,43 @@ def detect_ls_source(opts):
                   file=sys.stderr)
         return None
     if len(found) == 1:
-        node, desc, lib = found[0]
-        print(f"Found iPod on {node}" + (f" ({desc})" if desc else "") +
-              f" — {len(lib.tracks)} tracks.", file=sys.stderr)
-        return ("lib", lib)
-    print("Multiple iPods found:")
-    for i, (node, desc, lib) in enumerate(found):
-        print(f"  [{i}] {node}" + (f"  ({desc})" if desc else "") +
-              f"  — {len(lib.tracks)} tracks")
-    try:
-        choice = input("Read which? [0] ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print()
+        node, desc = found[0]
+    else:
+        print("Multiple iPods found:")
+        for i, (node, desc) in enumerate(found):
+            print(f"  [{i}] {node}" + (f"  ({desc})" if desc else ""))
+        try:
+            choice = input("Read which? [0] ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        idx = int(choice) if choice.isdigit() and int(choice) < len(found) else 0
+        node, desc = found[idx]
+    # Parse the DB only now that a device is chosen. A present-but-corrupt DB
+    # shouldn't make ls pretend there's no iPod: recognize the device and its
+    # on-disk contents from the directory tree, and point at the rebuild (which
+    # lives in `add` — ls is read-only).
+    target = open_raw_target(node, writable=False)
+    if target is None:
         return None
-    idx = int(choice) if choice.isdigit() and int(choice) < len(found) else 0
-    return ("lib", found[idx][2])
+    try:
+        lib = target.load_library()
+    except CorruptLibrary as exc:
+        nmusic = _count_music_files(target.fs)
+        print(f"Found iPod on {node}" + (f" ({desc})" if desc else "") +
+              f" — {nmusic} music file(s) on the card, but its iTunesDB is "
+              f"corrupt ({exc}).\n  The library can't be listed until the "
+              "database is rebuilt — run `flashpod rebuild` (or `flashpod "
+              "add`, which offers to rebuild first).", file=sys.stderr)
+        return None
+    if lib is None:
+        print(f"flashpod: {node} has an iPod directory structure but no "
+              "iTunesDB — run `flashpod rebuild` (or `flashpod init` for an "
+              "empty library).", file=sys.stderr)
+        return None
+    print(f"Found iPod on {node}" + (f" ({desc})" if desc else "") +
+          f" — {len(lib.tracks)} tracks.", file=sys.stderr)
+    return ("lib", lib)
 
 
 def _cmd_args(opts):
@@ -901,7 +1042,7 @@ def _cmd_args(opts):
         return [c] + list(getattr(opts, "files", None) or [])
     if c in ("rm", "remove", "delete", "erase"):
         return [c] + list(getattr(opts, "what", None) or [])
-    if c == "init":
+    if c in ("init", "rebuild"):
         return [c] + ([opts.name] if getattr(opts, "name", None) else [])
     if c == "flash":
         a = [c]
@@ -936,6 +1077,8 @@ def run_raw(opts, node):
         return 1
     if cmd == "init":
         return cmd_init_raw(target, getattr(opts, "name", None) or "iPod")
+    if cmd == "rebuild":
+        return cmd_rebuild_raw(target, getattr(opts, "name", None))
     if cmd in ("rm", "remove", "delete", "erase"):
         return cmd_rm_raw(target, opts.what)
     if cmd == "add":
@@ -1016,13 +1159,13 @@ def resolve_raw_target(opts):
               file=sys.stderr)
         return None
     if len(found) == 1:
-        node, desc, lib = found[0]
-        print(f"Found iPod on {node}" + (f" ({desc})" if desc else "") +
-              f" — {len(lib.tracks)} tracks.", file=sys.stderr)
+        node, desc = found[0]
+        print(f"Found iPod on {node}" + (f" ({desc})" if desc else "") + ".",
+              file=sys.stderr)
         return ("raw", node)
     print("Multiple iPods found:")
-    for i, (node, desc, lib) in enumerate(found):
-        print(f"  [{i}] {node}  — {len(lib.tracks)} tracks")
+    for i, (node, desc) in enumerate(found):
+        print(f"  [{i}] {node}" + (f"  ({desc})" if desc else ""))
     try:
         choice = input("Use which? [0] ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -1160,6 +1303,59 @@ def read_audio(path):
     return mutagen.File(path, easy=True)
 
 
+def read_audio_stream(fileobj, ext):
+    """Like read_audio, but for a seekable file-like with no OS path (a lazy
+    fatfs._FatFile during a rebuild). mutagen reads tags by SEEKING — it touches
+    only the head and tail — so handing it a lazy FAT file means we pull a
+    cluster or two off the device per track instead of the whole file. Same
+    MP3 fast-path; mutagen accepts a file-like for any format."""
+    if ext.lower() == ".mp3":
+        try:
+            return EasyMP3(fileobj)
+        except Exception:
+            fileobj.seek(0)           # reset for the full-detection fallback
+    return mutagen.File(fileobj, easy=True)
+
+
+def _track_from_audio(audio, fallback_title, size):
+    """Build an itunesdb.Track from an already-loaded mutagen audio object, a
+    fallback title (used when untagged), and the file's byte size. Shared by
+    make_track (tags from a path) and the rebuild path (tags from bytes). The
+    unique track id is assigned by the caller at commit time, not here."""
+    tags = audio.tags or {}
+    t = itunesdb.Track()
+    t.title = first(tags, "title") or fallback_title
+    t.artist = first(tags, "artist")
+    t.album = first(tags, "album")
+    t.genre = first(tags, "genre")
+    t.composer = first(tags, "composer")
+    t.filetype = "MPEG audio file"
+    tracknr = first(tags, "tracknumber")
+    if tracknr and tracknr.split("/")[0].isdigit():
+        t.track_nr = int(tracknr.split("/")[0])
+    date = first(tags, "date")
+    if date and date[:4].isdigit():
+        t.year = int(date[:4])
+    info = audio.info
+    t.tracklen = int(info.length * 1000)
+    t.bitrate = getattr(info, "bitrate", 0) // 1000
+    t.samplerate = getattr(info, "sample_rate", 0)
+    t.size = size
+    return t
+
+
+def _library_from_located(name, located):
+    """Assemble a Library from [(location, Track), ...], assigning each track a
+    unique id in order (next_track_id sees the tracks already appended). Shared
+    by the raw and mount rebuild paths."""
+    lib = itunesdb.Library(name)
+    for location, t in located:
+        t.location = location
+        t.id = lib.next_track_id()
+        lib.tracks.append(t)
+    return lib
+
+
 def make_track(lib, path, nr, total, report=None):
     """Read tags from `path` and build an itunesdb.Track (location unset).
     Reports the skip reason (default: stderr) and returns None on unusable
@@ -1173,35 +1369,14 @@ def make_track(lib, path, nr, total, report=None):
     if audio is None:
         report(f"[{nr}/{total}] skipping {path}: not a recognized audio file")
         return None
-
-    tags = audio.tags or {}
-    t = itunesdb.Track()
     # NB: the unique track id is assigned at append time (cmd_add), not here.
     # During a batch the tracks aren't in lib.tracks yet, so next_track_id()
     # would hand every track in the batch the same id — which collapses them
     # to one entry in the iPod's playlist (all tracks show the first one's
-    # name). Leave t.id at its default (0) until the track is committed.
-    t.title = (first(tags, "title")
-               or os.path.splitext(os.path.basename(path))[0])
-    t.artist = first(tags, "artist")
-    t.album = first(tags, "album")
-    t.genre = first(tags, "genre")
-    t.composer = first(tags, "composer")
-    t.filetype = "MPEG audio file"
-
-    tracknr = first(tags, "tracknumber")
-    if tracknr and tracknr.split("/")[0].isdigit():
-        t.track_nr = int(tracknr.split("/")[0])
-    date = first(tags, "date")
-    if date and date[:4].isdigit():
-        t.year = int(date[:4])
-
-    info = audio.info
-    t.tracklen = int(info.length * 1000)
-    t.bitrate = getattr(info, "bitrate", 0) // 1000
-    t.samplerate = getattr(info, "sample_rate", 0)
-    t.size = os.path.getsize(path)
-    return t
+    # name). _track_from_audio leaves t.id at its default until committed.
+    return _track_from_audio(
+        audio, os.path.splitext(os.path.basename(path))[0],
+        os.path.getsize(path))
 
 
 def orunknown(s):
@@ -1384,6 +1559,42 @@ def cmd_add(mount, paths):
                                                            progress=progress),
         save=lambda lib: (itunesdb.save(lib, mount), os.sync()),
         free_space=lambda: shutil.disk_usage(mount).free)
+
+
+def cmd_rebuild(mount, name=None):
+    """`flashpod rebuild` over an OS mount: rebuild the iTunesDB from the track
+    files under <mount>/iPod_Control/Music/F##, recovering a corrupt/missing
+    database without re-copying or losing music."""
+    music = os.path.join(mount, "iPod_Control", "Music")
+    if not os.path.isdir(music):
+        print(f"flashpod: no iPod_Control/Music on {mount} — is this an iPod?",
+              file=sys.stderr)
+        return 1
+    files = []
+    for d in sorted(os.listdir(music)):
+        ddir = os.path.join(music, d)
+        if not (d.upper().startswith("F") and os.path.isdir(ddir)):
+            continue
+        for fn in sorted(os.listdir(ddir)):
+            fp = os.path.join(ddir, fn)
+            if os.path.isfile(fp):
+                files.append((fp, ":".join(["", "iPod_Control", "Music", d, fn])))
+    win = LineWindow()
+    located = []
+    total = len(files)
+    for nr, (fp, location) in enumerate(files, 1):
+        win.update(f"[{nr}/{total}] recovering {os.path.basename(fp)}...")
+        t = make_track(None, fp, nr, total, report=win.note)
+        if t is not None:
+            located.append((location, t))
+    win.clear()
+    lib = _library_from_located(name or "iPod", located)
+    itunesdb.save(lib, mount)
+    os.sync()
+    n = len(lib.tracks)
+    print(f"Rebuilt the iTunesDB on {mount}: {n} "
+          f"track{'s' if n != 1 else ''} recovered from the iPod.")
+    return 0
 
 
 # Leave a little slack free so the iTunesDB rewrite and FAT cluster overhead
@@ -1626,22 +1837,42 @@ def _winnow(pending, budget):
     return [item for n in names if n in kept for item in groups[n]]
 
 
-def _cmd_add_core(paths, load, copy, save, free_space=None):
-    """Batch-add files to the iPod. The backend is three callables so this
-    works the same over an OS mount (cmd_add) and over the raw device
-    (cmd_add_raw): load() -> Library|None, copy(path, progress) -> location,
-    save(Library) -> None. ``free_space() -> bytes`` enables the pre-flight
-    size check + winnow loop; the mount path supplies it from
+def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
+    """Batch-add files to the iPod. The backend is callables so this works the
+    same over an OS mount (cmd_add) and over the raw device (cmd_add_raw):
+    load() -> Library|None (or raises CorruptLibrary), copy(path, progress) ->
+    location, save(Library) -> None. ``free_space() -> bytes`` enables the
+    pre-flight size check + winnow loop; the mount path supplies it from
     ``shutil.disk_usage`` and the raw path from the FAT free-cluster count. A
     ``free_space()`` that raises OSError (e.g. the count is unavailable) just
-    skips the pre-flight and proceeds."""
+    skips the pre-flight and proceeds. ``rebuild() -> Library`` (optional), when
+    the existing iTunesDB is corrupt, offers to write a fresh empty one."""
     if not paths or not paths[0]:
         return 1
     files = expand(paths)
     if not files:
         print("nothing to add", file=sys.stderr)
         return 1
-    lib = load()
+    try:
+        lib = load()
+    except CorruptLibrary as exc:
+        # The structure says iPod, but the database is garbage (a torn write?).
+        # Offer to rebuild rather than crash. Needs a backend rebuild() and a
+        # tty to ask on; otherwise point the user at `flashpod init`.
+        if rebuild is None or not sys.stdin.isatty():
+            print(f"flashpod: the iTunesDB is corrupt and can't be read "
+                  f"({exc}). Run `flashpod rebuild` to rebuild it from the "
+                  "files on the card.", file=sys.stderr)
+            return 1
+        print("Arrr! Blow me down — yer iPod's song-ledger be scuttled, naught "
+              "but bilgewater where the music log oughta be. We'll not be "
+              "stowin' fresh booty aboard till she's careened an' a new log "
+              "writ proper.")
+        if not ask_yes("Shall I scrape 'er hull an' rebuild, ye salty "
+                       "sea-dog? [Aye/Nay] ", default_yes=True):
+            print("flashpod: belay that — nothin' added.")
+            return 0
+        lib = rebuild()
     if not lib:
         return 1
     seen = {track_key(t) for t in lib.tracks}
@@ -1778,7 +2009,7 @@ def ask_yes(prompt, default_yes=True):
         return False
     if ans == "" and default_yes:
         return True
-    return ans in ("y", "yes")
+    return ans in ("y", "yes", "aye", "yea", "arr")
 
 
 def offer_init_after_flash(dev):
@@ -1869,6 +2100,12 @@ def main():
                             parents=[common])
     p_init.add_argument("name", nargs="?", help="iPod name (default: iPod)")
 
+    p_rebuild = sub.add_parser(
+        "rebuild",
+        help="rebuild the iTunesDB from the music files already on the iPod",
+        parents=[common])
+    p_rebuild.add_argument("name", nargs="?", help="iPod name (default: iPod)")
+
     p_fl = sub.add_parser("flash",
                           help="write iPod firmware to a CF/SD card (erases it)")
     p_fl.add_argument("device", nargs="?",
@@ -1948,8 +2185,8 @@ def main():
 
     # Write commands with no --mount: same scan-or-mount resolution, then run
     # over the raw device (the only way to manage an iPod the OS can't mount).
-    if opts.command in ("add", "rm", "remove", "delete", "erase", "init") \
-            and not mount:
+    if opts.command in ("add", "rm", "remove", "delete", "erase", "init",
+                        "rebuild") and not mount:
         res = resolve_raw_target(opts)
         if res is None:
             return 1
@@ -1959,7 +2196,8 @@ def main():
 
     # With more than one iPod attached, never let a destructive command guess
     # which one — require an explicit --mount.
-    if opts.command in ("init", "rm", "remove", "delete", "erase") and not mount:
+    if opts.command in ("init", "rm", "remove", "delete", "erase",
+                        "rebuild") and not mount:
         n = _attached_ipod_count()
         if n and n > 1:
             print(f"flashpod: {n} iPods are attached and `{opts.command}` is "
@@ -2024,6 +2262,9 @@ def main():
             itunesdb.init_ipod(mount, opts.name or "iPod")
             print(f"Initialized iPod directory structure at {mount}")
             return 0
+
+        if opts.command == "rebuild":
+            return cmd_rebuild(mount, getattr(opts, "name", None))
 
         return cmd_add(mount, opts.files or [prompt_for_path()])
     except OSError as exc:
