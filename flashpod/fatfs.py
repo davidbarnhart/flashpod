@@ -8,6 +8,10 @@ a single-sector read/write over the raw device round-trips correctly). This
 module does every FAT32 access itself, in <= max_xfer sector chunks, straight
 to the raw device (/dev/rdiskNsM on macOS, /dev/sdXN on Linux) — no OS mount,
 no read-ahead — so flashpod can read and write the iPod where the OS can't.
+Staying unbuffered is per-platform: macOS opens the rdisk CHARACTER device
+(inherently cache-bypassing); Linux block devices are buffered unless opened
+O_DIRECT, which BlockDev does (see __init__) so the chunking actually reaches
+the bridge as small transfers instead of being re-batched by the page cache.
 
 This file is the READ path (it powers reading the iTunesDB for `ls`); the write
 path (add/rm) layers on top of the same block + FAT primitives.
@@ -15,7 +19,9 @@ path (add/rm) layers on top of the same block + FAT primitives.
 Python 3.6 compatible (the macOS 10.8 build target): no walrus/dataclasses.
 """
 import collections
+import mmap
 import os
+import stat
 import struct
 
 SECTOR = 512
@@ -50,12 +56,43 @@ class BlockDev(object):
         # writes don't help — and it corrupts transfers above the read-safe
         # size in BOTH directions. So writes just use the proven-safe read cap.
         self.max_xfer = max_xfer
-        self._fd = os.open(path, os.O_RDWR if writable else os.O_RDONLY)
+        flags = os.O_RDWR if writable else os.O_RDONLY
+        # On Linux a plain open of a BLOCK device is BUFFERED: the page cache
+        # re-batches our small max_xfer transfers into large writeback flushes
+        # (fsync) and prefetches read_ahead_kb on reads — exactly the big
+        # transfers the gen-1 FireWire bridge corrupts/crashes on. So without
+        # O_DIRECT the raw path silently depends on the pinned host queue.
+        # O_DIRECT bypasses the page cache entirely: every transfer reaches the
+        # device at our aligned <= max_xfer size, no read-ahead, no writeback
+        # merge — making this driver genuinely unbuffered on Linux, the way
+        # /dev/rdiskN already is on macOS. We use it only for real block
+        # devices: regular image files (the self-test, often on tmpfs) reject
+        # O_DIRECT with EINVAL, and macOS has no O_DIRECT (it opens the rdisk
+        # char device, which is already unbuffered).
+        self._direct = False
+        self._bounce = None
+        if hasattr(os, "O_DIRECT") and stat.S_ISBLK(os.stat(path).st_mode):
+            try:
+                self._fd = os.open(path, flags | os.O_DIRECT)
+                self._direct = True
+            except OSError:
+                self._fd = os.open(path, flags)   # fall back to buffered
+        else:
+            self._fd = os.open(path, flags)
+        if self._direct:
+            # O_DIRECT requires the offset, the length AND the buffer address
+            # to be sector-aligned. An anonymous mmap is page-aligned and our
+            # transfers are <= max_xfer sectors, so one page-aligned bounce
+            # buffer serves every transfer.
+            self._bounce = mmap.mmap(-1, self.max_xfer * SECTOR)
 
     def close(self):
         if self._fd is not None:
             os.close(self._fd)
             self._fd = None
+        if self._bounce is not None:
+            self._bounce.close()
+            self._bounce = None
 
     def __enter__(self):
         return self
@@ -70,15 +107,24 @@ class BlockDev(object):
         remaining = count
         while remaining > 0:
             n = min(self.max_xfer, remaining)
-            os.lseek(self._fd, abs_lba * SECTOR, os.SEEK_SET)
             want = n * SECTOR
-            buf = b""
-            while len(buf) < want:
-                chunk = os.read(self._fd, want - len(buf))
-                if not chunk:
-                    raise IOError("short read at LBA %d" % abs_lba)
-                buf += chunk
-            out += buf
+            off = abs_lba * SECTOR
+            if self._direct:
+                # Aligned, page-cache-bypassing read into the bounce buffer.
+                got = os.preadv(self._fd, [memoryview(self._bounce)[:want]], off)
+                if got != want:
+                    raise IOError("short read at LBA %d (%d/%d)"
+                                  % (abs_lba, got, want))
+                out += bytes(self._bounce[:want])
+            else:
+                os.lseek(self._fd, off, os.SEEK_SET)
+                buf = b""
+                while len(buf) < want:
+                    chunk = os.read(self._fd, want - len(buf))
+                    if not chunk:
+                        raise IOError("short read at LBA %d" % abs_lba)
+                    buf += chunk
+                out += buf
             abs_lba += n
             remaining -= n
         return bytes(out)
@@ -92,14 +138,27 @@ class BlockDev(object):
         off = 0
         while off < len(data):
             n = min(self.max_xfer, (len(data) - off) // SECTOR)
-            os.lseek(self._fd, abs_lba * SECTOR, os.SEEK_SET)
-            wrote = os.write(self._fd, data[off:off + n * SECTOR])
-            if wrote != n * SECTOR:
+            nbytes = n * SECTOR
+            dst = abs_lba * SECTOR
+            chunk = data[off:off + nbytes]
+            if self._direct:
+                # Copy into the aligned bounce buffer, then write it straight
+                # to the device (no page cache, so no large writeback later).
+                self._bounce[:nbytes] = chunk
+                wrote = os.pwritev(
+                    self._fd, [memoryview(self._bounce)[:nbytes]], dst)
+            else:
+                os.lseek(self._fd, dst, os.SEEK_SET)
+                wrote = os.write(self._fd, chunk)
+            if wrote != nbytes:
                 raise IOError("short write at LBA %d" % abs_lba)
             abs_lba += n
-            off += n * SECTOR
+            off += nbytes
 
     def sync(self):
+        # With O_DIRECT every write already reached the device, so this only
+        # issues a small cache-flush command (no bulk transfer the bridge could
+        # choke on); on the buffered path it is what forces the writeback.
         os.fsync(self._fd)
 
 
