@@ -265,6 +265,7 @@ Options:
 | `--firmware <file>` | use a local `.ipsw` (bring-your-own; no download). Default: pick from the catalog and download it |
 | `--yes`             | skip the typed `ERASE sdX` confirmation |
 | `--no-format`       | don't format the data partition |
+| `--lba48`           | **experimental**: use the whole card for data, past the 128 GiB cap (LBA48-patched iPods only) |
 | `--dry-run`         | show the plan only |
 | `--self-test`       | check layout-building logic and exit |
 
@@ -273,7 +274,9 @@ system is always refused, partition nodes (`/dev/sdb1`) are rejected, the
 target is unmounted first, and an explicit typed confirmation is required.
 After writing, the firmware region is read back and compared byte-for-byte
 before the card is ejected. Cards larger than 128 GiB are capped at the
-iPod's LBA28 addressing limit.
+iPod's LBA28 addressing limit — pass `--lba48` to use the whole card instead,
+but only on an iPod running an LBA48 patch (an unpatched iPod can't address the
+extra sectors and will misread the card).
 
 After a successful interactive flash, flashpod offers to run init on the new
 card right away, and after that to load music onto it too — answer Y (the
