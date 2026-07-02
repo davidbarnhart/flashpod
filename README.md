@@ -137,7 +137,7 @@ disk), before or after the subcommand. On Linux you can also just mount the iPod
 yourself and let flashpod find the mount. On a non-terminal, flashpod won't
 guess — pass one of these.
 
-All four library commands — `ls`, `add`, `rm`, `init` — work this way.
+All library commands — `ls`, `add`, `rm`, `init`, `rebuild` — work this way.
 
 ### `flashpod ls` (alias: `flashpod list`)
 
@@ -214,9 +214,22 @@ no quotes. `remove`, `delete`, and `erase` all work as synonyms for `rm`.
 
 ### `flashpod init [name]`
 
-Create the `iPod_Control` directory structure and an empty music database.
+Create the `iPod_Control` directory structure and an **empty** music database.
 Use on a freshly flashed/formatted card or after a wipe. Destroys any
-existing database, but not music files already in the `F##` folders.
+existing database, but not music files already in the `F##` folders. To
+*recover* an iPod whose music files are intact but whose database is
+missing/corrupt, use `rebuild` (below) — it keeps the music; `init` does not
+re-index it.
+
+### `flashpod rebuild [name]`
+
+Rebuild the iTunes database **from the music files already on the iPod**. Walks
+`iPod_Control/Music/F##`, reads each track's tags, and writes a fresh database
+pointing at the existing files — so a corrupt or missing database is recovered
+without re-copying or losing music. (It reads every track to sniff its tags, so
+it's slow over FireWire; fine for a one-off recovery.) `flashpod ls` points you
+here when it finds an iPod with an unparseable database, and `flashpod add` onto
+such an iPod offers to rebuild first, then adds your new files on top.
 
 ### `flashpod flash [/dev/sdX]`
 
