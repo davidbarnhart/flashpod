@@ -32,6 +32,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import textwrap
 import time
 import urllib.error
 import urllib.request
@@ -62,27 +63,114 @@ def _load_manifest():
         return None
 
 
-def choose_firmware(manifest):
-    """Pick a firmware entry (dict) from the manifest. Interactive chooser on
-    a tty (default preselected); non-tty uses the default outright. The .ipsw
-    itself is fetched later by ensure_firmware()."""
+def _model_name(model):
+    """Short name for prose ("2nd generation")."""
+    return model.get("name") or model.get("id") or "?"
+
+
+def _fmt_table(headers, rows, wrap_col, indent=2, max_width=78):
+    """Render a plain-text table as a list of lines. Every column is sized to
+    its content except `wrap_col` (a column index), which takes the leftover
+    width and wraps -- so long descriptions stack under their own column
+    instead of running the table past `max_width`. Cells are stringified."""
+    ncol = len(headers)
+    widths = [len(h) for h in headers]
+    for r in rows:
+        for c in range(ncol):
+            if c != wrap_col:
+                widths[c] = max(widths[c], len(str(r[c])))
+    sep = "  "
+    fixed = indent + sum(w for c, w in enumerate(widths) if c != wrap_col) \
+        + len(sep) * (ncol - 1)
+    widths[wrap_col] = max(16, max_width - fixed)
+
+    def line(cells):
+        return (" " * indent + sep.join(
+            str(cells[c]).ljust(widths[c]) for c in range(ncol))).rstrip()
+
+    out = [line(headers), line(["-" * widths[c] for c in range(ncol)])]
+    for r in rows:
+        pieces = textwrap.wrap(str(r[wrap_col]), widths[wrap_col]) or [""]
+        for i, piece in enumerate(pieces):
+            cells = ["" if i else str(r[c]) for c in range(ncol)]
+            cells[wrap_col] = piece
+            out.append(line(cells))
+    return out
+
+
+def choose_model(manifest, want=None):
+    """Pick the iPod model being flashed, which decides what firmware is even
+    eligible. Firmware is NOT interchangeable across models: the 2001 family-1
+    images predate 2G (touch wheel) support, which first appeared in 1.1.2, so
+    flashing one to a 2G leaves it unusable. Returns a model dict, or None if
+    no model catalog / no tty / the user bailed -- callers treat None as
+    "don't filter"."""
+    models = manifest.get("models") or []
+    if not models:
+        return None
+    if want:
+        for m in models:
+            if m["id"].lower() == want.lower():
+                return m
+        print("flashpod flash: unknown model %r (known: %s)"
+              % (want, ", ".join(m["id"] for m in models)), file=sys.stderr)
+        return False                       # explicit bad input: refuse, don't guess
+    if not sys.stdin.isatty():
+        return None
+    print("Which iPod are you flashing for?\n")
+    rows = [[i, m["name"], m.get("years", ""), m.get("tell", "")]
+            for i, m in enumerate(models)]
+    for ln in _fmt_table(["#", "iPod", "Years", "How to identify it"],
+                         rows, wrap_col=3):
+        print(ln)
+    print()
+    try:
+        choice = input("Select model: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    if not (choice.isdigit() and int(choice) < len(models)):
+        print("flashpod flash: invalid selection", file=sys.stderr)
+        return False
+    return models[int(choice)]
+
+
+def choose_firmware(manifest, model=None):
+    """Pick a firmware entry (dict) from the manifest, restricted to what fits
+    `model` if given. Interactive chooser on a tty (default preselected);
+    non-tty uses the default outright. The image itself is fetched later by
+    ensure_firmware()."""
     entries = manifest.get("firmwares") or []
     if not entries:
         print("flashpod flash: no firmware listed in the manifest; pass --firmware",
               file=sys.stderr)
         return None
+    if model:
+        entries = [e for e in entries if model["id"] in e.get("models", [])]
+        if not entries:
+            print(f"flashpod flash: no firmware hosted for {_model_name(model)}; "
+                  f"pass --firmware", file=sys.stderr)
+            return None
     default = next((i for i, e in enumerate(entries) if e.get("default")), 0)
     if not sys.stdin.isatty():
         e = entries[default]
         print(f"flashpod flash: using default firmware {e['file']} "
               f"({e['generation']}, {e['version']})", file=sys.stderr)
         return e
-    print("Available firmware:")
+    print("Firmware for %s (newest first):\n"
+          % (_model_name(model) if model else "your iPod"))
+    rows = []
     for i, e in enumerate(entries):
-        mark = "  [default]" if i == default else ""
-        size = " (~%.1f MiB)" % (e["size"] / (1 << 20)) if e.get("size") else ""
-        print(f"  [{i}] {e['generation']} — version {e['version']}{mark}\n"
-              f"      {e['description']}{size}")
+        # "*" marks the default; build_date comes from the manifest, not the
+        # file (mtimes do not survive git or a release download), and not
+        # every image has a known one.
+        ver = e["version"] + (" *" if i == default else "")
+        size = "%.1fM" % (e["size"] / (1 << 20)) if e.get("size") else ""
+        rows.append([i, ver, e.get("build_date", ""), size, e["description"]])
+    for ln in _fmt_table(["#", "Version", "Built", "Size", "Notes"],
+                         rows, wrap_col=4):
+        print(ln)
+    print("\n  * recommended default\n")
     try:
         choice = input(f"Select firmware [{default}]: ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -661,6 +749,25 @@ def unmounted_candidates():
     return cands
 
 
+# util-linux mount(8) nags "your fstab has been modified, but systemd still
+# uses the old version; use 'systemctl daemon-reload'..." on EVERY mount when
+# /etc/fstab is newer than systemd's generated units — unrelated to what we
+# mount (a private temp dir). Drop just those two lines; forward everything else.
+_MOUNT_FSTAB_HINT = re.compile(r"fstab has been modified|daemon-reload")
+
+def _run_quiet_mount(cmd, check=False):
+    """Run a mount(8) command, suppressing the benign fstab/daemon-reload hint
+    while forwarding any real diagnostics. Raises CalledProcessError when
+    `check` and the command failed (matching subprocess.run(check=True))."""
+    res = subprocess.run(cmd, stderr=subprocess.PIPE, universal_newlines=True)
+    for line in (res.stderr or "").splitlines():
+        if not _MOUNT_FSTAB_HINT.search(line):
+            print(line, file=sys.stderr)
+    if check and res.returncode != 0:
+        raise subprocess.CalledProcessError(res.returncode, cmd)
+    return res
+
+
 def _sudo_mount(dev, label):
     """Mount `dev` with a privileged `mount` when udisks is unavailable. On a
     terminal, sudo prompts for the password. The FAT volume is mounted with
@@ -677,7 +784,7 @@ def _sudo_mount(dev, label):
     # one sudo invocation -> a single password prompt; mkdir is idempotent
     script = "mkdir -p %s && mount -o uid=%d,gid=%d %s %s" % (
         shlex.quote(mountpoint), uid, gid, shlex.quote(dev), shlex.quote(mountpoint))
-    if subprocess.run(["sudo", "sh", "-c", script]).returncode != 0:
+    if _run_quiet_mount(["sudo", "sh", "-c", script]).returncode != 0:
         print("flashpod: sudo mount of %s failed" % dev, file=sys.stderr)
         return None
     print("Mounted %s at %s" % (dev, mountpoint), file=sys.stderr)
@@ -2032,7 +2139,7 @@ def offer_init_after_flash(dev):
     import tempfile
     mnt = tempfile.mkdtemp(prefix="flashpod-init-")
     try:
-        subprocess.run(["mount", part, mnt], check=True)
+        _run_quiet_mount(["mount", part, mnt], check=True)
         try:
             itunesdb.init_ipod(mnt, "iPod")
             print(f"Initialized iPod directory structure on {part}")
@@ -2113,8 +2220,11 @@ def main():
     p_fl.add_argument("device", nargs="?",
                       help="target disk, e.g. /dev/sdb (else interactive chooser)")
     p_fl.add_argument("--firmware", default=None,
-                      help="firmware .ipsw (default: choose from "
-                           "firmware/firmware.json)")
+                      help="firmware image: raw Firmware-*, .bin.gz or .ipsw "
+                           "(default: choose from firmware/firmware.json)")
+    p_fl.add_argument("--model", default=None,
+                      help="iPod model to flash for, e.g. 1G, 2G, 3G "
+                           "(default: ask; decides which firmware is offered)")
     p_fl.add_argument("--yes", action="store_true",
                       help="skip the typed ERASE confirmation")
     p_fl.add_argument("--dry-run", action="store_true",
@@ -2124,6 +2234,10 @@ def main():
     p_fl.add_argument("--lba48", action="store_true",
                       help="EXPERIMENTAL: use the whole card for data, past the "
                            "128 GiB LBA28 cap (only works on an LBA48-patched iPod)")
+    p_fl.add_argument("--max-data-gb", type=float, default=None,
+                      help="cap the data partition to N decimal GB, overriding the "
+                           "firmware's manifest limit (use to probe an early "
+                           "firmware's real disk-size ceiling)")
     p_fl.add_argument("--self-test", action="store_true",
                       help="validate layout logic and exit (no hardware)")
 
@@ -2147,18 +2261,30 @@ def main():
                 msg += "\n  sudo " + " ".join(_self_cmd() + _cmd_args(opts))
             print(msg, file=sys.stderr)
             return 1
+        max_data_gb = None
         if opts.firmware:
             firmware = opts.firmware          # bring-your-own; no network
         else:
             manifest = _load_manifest()
             if not manifest:
                 return 1
-            entry = choose_firmware(manifest)
+            # Which iPod decides what firmware is eligible -- ask before
+            # offering a list, so we never present an image that would leave
+            # this model unusable.
+            model = choose_model(manifest, opts.model)
+            if model is False:
+                return 1
+            entry = choose_firmware(manifest, model)
             if not entry:
                 return 1
+            # Optional per-firmware data cap (none set today -- 1.0/1.0.4 were
+            # hardware-tested to use a full 128 GB card; --max-data-gb overrides).
+            max_data_gb = entry.get("max_data_gb")
             firmware = ensure_firmware(entry, manifest.get("base_url", ""))
             if not firmware:
                 return 1
+        if opts.max_data_gb is not None:      # explicit override (or a BYO cap)
+            max_data_gb = opts.max_data_gb
         # Offer init on the fresh card only when it will work: interactive,
         # a real write, and a FAT32 data partition to mount.
         offer = offer_init_after_flash if (
@@ -2169,7 +2295,8 @@ def main():
                                 dry_run=opts.dry_run,
                                 do_format=not opts.no_format,
                                 before_eject=offer,
-                                lba48=opts.lba48)
+                                lba48=opts.lba48,
+                                max_data_gb=max_data_gb)
 
     # Explicit raw-device path: operate on the FAT ourselves, bypassing the OS
     # mount and all the mount-detection / FireWire-queue machinery (the whole
