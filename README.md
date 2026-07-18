@@ -243,29 +243,49 @@ $ flashpod flash /dev/sdb --dry-run    # print the plan, write nothing (no root)
 $ flashpod flash --self-test           # validate layout logic, no hardware
 ```
 
-**Firmware:** with no `--firmware`, an interactive chooser lists the images
-from the bundled catalog (`flashpod/firmware/firmware.json`) by iPod
-generation, version, and description (the default entry is preselected;
-non-interactive runs use it outright). The chosen `.ipsw` is then **downloaded
-from GitHub**, cached under `~/.cache/flashpod/`, and **verified against its
-SHA-256** before use; later flashes reuse the cached copy (no network). The
-images aren't bundled with flashpod — they're Apple's copyright, hosted as
+**Firmware:** with no `--firmware`, flashpod first asks **which iPod you're
+flashing for** (or takes `--model 1G|2G|3G|4G|photo`), then lists only the
+firmware that fits it, from the bundled catalog
+(`flashpod/firmware/firmware.json`), with version, build date, and description
+(the default entry is preselected; non-interactive runs use it outright). The
+chosen image is then **downloaded from GitHub**, cached under
+`~/.cache/flashpod/`, and **verified against its SHA-256** before use; later
+flashes reuse the cached copy (no network). The images aren't bundled with
+flashpod — they're Apple's copyright, hosted as
 [release assets](https://github.com/davidbarnhart/flashpod/releases/tag/firmware).
 
-To use a firmware flashpod doesn't host (or to work fully offline), download
-an `.ipsw` yourself and pass it with `--firmware <file>` — that path never
-touches the network. To add an image to the catalog, upload it to the firmware
-release and add a manifest entry (`file`, `url`/`base_url`, `sha256`,
-`generation`, `version`, `description`).
+The model question isn't cosmetic: firmware is not interchangeable across
+models. 2nd-generation (touch wheel) support first appeared in firmware 1.1.2,
+so the 2001 images (1G's 0.0 and 0.4) would leave a 2G unusable — asking first
+means they're never offered to one.
+
+These early images have no low disk-size ceiling — 1.0 and 1.0.4 were tested on
+a 128 GB card in full (the broken-folder icon on such a card means the data
+partition wasn't initialized, since 1.0 doesn't auto-create `iPod_Control`; run
+`flashpod init`). The only size limit is the 128 GiB LBA28 cap that binds all of
+this firmware; see `--lba48`. A manifest entry *may* carry a `max_data_gb`
+ceiling if some firmware ever needs one, and `--max-data-gb` sets it by hand.
+
+Catalog images ship as `.bin.gz` (a gzipped raw `Firmware-*` image). To use a
+firmware flashpod doesn't host (or to work fully offline), pass it with
+`--firmware <file>` — that path never touches the network, and accepts a raw
+`Firmware-*` image, a `.bin.gz`, or an Apple `.ipsw` (the format is detected
+from the file's magic bytes, not its name). To add an image to the catalog,
+upload it to the firmware release and add a manifest entry (`file`,
+`url`/`base_url`, `sha256`, `size`, `generation`, `version`, `description`, and
+`build_date` if known — it can't be recovered from the file later, since git
+and release downloads both reset mtimes).
 
 Options:
 
 | Flag | Meaning |
 |------|---------|
-| `--firmware <file>` | use a local `.ipsw` (bring-your-own; no download). Default: pick from the catalog and download it |
+| `--firmware <file>` | use a local image — raw `Firmware-*`, `.bin.gz`, or `.ipsw` (bring-your-own; no download). Default: pick from the catalog and download it |
+| `--model <id>`      | iPod model to flash for (`1G`, `2G`, `3G`, `4G`, `photo`); decides which firmware is offered. Default: ask |
 | `--yes`             | skip the typed `ERASE sdX` confirmation |
 | `--no-format`       | don't format the data partition |
 | `--lba48`           | **experimental**: use the whole card for data, past the 128 GiB cap (LBA48-patched iPods only) |
+| `--max-data-gb <N>` | cap the data partition to N decimal GB (e.g. to make a smaller partition, or probe a firmware's disk-size ceiling) |
 | `--dry-run`         | show the plan only |
 | `--self-test`       | check layout-building logic and exit |
 

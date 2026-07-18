@@ -1,55 +1,106 @@
 {
-  "_comment": "Catalog of stock Apple iPod firmware for `flashpod flash`. When no --firmware is given, flashpod offers this list, downloads the chosen image from base_url + file, caches it under ~/.cache/flashpod, and verifies it against sha256. The .ipsw files are NOT bundled with flashpod (they are Apple's copyright); they are hosted as GitHub release assets. You can always bring your own with `--firmware <file>` (no network). Apple ipsw naming: iPod_<family>.<version>.ipsw (family 1 = 1G/2G, 2 = 3G, 4/10 = 4G grayscale, 5 = photo, 11 = color).",
+  "_comment": "Catalog of stock Apple iPod firmware for `flashpod flash`. When no --firmware is given, flashpod offers this list, downloads the chosen image from base_url + file, caches it under ~/.cache/flashpod, and verifies it against sha256. The images are NOT bundled with flashpod (they are Apple's copyright); they are hosted as GitHub release assets. You can always bring your own with `--firmware <file>` (no network). Images ship as .bin.gz -- a gzipped raw Firmware-* image; load_firmware() dispatches on magic bytes, so a raw image or an Apple .ipsw works too if you supply one yourself. Apple ipsw naming was iPod_<family>.<version>.ipsw (family 1 = 1G/2G, 2 = 3G, 4/10 = 4G grayscale, 5 = photo, 11 = color); asset names keep that scheme and append the build date where it is known. build_date CANNOT be recovered from the file at runtime -- git and release downloads both reset mtimes, and the .ipsw zip timestamps are the 2006 repack date, not the build -- so it is recorded here. HARDWARE BOUNDARY: 2nd-generation (touch wheel) support first appeared in family-1 firmware 1.1.2. Anything older (0.0, 0.4) is 1G-ONLY -- the `generation` string is the only guidance the picker gives, so it must not claim 2G for those. We do not currently host 1.1.2 itself. LEGACY: the .ipsw assets remain on the release and are deliberately no longer referenced here; flashpod <= 0.1.7 ships a manifest that points at them, so deleting them would break those installs.",
   "base_url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware",
+  "_models_comment": "The iPod models flashpod can flash for, oldest first. `flashpod flash` asks which one you have and then offers only firmware whose `models` list includes it -- firmware is NOT interchangeable across models, and the 1G/2G split is the sharp one: 2G (touch wheel) support first appeared in family-1 firmware 1.1.2, so the 2001 images (0.0, 0.4) are 1G-only and would leave a 2G unusable.",
+  "_models_tell": "1G and 2G look identical -- same case, same screen, same four buttons ringing the wheel. The only difference you can check is by hand: the 1G's scroll wheel physically TURNS (it is mechanical), the 2G's does not move at all (touch-sensitive). Since that pair is also the one where a wrong pick matters (0.0 and 0.4 are 1G-only), the labels lead with that tell rather than with the model name.",
+  "_max_data_comment": "No firmware here caps the data partition below the 128 GiB LBA28 ceiling (that ceiling binds every one of these images; see --lba48). HARDWARE-TESTED 2026-07-17: firmware 1.0 (0.0) boots a 128 GB card AND plays audio whose clusters land past 14 GB, and 1.0.4 (0.4) boots a 128 GB card -- neither has a low ceiling, so no max_data_gb field is set. (An earlier 0.0 broken-folder that looked like a size limit was an UNINITIALIZED card -- 0.0 does not auto-create iPod_Control, so a flashed-but-not-init'd data partition shows the broken folder regardless of size; run init.) A max_data_gb field (decimal GB) on an entry would clamp its data partition; none is needed today. `flashpod flash --max-data-gb N` can still cap a partition manually.",
+  "_salvage_comment": "The 0.0/0.4 .bin.gz assets are ver=2 REPACKS. The original 2001 distribution files carried their directory at 0x4000 with payloads 0x800 BELOW their absolute devOffset (a logical/mis-packed layout); written verbatim the 1G boot ROM read garbage and broken-foldered. flashpod re-laid the osos/aupd payloads into the hardware-proven format-2 container (dir 0x4000+0x4200, payloads at absolute devOffset from 0x4400), which the 1G boots. build_date/version are unchanged -- same firmware, bootable packaging.",
+  "models": [
+    { "id": "1G", "name": "1st generation", "years": "2001-02",
+      "tell": "scroll wheel physically turns" },
+    { "id": "2G", "name": "2nd generation", "years": "2002",
+      "tell": "wheel does not move (touch-sensitive)" },
+    { "id": "3G", "name": "3rd generation", "years": "2003",
+      "tell": "four buttons in a row above the wheel" },
+    { "id": "4G", "name": "4th generation", "years": "2004",
+      "tell": "click wheel, buttons on the wheel, grayscale" },
+    { "id": "photo", "name": "iPod photo", "years": "2004-05",
+      "tell": "click wheel, color display" }
+  ],
   "firmwares": [
     {
-      "file": "iPod_1.1.5.ipsw",
-      "sha256": "0edbb2d512bc84d333c0749f4d51398890b3a5934476311dd67e2314809e9103",
-      "size": 2092355,
+      "file": "iPod_1.1.5_2005_02_18.bin.gz",
+      "sha256": "0f5bab05337d65f0a3a1a573d9e241eac5c57649fd0f7b21f5f2fad6bedf92e8",
+      "size": 2078899,
       "generation": "1st/2nd generation (FireWire)",
+      "models": [
+        "1G",
+        "2G"
+      ],
       "version": "1.5",
+      "build_date": "2005-02-18",
       "description": "Last stock Apple-released firmware for 1G/2G iPods",
       "default": true
     },
     {
-      "file": "iPod_2.2.3.ipsw",
-      "sha256": "bec081f2bacd4099dcfc533048a6844c8fafb50197c60d9d7ef95075cf2c6e92",
-      "size": 2018057,
+      "file": "iPod_1.1.4_2004_04_23.bin.gz",
+      "sha256": "75c11674c24dc9bbc87f90fa6d7f15c81cf0a3fcc126370cc2ba875671e3c194",
+      "size": 1990869,
+      "generation": "1st/2nd generation (FireWire)",
+      "models": [
+        "1G",
+        "2G"
+      ],
+      "version": "1.4",
+      "build_date": "2004-04-23",
+      "description": "Adds 20+ EQ presets, shuffle by album, track scrubbing, Contacts/Calendar/Clock, Korean and Chinese; iTunes 4.5 compatibility"
+    },
+    {
+      "file": "iPod_1.0.4_2001_12_23.bin.gz",
+      "sha256": "d898113c4f0af7d3885e6ab14e8054e5d2efc10f050d80a46f892d13a33709cc",
+      "size": 720679,
+      "generation": "1st generation only (predates 2G support)",
+      "models": [
+        "1G"
+      ],
+      "version": "0.4",
+      "build_date": "2001-12-23",
+      "description": "Adds Italian, Dutch, Spanish, Brazilian Portuguese, Danish, Finnish, Norwegian and Swedish; 255-character filenames; fixes low-battery sleep wake and blue-and-white Power Macintosh G3 compatibility"
+    },
+    {
+      "file": "iPod_1.0.0_2001_11_01.bin.gz",
+      "sha256": "bd47f0d8de764e2aa1c64bf0e8d78a685d0b2e43f9abaaededaa7b532028023d",
+      "size": 720153,
+      "generation": "1st generation only (predates 2G support)",
+      "models": [
+        "1G"
+      ],
+      "version": "0.0",
+      "build_date": "2001-11-01",
+      "description": "Initial release for the original 1G iPod"
+    },
+    {
+      "file": "iPod_2.2.3.bin.gz",
+      "sha256": "8a9582e2a3f203b339148ac1a7c8cf1bc4d0d7ca8a6364ee5122a1cf515489a1",
+      "size": 2006678,
       "generation": "3rd generation (dock connector)",
+      "models": [
+        "3G"
+      ],
       "version": "2.3",
       "description": "Last stock Apple-released firmware for 3G"
     },
     {
-      "file": "iPod_4.3.1.1.ipsw",
-      "sha256": "576e05def7800e28cfd9a28ec36518964ab7a356f3b035e3fc223b0816be9ed9",
-      "size": 2952848,
+      "file": "iPod_4.3.1.1.bin.gz",
+      "sha256": "20c514d3fc1f08bb0cb76101af359b85c92305e0876618dd109ab8036ee12cd3",
+      "size": 2941060,
       "generation": "4th generation (grayscale)",
+      "models": [
+        "4G"
+      ],
       "version": "3.1.1",
-      "description": "Last stock Apple-released firmware for 4G grayscale (family 4)"
+      "description": "Last stock Apple-released firmware for 4G grayscale. Apple shipped this as families 4 and 10 (two board revisions) but the firmware image is byte-identical, so one entry covers both"
     },
     {
-      "file": "iPod_10.3.1.1.ipsw",
-      "sha256": "b526ccf1c99406ee5863e2aba47d9a550699bfcab72c32cc97ec70137310070f",
-      "size": 2952859,
-      "generation": "4th generation (grayscale, late board revision)",
-      "version": "3.1.1",
-      "description": "Last stock Apple-released firmware for the family-10 4G grayscale hardware revision"
-    },
-    {
-      "file": "iPod_5.1.2.1.ipsw",
-      "sha256": "03643928fd4b5d180f92396382680c48e745826b8b170bf2e298bef2bbe26464",
-      "size": 3831893,
-      "generation": "4th generation (iPod photo)",
+      "file": "iPod_5.1.2.1.bin.gz",
+      "sha256": "9482ac59803daea37fe8481ab3dfc938c5e127ac77ba8a81eac85663a020c961",
+      "size": 3816493,
+      "generation": "4th generation (iPod photo / color display)",
+      "models": [
+        "photo"
+      ],
       "version": "1.2.1",
-      "description": "Last stock Apple-released firmware for iPod photo (family 5)"
-    },
-    {
-      "file": "iPod_11.1.2.1.ipsw",
-      "sha256": "d8d566b7038b59cbcb07b41875eb3fe2ddb2f53cc6bff18dd18584a39c706349",
-      "size": 3831903,
-      "generation": "4th generation (iPod with color display)",
-      "version": "1.2.1",
-      "description": "Last stock Apple-released firmware for the family-11 color-display revision"
+      "description": "Last stock Apple-released firmware for iPod photo and the color-display revision. Apple shipped this as families 5 and 11 but the firmware image is byte-identical, so one entry covers both"
     }
   ]
 }
