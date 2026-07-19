@@ -1017,6 +1017,83 @@ def pin_firewire_queue(disk):
         return False
 
 
+def firewire_sbp2_needed():
+    """True when a FireWire device is attached but the firewire_sbp2 driver
+    isn't loaded — so it never becomes a block device and auto-detection can't
+    see it (the iPod is invisible). The kernel does NOT auto-load firewire_sbp2,
+    so this is the normal state right after plugging one in. Linux-only: returns
+    False where the FireWire sysfs isn't present (macOS/Windows) or nothing is
+    attached."""
+    if os.path.isdir("/sys/module/firewire_sbp2"):
+        return False                              # already loaded
+    fw_dir = "/sys/bus/firewire/devices"
+    try:
+        names = os.listdir(fw_dir)
+    except OSError:
+        return False                              # no FireWire stack here
+    for name in names:
+        if "." in name:                           # fwN.M unit node, not a device
+            continue
+        try:
+            with open(os.path.join(fw_dir, name, "is_local")) as f:
+                if f.read().strip() == "0":       # a remote (attached) device
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def _wait_for_firewire_disk(timeout=8.0):
+    """After loading sbp2, poll until a FireWire (sbp/ieee1394) block disk shows
+    up so the following scan can see it, then let the FAT probe settle so
+    fat_disk_candidates() reports the partition's fstype. Best-effort."""
+    import time
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            out = subprocess.run(["lsblk", "-J", "-o", "NAME,TYPE,TRAN"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                 universal_newlines=True, timeout=5).stdout
+            for d in json.loads(out).get("blockdevices", []):
+                if d.get("type") == "disk" and d.get("tran") in ("sbp", "ieee1394"):
+                    time.sleep(1.0)               # let the partition probe land
+                    return True
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.4)
+
+
+def load_firewire_sbp2():
+    """modprobe firewire_sbp2 (root, or via sudo) so an attached FireWire iPod
+    enumerates as a block device, then wait briefly for the disk to appear.
+    Returns True if the module is loaded afterward."""
+    cmd = ["modprobe", "firewire-sbp2"]
+    if os.geteuid() != 0:
+        if not sys.stdin.isatty():
+            print("flashpod: a FireWire device is attached but firewire_sbp2 "
+                  "isn't loaded, so it can't appear as a disk. Load it with:\n"
+                  "  sudo modprobe firewire-sbp2", file=sys.stderr)
+            return False
+        print("flashpod: a FireWire device is attached but firewire_sbp2 isn't "
+              "loaded, so it can't appear as a disk — loading it (you may be "
+              "prompted for your password)...", file=sys.stderr)
+        cmd = ["sudo"] + cmd
+    else:
+        print("flashpod: loading firewire_sbp2 so the attached FireWire device "
+              "appears as a disk...", file=sys.stderr)
+    try:
+        if subprocess.run(cmd).returncode != 0:
+            print("flashpod: failed to load firewire_sbp2.", file=sys.stderr)
+            return False
+    except (OSError, KeyboardInterrupt) as exc:
+        print(f"flashpod: couldn't load firewire_sbp2 ({exc}).", file=sys.stderr)
+        return False
+    _wait_for_firewire_disk()
+    return os.path.isdir("/sys/module/firewire_sbp2")
+
+
 def scan_for_ipod(cands):
     """Probe each (node, desc) candidate and keep the ones whose FAT holds the
     iPod fingerprint: the iPod_Control/iTunes/iTunesDB *path exists*. We do NOT
@@ -1056,6 +1133,109 @@ def _count_music_files(fs):
     return total
 
 
+def _mounted_devices():
+    """Set of realpath'd device nodes currently mounted, so we can tell an
+    attached-but-unmounted FAT disk from one that's already mounted."""
+    devs = set()
+    for dev, _mnt, _fstype in platform.current().mounted_filesystems():
+        if dev.startswith("/dev/"):
+            devs.add(os.path.realpath(dev))
+    return devs
+
+
+def _unmounted_disks(disks):
+    """Filter fat_disk_candidates() down to the ones NOT currently mounted —
+    i.e. attached FAT disks that could be a second, unmounted iPod (the FireWire
+    unit sitting next to a freshly-flashed card in a reader)."""
+    mounted = _mounted_devices()
+    return [(node, desc) for node, desc in disks
+            if os.path.realpath(node) not in mounted]
+
+
+def _choose_source(sources):
+    """Interactive chooser over a mixed list of (kind, ref, label) iPod sources,
+    where kind is 'mount' (ref = mountpoint) or 'raw' (ref = device node).
+    Returns ('mount', path), ('raw', node), or None."""
+    print("Multiple iPod disks found:")
+    for i, (kind, ref, label) in enumerate(sources):
+        print(f"  [{i}] {ref}" + (f"  ({label})" if label else ""))
+    if not sys.stdin.isatty():
+        print("flashpod: not a terminal, so can't ask which to use; "
+              "pass --mount <path> or --raw <device>.", file=sys.stderr)
+        return None
+    try:
+        choice = input("Use which? [0] ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+    idx = int(choice) if choice.isdigit() and int(choice) < len(sources) else 0
+    kind, ref, _ = sources[idx]
+    return (kind, ref)
+
+
+def _pick_among_sources(opts, mounts, unmounted):
+    """A mounted iPod AND attached-but-unmounted FAT disk(s) are both present —
+    a second iPod (e.g. a FireWire unit) may be sitting next to a freshly-flashed
+    card in a reader. Scan the unmounted disks (needs root) and let the user pick
+    among ALL plausible iPods. Returns ('mount', path), ('raw', node), or None."""
+    # Reading the unmounted disks raw needs root — elevate once; the root run
+    # re-enters source resolution and reaches here again with is_admin() true.
+    if not platform.current().is_admin():
+        if sys.stdin.isatty():
+            print("flashpod: another disk is attached alongside the mounted "
+                  "iPod; checking whether it's a second iPod means reading it "
+                  "raw, which needs root — elevating via sudo...",
+                  file=sys.stderr)
+            _sudo_reexec(_cmd_args(opts))          # replaces process if it can
+        # Couldn't elevate (non-tty / no sudo): fall back to the mounted iPod,
+        # but say which disk(s) we couldn't inspect.
+        print("flashpod: couldn't get root to check the other attached "
+              "disk(s); using the mounted iPod. Pass --raw <device> to target "
+              "another:", file=sys.stderr)
+        for node, desc in unmounted:
+            print(f"  {node}" + (f"  ({desc})" if desc else ""), file=sys.stderr)
+        mnt = _choose_mounted(mounts)
+        return ("mount", mnt) if mnt else None
+
+    found = scan_for_ipod(unmounted)
+    if not found:
+        # The other disk(s) aren't iPods — nothing to disambiguate.
+        mnt = _choose_mounted(mounts)
+        return ("mount", mnt) if mnt else None
+
+    sources = [("mount", mnt,
+                "mounted" + (" · has iPod_Control" if score >= 10 else ""))
+               for score, mnt in mounts]
+    sources += [("raw", node, desc or "raw device") for node, desc in found]
+    return _choose_source(sources)
+
+
+def _ls_from_raw(node, desc=""):
+    """Load a Library from a raw iPod device node for `ls` and return
+    ('lib', Library), or None (with a diagnostic) if it can't be read."""
+    target = open_raw_target(node, writable=False)
+    if target is None:
+        return None
+    try:
+        lib = target.load_library()
+    except CorruptLibrary as exc:
+        nmusic = _count_music_files(target.fs)
+        print(f"Found iPod on {node}" + (f" ({desc})" if desc else "") +
+              f" — {nmusic} music file(s) on the card, but its iTunesDB is "
+              f"corrupt ({exc}).\n  The library can't be listed until the "
+              "database is rebuilt — run `flashpod rebuild` (or `flashpod "
+              "add`, which offers to rebuild first).", file=sys.stderr)
+        return None
+    if lib is None:
+        print(f"flashpod: {node} has an iPod directory structure but no "
+              "iTunesDB — run `flashpod rebuild` (or `flashpod init` for an "
+              "empty library).", file=sys.stderr)
+        return None
+    print(f"Found iPod on {node}" + (f" ({desc})" if desc else "") +
+          f" — {len(lib.tracks)} tracks.", file=sys.stderr)
+    return ("lib", lib)
+
+
 def detect_ls_source(opts):
     """Resolve where `flashpod ls` reads from when neither --mount nor --raw
     was given. Returns ('mount', path), ('lib', Library), or None.
@@ -1064,12 +1244,20 @@ def detect_ls_source(opts):
     enumerate external disks with a FAT slice and read each to find the one
     whose FAT holds an iPod database (no labels, no bus guessing). Reading raw
     devices needs root, so if we're not root we re-exec under sudo first."""
-    cands = candidate_mounts()
-    if cands:
-        mnt = _choose_mounted(cands)
+    mounts = candidate_mounts()
+    disks = platform.current().fat_disk_candidates()
+    if mounts:
+        # A mounted iPod, plus maybe an attached-but-unmounted FAT disk (a
+        # second iPod — e.g. a FireWire unit beside a flashed card in a reader).
+        unmounted = _unmounted_disks(disks)
+        if unmounted:
+            src = _pick_among_sources(opts, mounts, unmounted)
+            if src is None or src[0] == "mount":
+                return src
+            return _ls_from_raw(src[1])
+        mnt = _choose_mounted(mounts)
         return ("mount", mnt) if mnt else None
 
-    disks = platform.current().fat_disk_candidates()
     if not disks:
         # Nothing to scan. On Linux, fall back to offering to mount one.
         mnt = offer_mount(announce_empty=False)
@@ -1102,7 +1290,7 @@ def detect_ls_source(opts):
     if len(found) == 1:
         node, desc = found[0]
     else:
-        print("Multiple iPods found:")
+        print("Multiple iPod disks found:")
         for i, (node, desc) in enumerate(found):
             print(f"  [{i}] {node}" + (f"  ({desc})" if desc else ""))
         try:
@@ -1116,27 +1304,7 @@ def detect_ls_source(opts):
     # shouldn't make ls pretend there's no iPod: recognize the device and its
     # on-disk contents from the directory tree, and point at the rebuild (which
     # lives in `add` — ls is read-only).
-    target = open_raw_target(node, writable=False)
-    if target is None:
-        return None
-    try:
-        lib = target.load_library()
-    except CorruptLibrary as exc:
-        nmusic = _count_music_files(target.fs)
-        print(f"Found iPod on {node}" + (f" ({desc})" if desc else "") +
-              f" — {nmusic} music file(s) on the card, but its iTunesDB is "
-              f"corrupt ({exc}).\n  The library can't be listed until the "
-              "database is rebuilt — run `flashpod rebuild` (or `flashpod "
-              "add`, which offers to rebuild first).", file=sys.stderr)
-        return None
-    if lib is None:
-        print(f"flashpod: {node} has an iPod directory structure but no "
-              "iTunesDB — run `flashpod rebuild` (or `flashpod init` for an "
-              "empty library).", file=sys.stderr)
-        return None
-    print(f"Found iPod on {node}" + (f" ({desc})" if desc else "") +
-          f" — {len(lib.tracks)} tracks.", file=sys.stderr)
-    return ("lib", lib)
+    return _ls_from_raw(node, desc)
 
 
 def _cmd_args(opts):
@@ -1237,11 +1405,18 @@ def resolve_raw_target(opts):
     """Resolve a target for a WRITE command (add/rm/init) with no --mount/--raw.
     Returns ('mount', path), ('raw', node), or None. Mirrors detect_ls_source
     but selects a device to write to (and, for init, one without a database)."""
-    cands = candidate_mounts()
-    if cands:
-        mnt = _choose_mounted(cands)
-        return ("mount", mnt) if mnt else None
+    mounts = candidate_mounts()
     disks = platform.current().fat_disk_candidates()
+    if mounts:
+        # A mounted iPod, plus maybe an attached-but-unmounted FAT disk (a
+        # second iPod — e.g. a FireWire unit beside a flashed card in a reader).
+        # init is excluded: it writes a fresh library and can't scan for a DB
+        # that doesn't exist yet, so it keeps the simple mounted-target path.
+        unmounted = _unmounted_disks(disks) if opts.command != "init" else []
+        if unmounted:
+            return _pick_among_sources(opts, mounts, unmounted)
+        mnt = _choose_mounted(mounts)
+        return ("mount", mnt) if mnt else None
     if not disks:
         mnt = offer_mount(announce_empty=False)
         if mnt:
@@ -1272,7 +1447,7 @@ def resolve_raw_target(opts):
         print(f"Found iPod on {node}" + (f" ({desc})" if desc else "") + ".",
               file=sys.stderr)
         return ("raw", node)
-    print("Multiple iPods found:")
+    print("Multiple iPod disks found:")
     for i, (node, desc) in enumerate(found):
         print(f"  [{i}] {node}" + (f"  ({desc})" if desc else ""))
     try:
@@ -2304,6 +2479,18 @@ def main():
     raw = getattr(opts, "raw", None)
     if raw:
         return run_raw(opts, raw)
+
+    # A FireWire iPod appears as a block device only once firewire_sbp2 is
+    # loaded, and the kernel does NOT auto-load it. Before auto-detection scans
+    # the attached disks, load it if a FireWire device is present but the driver
+    # is missing — otherwise the iPod is invisible and we'd silently manage some
+    # other disk (or find nothing when it's the only device attached). Skipped
+    # when the target is named explicitly (--raw handled above; --mount here),
+    # since that device must already exist.
+    if (opts.command in ("ls", "list", "add", "rm", "remove", "delete", "erase",
+                         "init", "rebuild")
+            and not opts.mount and firewire_sbp2_needed()):
+        load_firewire_sbp2()
 
     # `ls` with no --mount/--raw: a mounted iPod, else scan attached disks for
     # one to read directly (the macOS/FireWire case). The scan reads the DB.

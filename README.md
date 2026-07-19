@@ -125,6 +125,9 @@ flashpod finds your iPod for you. With no flags, it uses one that's already
 mounted; otherwise it scans the attached disks and picks out the iPod by the
 iTunes database on it (no guessing from volume labels), then reads and writes it
 **directly over the raw device** with its own FAT driver — no OS mount required.
+If more than one iPod is attached — say a freshly-flashed card sitting in a
+reader while a FireWire iPod is also plugged in — flashpod lists them and asks
+which to use rather than picking one for you.
 That raw path is what lets flashpod manage an iPod the OS *can't* mount, like a
 flash-modded FireWire iPod on a Mac (macOS's read-ahead corrupts the boot
 sector, so it refuses the volume). Raw access needs root, so flashpod re-runs

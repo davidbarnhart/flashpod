@@ -144,7 +144,10 @@ class LinuxPlatform(Platform):
             if (node.get("type") == "part" and external
                     and (node.get("fstype") or "") in ("vfat", "exfat")):
                 label = node.get("label") or ""
-                bits = [b for b in (label, tran, node.get("size")) if b]
+                # lsblk reports FireWire as the kernel transport "sbp" (or the
+                # legacy "ieee1394"); show the friendly name in the chooser.
+                tran_label = "FireWire" if tran in ("sbp", "ieee1394") else tran
+                bits = [b for b in (label, tran_label, node.get("size")) if b]
                 cands.append(("/dev/" + node["name"], " ".join(bits)))
             for child in node.get("children") or []:
                 walk(child, tran, removable)
