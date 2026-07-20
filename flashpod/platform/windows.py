@@ -144,7 +144,21 @@ class WindowsPlatform(Platform):
             finally:
                 ctypes.windll.kernel32.CloseHandle(h)
         except (OSError, ValueError, struct.error):
+            pass
+        # Opening \\.\PhysicalDriveN for raw I/O needs Administrator, so the
+        # ioctl above fails for any unprivileged run -- including
+        # `flash --dry-run`, which is meant to work WITHOUT elevation and would
+        # otherwise die on "could not determine size". Get-Disk reports the size
+        # without a raw handle (it's the same source the device chooser lists
+        # sizes from), so fall back to it.
+        try:
+            num = _drive_number(dev)
+        except ValueError:
             return 0
+        for number, size, _name, _bus, _is_system in self._disks():
+            if number == num:
+                return size // SECTOR
+        return 0
 
     def device_mountpoints(self, dev):
         try:

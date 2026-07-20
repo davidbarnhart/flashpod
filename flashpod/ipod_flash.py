@@ -450,6 +450,18 @@ def choose_device():
             return "/dev/" + cands[int(sel)]["name"]
         print(color("  invalid selection", C_RED), file=sys.stderr)
 
+def device_label(dev):
+    """Short, typeable name for a device, used in the ERASE confirmation.
+
+    Not os.path.basename: on Windows a physical disk is ``\\\\.\\PhysicalDrive2``,
+    which ntpath reads as a UNC drive root with an empty tail, so basename()
+    returns "" and the prompt degrades to a bare `Type "ERASE " to proceed`.
+    Splitting on both separators gives PhysicalDrive2 there and sdb on Linux.
+    """
+    name = dev.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    return name or dev
+
+
 def confirm(dev, total_sectors, assume_yes, lba48=False, max_data_sectors=None):
     _, data_start, data_blocks = build_mbr_layout(total_sectors, lba48, max_data_sectors)
     fw_blocks = FW_BLOCKS
@@ -489,7 +501,7 @@ def confirm(dev, total_sectors, assume_yes, lba48=False, max_data_sectors=None):
     if assume_yes:
         return
     print(file=sys.stderr)
-    want = "ERASE %s" % os.path.basename(dev)
+    want = "ERASE %s" % device_label(dev)
     got = input(color('  Type "%s" to proceed: ' % want, C_RED)).strip()
     if got != want:
         sys.exit("Confirmation did not match. Aborted.")
