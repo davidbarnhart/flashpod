@@ -35,7 +35,38 @@ GENERIC_WRITE = 0x40000000
 FILE_SHARE_READ = 0x00000001
 FILE_SHARE_WRITE = 0x00000002
 OPEN_EXISTING = 3
-INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value if False else (2 ** 64 - 1)
+# INVALID_HANDLE_VALUE is (HANDLE)-1, so its unsigned value is pointer-sized:
+# 2**64-1 on 64-bit Python, 2**32-1 on 32-bit. Derive it rather than assuming.
+INVALID_HANDLE_VALUE = (1 << (8 * ctypes.sizeof(ctypes.c_void_p))) - 1
+
+
+def _k32():
+    """kernel32 with correct prototypes for the handle APIs.
+
+    Declaring these matters: ctypes defaults restype to ``c_int``, but a HANDLE
+    is pointer-sized. On 64-bit Windows that truncates the handle, and — far
+    worse — a *failed* CreateFileW returns INVALID_HANDLE_VALUE, which as a
+    signed int is -1 and never equals the unsigned constant we compare against.
+    The failure then goes unnoticed and the bogus handle reaches
+    msvcrt.open_osfhandle, whose fd raises EBADF ("Bad file descriptor") on
+    first use — hiding the actual Windows error.
+
+    Re-declaring on every call is harmless and keeps this import-safe on
+    non-Windows (nothing here runs until a method is called).
+    """
+    k = ctypes.windll.kernel32
+    k.CreateFileW.restype = ctypes.c_void_p
+    k.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32,
+                              ctypes.c_uint32, ctypes.c_void_p,
+                              ctypes.c_uint32, ctypes.c_uint32,
+                              ctypes.c_void_p]
+    k.CloseHandle.argtypes = [ctypes.c_void_p]
+    k.DeviceIoControl.argtypes = [ctypes.c_void_p, ctypes.c_uint32,
+                                  ctypes.c_void_p, ctypes.c_uint32,
+                                  ctypes.c_void_p, ctypes.c_uint32,
+                                  ctypes.POINTER(ctypes.c_ulong),
+                                  ctypes.c_void_p]
+    return k
 
 
 def _powershell(script):
@@ -73,24 +104,28 @@ class WindowsPlatform(Platform):
 
     # -- low-level handle helpers -----------------------------------------
     def _open_handle(self, path, write):
+        k = _k32()
         access = GENERIC_READ | (GENERIC_WRITE if write else 0)
-        h = ctypes.windll.kernel32.CreateFileW(
-            ctypes.c_wchar_p(path), access,
-            FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING, 0, None)
-        if h == INVALID_HANDLE_VALUE or h is None:
-            raise OSError("CreateFileW failed for %s (err %d)"
-                          % (path, ctypes.windll.kernel32.GetLastError()))
+        h = k.CreateFileW(path, access,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE, None,
+                          OPEN_EXISTING, 0, None)
+        if h is None or h == INVALID_HANDLE_VALUE:
+            # Report what Windows actually said: error 5 (access denied) and 32
+            # (sharing violation) are the usual causes here, and both mean a
+            # volume on this disk is mounted and holding the sectors.
+            raise OSError("CreateFileW failed for %s: %s"
+                          % (path, ctypes.WinError(k.GetLastError())))
         return h
 
     def _ioctl(self, handle, code, out_size=0):
+        k = _k32()
         buf = ctypes.create_string_buffer(out_size) if out_size else None
         returned = ctypes.c_ulong(0)
-        ok = ctypes.windll.kernel32.DeviceIoControl(
-            handle, code, None, 0, buf, out_size,
-            ctypes.byref(returned), None)
+        ok = k.DeviceIoControl(handle, code, None, 0, buf, out_size,
+                               ctypes.byref(returned), None)
         if not ok:
-            raise OSError("DeviceIoControl 0x%X failed (err %d)"
-                          % (code, ctypes.windll.kernel32.GetLastError()))
+            raise OSError("DeviceIoControl 0x%X failed: %s"
+                          % (code, ctypes.WinError(k.GetLastError())))
         return buf.raw[:returned.value] if buf else b""
 
     # -- device discovery / selection -------------------------------------
@@ -237,7 +272,15 @@ class WindowsPlatform(Platform):
         if os.path.isfile(dev):
             return open(dev, mode)
         import msvcrt
-        h = self._open_handle(dev, write=("w" in mode or "+" in mode or "a" in mode))
+        write = ("w" in mode or "+" in mode or "a" in mode)
+        if write:
+            # FSCTL_LOCK_VOLUME only holds while the locking handle is open, so
+            # the dismount done before write_layout is already undone by now:
+            # writing the new MBR makes Windows rescan and re-mount the data
+            # partition, and it then refuses writes into those sectors. Dismount
+            # again immediately before each write open.
+            self.unmount_all(dev, False)
+        h = self._open_handle(dev, write=write)
         fd = msvcrt.open_osfhandle(h, os.O_BINARY)
         return AlignedRawIO(os.fdopen(fd, mode, buffering=0))
 
