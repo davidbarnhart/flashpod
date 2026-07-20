@@ -73,26 +73,22 @@ class MacOSPlatform(Platform):
     def choose_device(self):
         from .. import ipod_flash
         color = ipod_flash.color
-        disks = self._external_disks()
-        if not disks:
-            sys.exit(color("No external disks found. Plug in the card reader and retry.",
-                           ipod_flash.C_RED))
-        print(color("\nAttached external disks:\n", ipod_flash.C_CYN), file=sys.stderr)
-        for i, (d, info) in enumerate(disks):
-            size = int(info.get("TotalSize") or info.get("Size") or 0)
-            name = (info.get("MediaName") or info.get("IORegistryEntryName")
-                    or "").strip() or "disk"
-            print("  [%d] /dev/%-7s  %10s  %s" %
-                  (i, d, ipod_flash.fmt_size(size), name), file=sys.stderr)
-        print(file=sys.stderr)
-        while True:
-            sel = input(color("Select device number (or 'q' to quit): ",
-                              ipod_flash.C_CYN)).strip()
-            if sel.lower() in ("q", "quit", ""):
-                sys.exit("Aborted.")
-            if sel.isdigit() and int(sel) < len(disks):
-                return "/dev/" + disks[int(sel)][0]
-            print(color("  invalid selection", ipod_flash.C_RED), file=sys.stderr)
+
+        def render(disks):
+            print(color("\nAttached external disks:\n", ipod_flash.C_CYN),
+                  file=sys.stderr)
+            for i, (d, info) in enumerate(disks):
+                size = int(info.get("TotalSize") or info.get("Size") or 0)
+                name = (info.get("MediaName") or info.get("IORegistryEntryName")
+                        or "").strip() or "disk"
+                print("  [%d] /dev/%-7s  %10s  %s" %
+                      (i, d, ipod_flash.fmt_size(size), name), file=sys.stderr)
+            print(file=sys.stderr)
+
+        return ipod_flash.pick_device(
+            self._external_disks, render,
+            lambda item: "/dev/" + item[0],
+            "No external disks found. Plug in the card reader and retry.")
 
     def device_sectors(self, dev):
         # real file/image -> just its size
