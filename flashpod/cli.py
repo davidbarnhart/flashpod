@@ -2335,10 +2335,32 @@ def offer_init_after_flash(dev):
             pass
 
 
+def _help_description():
+    """The --help description. In a lite build the `flash` entry is dropped from
+    the subcommand summary, since that build can't image cards."""
+    doc = __doc__ or ""
+    if not resources.is_lite():
+        return doc
+    kept, dropping = [], False
+    for line in doc.splitlines():
+        if line.strip().startswith("flashpod flash"):
+            dropping = True                    # drop the entry...
+            continue
+        if dropping:
+            # ...and its wrapped continuation lines, which are indented and
+            # don't begin a new "flashpod <cmd>" entry.
+            if line.strip() and not line.strip().startswith("flashpod "):
+                continue
+            dropping = False
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="flashpod",
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+        description=_help_description(),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mount", default=None,
                         help="iPod mountpoint (default: auto-detect from "
                              "mounted filesystems)")
@@ -2416,9 +2438,28 @@ def main():
     p_fl.add_argument("--self-test", action="store_true",
                       help="validate layout logic and exit (no hardware)")
 
+    # A lite build can't image cards, so drop `flash` from --help: both the
+    # subcommand listing and the choices shown in the usage line. It stays
+    # registered (still in _name_parser_map) so `flashpod flash` continues to
+    # parse and reaches the explanation below, instead of dying on argparse's
+    # unhelpful "invalid choice: 'flash'". Note argparse has no supported way to
+    # hide a subcommand -- help=SUPPRESS renders the sentinel literally -- hence
+    # the two internals; both have been stable since 3.x and exist on 3.6.
+    if resources.is_lite():
+        sub._choices_actions = [a for a in sub._choices_actions
+                                if a.dest != "flash"]
+        sub.metavar = "{%s}" % ",".join(n for n in sub._name_parser_map
+                                        if n != "flash")
+
     opts = parser.parse_args()
 
     if opts.command == "flash":
+        if resources.is_lite():
+            print("flashpod: this build doesn't image flash cards.\n"
+                  "  Use flashpod on a modern machine to image flash cards. "
+                  "This build of flashpod\n  for vintage Mac is used only for "
+                  "FireWire syncing.", file=sys.stderr)
+            return 1
         if opts.self_test:
             ipod_flash.self_test()
             return 0

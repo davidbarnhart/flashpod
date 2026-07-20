@@ -41,3 +41,30 @@ def firmware_manifest():
 
 def udev_rule():
     return resource_path("contrib", "99-flashpod-firewire-ipod.rules")
+
+
+def build_flavor():
+    """Which build this is: ``"full"`` or ``"lite"``.
+
+    A *lite* build ships without the card-imaging half of flashpod. It exists
+    for the vintage-Mac (OS X 10.8) artifact, whose only job is syncing music
+    to the iPod over FireWire — imaging a card is done on a modern computer
+    with a USB card reader, so `flash` is dead weight there.
+
+    The flavor is baked in at build time as a marker file bundled next to the
+    other package data (see flashpod.spec, FLASHPOD_FLAVOR=lite). When the
+    marker is absent — running from source, from a pip install, or from a
+    normal binary — the build is full. That default is deliberate: only an
+    explicitly-built lite artifact is ever degraded.
+    """
+    try:
+        with open(resource_path("build_flavor.txt")) as f:
+            flavor = f.read().strip().lower()
+    except OSError:
+        return "full"
+    return flavor if flavor in ("full", "lite") else "full"
+
+
+def is_lite():
+    """True when this build has the card-imaging half stripped out."""
+    return build_flavor() == "lite"
