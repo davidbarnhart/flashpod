@@ -144,29 +144,31 @@ class WindowsPlatform(Platform):
                           f[4].strip().lower() == "true" or f[5].strip().lower() == "true"))
         return disks
 
+    def _removable_disks(self):
+        """Removable/USB disks worth offering, falling back to every non-system
+        disk when nothing matches the removable bus types."""
+        disks = self._disks()
+        cands = [d for d in disks
+                 if not d[4] and d[3] in ("USB", "SD", "MMC", "1394")]
+        return cands or [d for d in disks if not d[4]]
+
     def choose_device(self):
         from .. import ipod_flash
         color = ipod_flash.color
-        cands = [d for d in self._disks()
-                 if not d[4] and d[3] in ("USB", "SD", "MMC", "1394")]
-        if not cands:
-            cands = [d for d in self._disks() if not d[4]]
-        if not cands:
-            sys.exit(color("No removable disks found. Plug in the card and retry.",
-                           ipod_flash.C_RED))
-        print(color("\nAttached removable disks:\n", ipod_flash.C_CYN), file=sys.stderr)
-        for i, (num, size, name, bus, _sys) in enumerate(cands):
-            print("  [%d] \\\\.\\PhysicalDrive%-3d %10s  %s (%s)" %
-                  (i, num, ipod_flash.fmt_size(size), name.strip(), bus), file=sys.stderr)
-        print(file=sys.stderr)
-        while True:
-            sel = input(color("Select device number (or 'q' to quit): ",
-                              ipod_flash.C_CYN)).strip()
-            if sel.lower() in ("q", "quit", ""):
-                sys.exit("Aborted.")
-            if sel.isdigit() and int(sel) < len(cands):
-                return "\\\\.\\PhysicalDrive%d" % cands[int(sel)][0]
-            print(color("  invalid selection", ipod_flash.C_RED), file=sys.stderr)
+
+        def render(cands):
+            print(color("\nAttached removable disks:\n", ipod_flash.C_CYN),
+                  file=sys.stderr)
+            for i, (num, size, name, bus, _sys) in enumerate(cands):
+                print("  [%d] \\\\.\\PhysicalDrive%-3d %10s  %s (%s)" %
+                      (i, num, ipod_flash.fmt_size(size), name.strip(), bus),
+                      file=sys.stderr)
+            print(file=sys.stderr)
+
+        return ipod_flash.pick_device(
+            self._removable_disks, render,
+            lambda d: "\\\\.\\PhysicalDrive%d" % d[0],
+            "No removable disks found. Plug in the card and retry.")
 
     def device_sectors(self, dev):
         if os.path.isfile(dev):

@@ -397,10 +397,44 @@ def device_mountpoints(dev):
 # ----------------------------------------------------------------------------
 # Interactive selection + confirmation
 # ----------------------------------------------------------------------------
-def choose_device():
-    cands = list_candidates()
-    if not cands:
-        sys.exit(color("No removable/USB disks found. Plug in the card and retry.", C_RED))
+def pick_device(scan, render, path_of, empty_msg):
+    """Interactive device chooser shared by every platform backend.
+
+    ``scan()`` returns the candidate list (called again on each refresh),
+    ``render(items)`` prints the table, ``path_of(item)`` yields the device path
+    to return.
+
+    The loop accepts 'r' to re-scan. Without it, a reader plugged in — or a card
+    inserted — after the list was drawn stays invisible until you quit and start
+    the whole command over, which is a long way back when you've already picked
+    a model and firmware.
+    """
+    items = scan()
+    if not items:
+        sys.exit(color(empty_msg, C_RED))
+    render(items)
+    while True:
+        try:
+            sel = input(color("Select device number "
+                              "('r' to rescan, 'q' to quit): ", C_CYN)).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print(file=sys.stderr)
+            sys.exit("Aborted.")
+        if sel in ("q", "quit", ""):
+            sys.exit("Aborted.")
+        if sel in ("r", "refresh", "rescan"):
+            items = scan()
+            if not items:
+                print(color("  " + empty_msg, C_YEL), file=sys.stderr)
+            else:
+                render(items)
+            continue
+        if sel.isdigit() and int(sel) < len(items):
+            return path_of(items[int(sel)])
+        print(color("  invalid selection", C_RED), file=sys.stderr)
+
+
+def _render_candidates(cands):
     print(color("\nAttached removable storage:\n", C_CYN), file=sys.stderr)
     # Multi-slot readers expose one /dev/sdX per slot, all with the same
     # identity strings; number the slots so they can be told apart.
@@ -442,13 +476,13 @@ def choose_device():
         if r["warn"]:
             print(color(" " * sub + "⚠ " + r["warn"], C_YEL), file=sys.stderr)
     print(file=sys.stderr)
-    while True:
-        sel = input(color("Select device number (or 'q' to quit): ", C_CYN)).strip()
-        if sel.lower() in ("q", "quit", ""):
-            sys.exit("Aborted.")
-        if sel.isdigit() and int(sel) < len(cands):
-            return "/dev/" + cands[int(sel)]["name"]
-        print(color("  invalid selection", C_RED), file=sys.stderr)
+
+
+def choose_device():
+    return pick_device(
+        list_candidates, _render_candidates,
+        lambda d: "/dev/" + d["name"],
+        "No removable/USB disks found. Plug in the card and retry.")
 
 def device_label(dev):
     """Short, typeable name for a device, used in the ERASE confirmation.
