@@ -92,6 +92,9 @@ def _drive_number(dev):
 class WindowsPlatform(Platform):
     name = "windows"
 
+    def __init__(self):
+        self._held_locks = []   # [(handle_path, win_handle), ...]
+
     # -- privilege --------------------------------------------------------
     def is_admin(self):
         try:
@@ -213,11 +216,29 @@ class WindowsPlatform(Platform):
             num = _drive_number(dev)
         except ValueError:
             return []
+        # AccessPaths covers both drive letters (D:\) and volume GUID
+        # paths (\\?\Volume{...}\).  The old DriveLetter-only filter missed
+        # letterless volumes, so their sectors were never locked and raw
+        # writes failed with access-denied / bad-file-descriptor.
         txt = _powershell(
-            "Get-Partition -DiskNumber %d | Where-Object DriveLetter | "
-            "ForEach-Object { $_.DriveLetter }" % num)
-        return [("%s:" % c.strip(), "%s:\\" % c.strip())
-                for c in txt.splitlines() if c.strip()]
+            "Get-Partition -DiskNumber %d -ErrorAction SilentlyContinue"
+            " | ForEach-Object { foreach ($a in $_.AccessPaths) { $a } }"
+            % num)
+        seen = set()
+        results = []
+        for line in txt.splitlines():
+            p = line.strip()
+            if not p or p in seen:
+                continue
+            seen.add(p)
+            if len(p) >= 2 and p[1] == ':':
+                # Drive letter: D:\ -> ("D:", "D:\")
+                results.append((p[:2], p))
+            elif p.startswith('\\\\?\\'):
+                # Volume GUID: \\?\Volume{...}\ -> ("Volume{...}", path)
+                # _lock_volumes prepends \\.\ to build \\.\Volume{...}
+                results.append((p[4:].rstrip('\\'), p))
+        return results
 
     def validate_target(self, dev, dry_run):
         from .. import ipod_flash
@@ -232,19 +253,43 @@ class WindowsPlatform(Platform):
                 sys.exit(color("refusing: PhysicalDrive%d backs the running system." % num, red))
 
     # -- mutation around the raw write ------------------------------------
-    def unmount_all(self, dev, dry):
-        if dry:
-            return
+    def _lock_volumes(self, dev):
+        """Lock and dismount every volume on *dev*, holding the handles so
+        Windows cannot remount between write_layout and format_data.
+
+        Safe to call more than once: volumes already locked are skipped, and
+        volumes that appeared since the previous call (e.g. after an MBR
+        rewrite) are picked up."""
+        already = {v for v, _h in self._held_locks}
         for vol, _mp in self.device_mountpoints(dev):
+            handle_path = "\\\\.\\%s" % vol.rstrip("\\")
+            if handle_path in already:
+                continue
             try:
-                h = self._open_handle("\\\\.\\%s" % vol.rstrip("\\"), write=True)
+                h = self._open_handle(handle_path, write=True)
                 try:
                     self._ioctl(h, FSCTL_LOCK_VOLUME)
                     self._ioctl(h, FSCTL_DISMOUNT_VOLUME)
-                finally:
-                    ctypes.windll.kernel32.CloseHandle(h)
+                    self._held_locks.append((handle_path, h))
+                except OSError:
+                    _k32().CloseHandle(h)
             except OSError:
                 pass
+
+    def _release_locks(self):
+        """Close all held volume-lock handles."""
+        k = _k32()
+        for _vol, h in self._held_locks:
+            try:
+                k.CloseHandle(h)
+            except Exception:                           # noqa: BLE001
+                pass
+        self._held_locks = []
+
+    def unmount_all(self, dev, dry):
+        if dry:
+            return
+        self._lock_volumes(dev)
 
     def wipe_signatures(self, dev, dry):
         return  # raw zeroing in write_layout handles this
@@ -270,6 +315,7 @@ class WindowsPlatform(Platform):
             pass
 
     def eject(self, dev, dry):
+        self._release_locks()
         if dry:
             return
         try:
@@ -287,12 +333,12 @@ class WindowsPlatform(Platform):
         import msvcrt
         write = ("w" in mode or "+" in mode or "a" in mode)
         if write:
-            # FSCTL_LOCK_VOLUME only holds while the locking handle is open, so
-            # the dismount done before write_layout is already undone by now:
-            # writing the new MBR makes Windows rescan and re-mount the data
-            # partition, and it then refuses writes into those sectors. Dismount
-            # again immediately before each write open.
-            self.unmount_all(dev, False)
+            # Lock (and hold) every volume on this disk so Windows cannot
+            # remount between write_layout's MBR write and format_data's
+            # FAT32 write.  Handles are kept alive in self._held_locks and
+            # released in eject().  _lock_volumes is incremental — safe to
+            # call on every open.
+            self._lock_volumes(dev)
         h = self._open_handle(dev, write=write)
         fd = msvcrt.open_osfhandle(h, os.O_BINARY)
         return AlignedRawIO(os.fdopen(fd, mode, buffering=0))

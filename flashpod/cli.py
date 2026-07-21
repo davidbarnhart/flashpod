@@ -354,8 +354,18 @@ def _sudo_reexec(extra):
     """Re-exec this same flashpod under sudo with ``extra`` args appended
     (prompting for the password on a terminal). REPLACES the process and never
     returns on success; returns only if it can't elevate (non-tty / no sudo)."""
-    if os.name == "nt" or not sys.stdin.isatty():
-        return                                     # can't prompt — caller handles it
+    if not sys.stdin.isatty():
+        return
+    if os.name == "nt":
+        # Windows 11 24H2+ ships sudo.exe.  In "Inline" mode it elevates
+        # within the same console, preserving interactive prompts — unlike
+        # ShellExecute "runas" which opens a detached window.  The
+        # environment is inherited, so no env/PYTHONPATH dance needed.
+        cmd = ["sudo"] + _self_cmd() + extra
+        try:
+            sys.exit(subprocess.call(cmd))
+        except OSError:
+            return                                 # no sudo.exe — caller handles it
     # sudo resets the environment, so the FLASHPOD_* tuning knobs the user set
     # would be lost across elevation. Re-assert them in the child via `env`.
     passthru = ["%s=%s" % (k, v) for k, v in sorted(os.environ.items())
@@ -2424,16 +2434,15 @@ def main():
             return 0
         plat = platform.current()
         if not opts.dry_run and not plat.is_admin():
-            # Writing to a disk needs root — elevate via sudo (prompts for the
-            # password on a terminal) rather than just bailing, like the raw
-            # data commands do.
-            if os.name != "nt" and sys.stdin.isatty():
-                print("flashpod flash: writing to a disk needs root — "
-                      "elevating via sudo...", file=sys.stderr)
+            # Writing to a disk needs elevation — try sudo (prompts for
+            # credentials or shows a UAC dialog) rather than just bailing.
+            if sys.stdin.isatty():
+                role = "Administrator" if os.name == "nt" else "root"
+                print("flashpod flash: writing to a disk needs %s — "
+                      "elevating via sudo..." % role, file=sys.stderr)
                 _sudo_reexec(_cmd_args(opts))    # re-execs; returns only if sudo is missing
             msg = "flashpod flash: " + plat.privilege_hint()
-            if os.name != "nt":           # offer the exact sudo rerun on POSIX
-                msg += "\n  sudo " + " ".join(_self_cmd() + _cmd_args(opts))
+            msg += "\n  sudo " + " ".join(_self_cmd() + _cmd_args(opts))
             print(msg, file=sys.stderr)
             return 1
         max_data_gb = None
