@@ -402,7 +402,10 @@ def pick_device(scan, render, path_of, empty_msg):
 
     ``scan()`` returns the candidate list (called again on each refresh),
     ``render(items)`` prints the table, ``path_of(item)`` yields the device path
-    to return.
+    to return — or ``None`` for an entry that exists but can't be written, such
+    as the empty slot of a multi-slot card reader. Rejecting it here is much
+    kinder than letting it through: with no media, every downstream call fails
+    obscurely ("could not determine size", access denied) and reads as a bug.
 
     The loop accepts 'r' to re-scan. Without it, a reader plugged in — or a card
     inserted — after the list was drawn stays invisible until you quit and start
@@ -430,7 +433,13 @@ def pick_device(scan, render, path_of, empty_msg):
                 render(items)
             continue
         if sel.isdigit() and int(sel) < len(items):
-            return path_of(items[int(sel)])
+            path = path_of(items[int(sel)])
+            if path:
+                return path
+            print(color("  that slot is empty — insert a card and press 'r' "
+                        "to rescan, or pick another device", C_YEL),
+                  file=sys.stderr)
+            continue
         print(color("  invalid selection", C_RED), file=sys.stderr)
 
 
@@ -481,7 +490,7 @@ def _render_candidates(cands):
 def choose_device():
     return pick_device(
         list_candidates, _render_candidates,
-        lambda d: "/dev/" + d["name"],
+        lambda d: ("/dev/" + d["name"]) if int(d.get("size") or 0) else None,
         "No removable/USB disks found. Plug in the card and retry.")
 
 def device_label(dev):
@@ -795,7 +804,9 @@ def flash(device=None, firmware=None,
 
     total_sectors = plat.device_sectors(dev)
     if total_sectors <= 0:
-        sys.exit(color("could not determine size of %s" % dev, C_RED))
+        sys.exit(color("could not determine size of %s — is a card inserted? "
+                       "An empty slot in a multi-slot reader still appears as "
+                       "a disk, but reports size 0." % dev, C_RED))
     confirm(dev, total_sectors, assume_yes or dry_run, lba48, max_data_sectors)
     plat.unmount_all(dev, dry_run)
     write_layout(dev, fw, total_sectors, dry_run, do_format, lba48, max_data_sectors)
