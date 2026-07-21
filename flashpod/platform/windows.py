@@ -163,11 +163,22 @@ class WindowsPlatform(Platform):
                 print("  [%d] \\\\.\\PhysicalDrive%-3d %10s  %s (%s)" %
                       (i, num, ipod_flash.fmt_size(size), name.strip(), bus),
                       file=sys.stderr)
+                if not size:
+                    # A multi-slot reader shows one disk per slot; an empty one
+                    # reports size 0 / "No Media". Say so, or it reads as a
+                    # normal target and every later failure ("could not
+                    # determine size", access denied) looks like a flashpod bug.
+                    print(color("        no card inserted — empty reader slot",
+                                ipod_flash.C_YEL), file=sys.stderr)
             print(file=sys.stderr)
 
+        def to_path(d):
+            if not d[1]:
+                return None            # empty slot: rejected by pick_device
+            return "\\\\.\\PhysicalDrive%d" % d[0]
+
         return ipod_flash.pick_device(
-            self._removable_disks, render,
-            lambda d: "\\\\.\\PhysicalDrive%d" % d[0],
+            self._removable_disks, render, to_path,
             "No removable disks found. Plug in the card and retry.")
 
     def device_sectors(self, dev):

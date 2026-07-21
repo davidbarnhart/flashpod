@@ -85,9 +85,13 @@ class MacOSPlatform(Platform):
                       (i, d, ipod_flash.fmt_size(size), name), file=sys.stderr)
             print(file=sys.stderr)
 
+        def to_path(item):
+            d, info = item
+            size = int(info.get("TotalSize") or info.get("Size") or 0)
+            return ("/dev/" + d) if size else None   # 0 = empty reader slot
+
         return ipod_flash.pick_device(
-            self._external_disks, render,
-            lambda item: "/dev/" + item[0],
+            self._external_disks, render, to_path,
             "No external disks found. Plug in the card reader and retry.")
 
     def device_sectors(self, dev):
