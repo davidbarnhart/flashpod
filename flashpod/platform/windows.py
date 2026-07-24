@@ -29,6 +29,7 @@ IOCTL_DISK_UPDATE_PROPERTIES = 0x00070140
 IOCTL_STORAGE_EJECT_MEDIA = 0x002D4808
 FSCTL_LOCK_VOLUME = 0x00090018
 FSCTL_DISMOUNT_VOLUME = 0x00090020
+IOCTL_VOLUME_OFFLINE = 0x0056C00C
 
 GENERIC_READ = 0x80000000
 GENERIC_WRITE = 0x40000000
@@ -38,6 +39,81 @@ OPEN_EXISTING = 3
 # INVALID_HANDLE_VALUE is (HANDLE)-1, so its unsigned value is pointer-sized:
 # 2**64-1 on 64-bit Python, 2**32-1 on 32-bit. Derive it rather than assuming.
 INVALID_HANDLE_VALUE = (1 << (8 * ctypes.sizeof(ctypes.c_void_p))) - 1
+
+FILE_BEGIN = 0
+
+
+class WinHandleIO(object):
+    """Raw binary I/O directly on a Windows HANDLE via ctypes.
+
+    Bypasses the CRT file-descriptor layer (msvcrt.open_osfhandle / os.fdopen)
+    which can produce spurious EBADF on physical-drive handles after large
+    writes.  All I/O goes through ReadFile / WriteFile / SetFilePointerEx.
+    """
+
+    def __init__(self, handle):
+        self._handle = handle
+        self._closed = False
+
+    def seek(self, offset, whence=0):
+        k = _k32()
+        new_pos = ctypes.c_longlong()
+        ok = k.SetFilePointerEx(
+            ctypes.c_void_p(self._handle),
+            ctypes.c_longlong(offset),
+            ctypes.byref(new_pos),
+            whence,
+        )
+        if not ok:
+            raise OSError("SetFilePointerEx failed: %s"
+                          % ctypes.WinError(k.GetLastError()))
+        return new_pos.value
+
+    def tell(self):
+        return self.seek(0, 1)
+
+    def read(self, n):
+        k = _k32()
+        buf = ctypes.create_string_buffer(n)
+        read = ctypes.c_ulong()
+        ok = k.ReadFile(self._handle, buf, n, ctypes.byref(read), None)
+        if not ok:
+            raise OSError("ReadFile failed: %s"
+                          % ctypes.WinError(k.GetLastError()))
+        return buf.raw[:read.value]
+
+    def write(self, data):
+        k = _k32()
+        mv = memoryview(data)
+        total = 0
+        while total < len(mv):
+            chunk = mv[total:total + (16 << 20)]
+            written = ctypes.c_ulong()
+            ok = k.WriteFile(self._handle, bytes(chunk), len(chunk),
+                             ctypes.byref(written), None)
+            if not ok:
+                raise OSError("WriteFile failed: %s"
+                              % ctypes.WinError(k.GetLastError()))
+            total += written.value
+        return total
+
+    def flush(self):
+        _k32().FlushFileBuffers(self._handle)
+
+    def fileno(self):
+        raise AttributeError("WinHandleIO has no file descriptor")
+
+    def close(self):
+        if not self._closed:
+            self._closed = True
+            _k32().CloseHandle(self._handle)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
 
 
 def _k32():
@@ -66,6 +142,16 @@ def _k32():
                                   ctypes.c_void_p, ctypes.c_uint32,
                                   ctypes.POINTER(ctypes.c_ulong),
                                   ctypes.c_void_p]
+    k.SetFilePointerEx.argtypes = [ctypes.c_void_p, ctypes.c_longlong,
+                                   ctypes.POINTER(ctypes.c_longlong),
+                                   ctypes.c_uint32]
+    k.ReadFile.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
+                           ctypes.c_uint32, ctypes.POINTER(ctypes.c_ulong),
+                           ctypes.c_void_p]
+    k.WriteFile.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
+                            ctypes.c_uint32, ctypes.POINTER(ctypes.c_ulong),
+                            ctypes.c_void_p]
+    k.FlushFileBuffers.argtypes = [ctypes.c_void_p]
     return k
 
 
@@ -254,12 +340,12 @@ class WindowsPlatform(Platform):
 
     # -- mutation around the raw write ------------------------------------
     def _lock_volumes(self, dev):
-        """Lock and dismount every volume on *dev*, holding the handles so
-        Windows cannot remount between write_layout and format_data.
+        """Lock, dismount, and take offline every volume on *dev*.
 
-        Safe to call more than once: volumes already locked are skipped, and
-        volumes that appeared since the previous call (e.g. after an MBR
-        rewrite) are picked up."""
+        IOCTL_VOLUME_OFFLINE tells the volume manager to release its
+        claim on the partition's sectors, so subsequent PhysicalDrive
+        writes don't get ACCESS DENIED.  The handle is held open to
+        prevent Windows from re-onlining the volume while we write."""
         already = {v for v, _h in self._held_locks}
         for vol, _mp in self.device_mountpoints(dev):
             handle_path = "\\\\.\\%s" % vol.rstrip("\\")
@@ -270,6 +356,10 @@ class WindowsPlatform(Platform):
                 try:
                     self._ioctl(h, FSCTL_LOCK_VOLUME)
                     self._ioctl(h, FSCTL_DISMOUNT_VOLUME)
+                    try:
+                        self._ioctl(h, IOCTL_VOLUME_OFFLINE)
+                    except OSError:
+                        pass
                     self._held_locks.append((handle_path, h))
                 except OSError:
                     _k32().CloseHandle(h)
@@ -295,12 +385,37 @@ class WindowsPlatform(Platform):
         return  # raw zeroing in write_layout handles this
 
     def reread_partition_table(self, dev):
+        self._release_locks()  # close volume handles before re-reading
+        try:
+            _powershell("Update-Disk -Number %d" % _drive_number(dev))
+        except (ValueError, OSError):
+            pass
+
+    def invalidate_cached_partitions(self, dev):
+        """Zero sector 0, release volume locks, and re-read the partition
+        table so the volume manager drops old sector claims.
+
+        Must run BEFORE the main write handle is opened: the volume locks
+        authorise raw writes, but only to sectors outside the old partition.
+        Zeroing the MBR and telling Windows to re-read it causes the volume
+        manager to destroy the old volume objects entirely, so a fresh
+        handle can write anywhere without sector-range restrictions."""
+        if os.path.isfile(dev):
+            return
+        try:
+            with self.open_raw(dev, "r+b") as f:
+                f.seek(0)
+                f.write(b"\x00" * SECTOR)
+                f.flush()
+        except OSError:
+            pass
+        self._release_locks()
         try:
             h = self._open_handle(dev, write=True)
             try:
                 self._ioctl(h, IOCTL_DISK_UPDATE_PROPERTIES)
             finally:
-                ctypes.windll.kernel32.CloseHandle(h)
+                _k32().CloseHandle(h)
         except OSError:
             pass
 
@@ -318,30 +433,16 @@ class WindowsPlatform(Platform):
         self._release_locks()
         if dry:
             return
-        try:
-            h = self._open_handle(dev, write=True)
-            try:
-                self._ioctl(h, IOCTL_STORAGE_EJECT_MEDIA)
-            finally:
-                ctypes.windll.kernel32.CloseHandle(h)
-        except OSError:
-            pass
+        self.flush_buffers(dev)
 
     def open_raw(self, dev, mode):
         if os.path.isfile(dev):
             return open(dev, mode)
-        import msvcrt
         write = ("w" in mode or "+" in mode or "a" in mode)
         if write:
-            # Lock (and hold) every volume on this disk so Windows cannot
-            # remount between write_layout's MBR write and format_data's
-            # FAT32 write.  Handles are kept alive in self._held_locks and
-            # released in eject().  _lock_volumes is incremental — safe to
-            # call on every open.
             self._lock_volumes(dev)
         h = self._open_handle(dev, write=write)
-        fd = msvcrt.open_osfhandle(h, os.O_BINARY)
-        return AlignedRawIO(os.fdopen(fd, mode, buffering=0))
+        return AlignedRawIO(WinHandleIO(h))
 
     # -- sync-path mount detection ----------------------------------------
     def mounted_filesystems(self):

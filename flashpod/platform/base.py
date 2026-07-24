@@ -173,6 +173,13 @@ class Platform(object):
         """Tell the OS to re-read ``dev``'s partition table after writing."""
         raise NotImplementedError
 
+    def invalidate_cached_partitions(self, dev):
+        """After zeroing the partition table, tell the OS to drop cached
+        volume state so raw writes to any sector succeed.  No-op except on
+        Windows where the volume manager blocks writes to sectors claimed
+        by online volumes."""
+        pass
+
     def flush_buffers(self, dev):
         """Flush OS caches for ``dev`` so a subsequent read hits the media."""
         raise NotImplementedError

@@ -49,44 +49,33 @@ class BlockDev(object):
     sectors regardless of whether it opened a whole disk or a partition node.
     """
 
-    def __init__(self, path, part_start=0, max_xfer=8, writable=False):
+    def __init__(self, path=None, part_start=0, max_xfer=8, writable=False,
+                 fileobj=None):
         self.part_start = part_start
-        # One transfer cap for reads AND writes. We measured (2026-06-24) that
-        # the gen-1 FireWire bridge is bandwidth-limited (~270 KiB/s), so larger
-        # writes don't help — and it corrupts transfers above the read-safe
-        # size in BOTH directions. So writes just use the proven-safe read cap.
         self.max_xfer = max_xfer
-        flags = os.O_RDWR if writable else os.O_RDONLY
-        # On Linux a plain open of a BLOCK device is BUFFERED: the page cache
-        # re-batches our small max_xfer transfers into large writeback flushes
-        # (fsync) and prefetches read_ahead_kb on reads — exactly the big
-        # transfers the gen-1 FireWire bridge corrupts/crashes on. So without
-        # O_DIRECT the raw path silently depends on the pinned host queue.
-        # O_DIRECT bypasses the page cache entirely: every transfer reaches the
-        # device at our aligned <= max_xfer size, no read-ahead, no writeback
-        # merge — making this driver genuinely unbuffered on Linux, the way
-        # /dev/rdiskN already is on macOS. We use it only for real block
-        # devices: regular image files (the self-test, often on tmpfs) reject
-        # O_DIRECT with EINVAL, and macOS has no O_DIRECT (it opens the rdisk
-        # char device, which is already unbuffered).
         self._direct = False
         self._bounce = None
+        self._fobj = None
+        self._fd = None
+        if fileobj is not None:
+            self._fobj = fileobj
+            return
+        flags = os.O_RDWR if writable else os.O_RDONLY
         if hasattr(os, "O_DIRECT") and stat.S_ISBLK(os.stat(path).st_mode):
             try:
                 self._fd = os.open(path, flags | os.O_DIRECT)
                 self._direct = True
             except OSError:
-                self._fd = os.open(path, flags)   # fall back to buffered
+                self._fd = os.open(path, flags)
         else:
             self._fd = os.open(path, flags)
         if self._direct:
-            # O_DIRECT requires the offset, the length AND the buffer address
-            # to be sector-aligned. An anonymous mmap is page-aligned and our
-            # transfers are <= max_xfer sectors, so one page-aligned bounce
-            # buffer serves every transfer.
             self._bounce = mmap.mmap(-1, self.max_xfer * SECTOR)
 
     def close(self):
+        if self._fobj is not None:
+            self._fobj.close()
+            self._fobj = None
         if self._fd is not None:
             os.close(self._fd)
             self._fd = None
@@ -109,8 +98,14 @@ class BlockDev(object):
             n = min(self.max_xfer, remaining)
             want = n * SECTOR
             off = abs_lba * SECTOR
-            if self._direct:
-                # Aligned, page-cache-bypassing read into the bounce buffer.
+            if self._fobj is not None:
+                self._fobj.seek(off)
+                buf = self._fobj.read(want)
+                if len(buf) != want:
+                    raise IOError("short read at LBA %d (%d/%d)"
+                                  % (abs_lba, len(buf), want))
+                out += buf
+            elif self._direct:
                 got = os.preadv(self._fd, [memoryview(self._bounce)[:want]], off)
                 if got != want:
                     raise IOError("short read at LBA %d (%d/%d)"
@@ -141,9 +136,10 @@ class BlockDev(object):
             nbytes = n * SECTOR
             dst = abs_lba * SECTOR
             chunk = data[off:off + nbytes]
-            if self._direct:
-                # Copy into the aligned bounce buffer, then write it straight
-                # to the device (no page cache, so no large writeback later).
+            if self._fobj is not None:
+                self._fobj.seek(dst)
+                wrote = self._fobj.write(chunk)
+            elif self._direct:
                 self._bounce[:nbytes] = chunk
                 wrote = os.pwritev(
                     self._fd, [memoryview(self._bounce)[:nbytes]], dst)
@@ -156,10 +152,10 @@ class BlockDev(object):
             off += nbytes
 
     def sync(self):
-        # With O_DIRECT every write already reached the device, so this only
-        # issues a small cache-flush command (no bulk transfer the bridge could
-        # choke on); on the buffered path it is what forces the writeback.
-        os.fsync(self._fd)
+        if self._fobj is not None:
+            self._fobj.flush()
+        else:
+            os.fsync(self._fd)
 
 
 class Fat32(object):
