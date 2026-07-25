@@ -56,8 +56,20 @@ TAIL_RESERVE  = 2048             # sectors left unallocated at the disk end
 C_RED, C_YEL, C_GRN, C_CYN, C_DIM, C_RST = (
     "\033[31m", "\033[33m", "\033[32m", "\033[36m", "\033[2m", "\033[0m")
 
+_ANSI_OK = True
+if sys.platform == "win32":
+    try:
+        import ctypes as _ct
+        _h = _ct.windll.kernel32.GetStdHandle(-12)  # STD_ERROR_HANDLE
+        _m = _ct.c_ulong()
+        _ct.windll.kernel32.GetConsoleMode(_h, _ct.byref(_m))
+        if not _ct.windll.kernel32.SetConsoleMode(_h, _m.value | 0x0004):
+            _ANSI_OK = False
+    except Exception:
+        _ANSI_OK = False
+
 def color(s, c):
-    return c + s + C_RST if sys.stderr.isatty() else s
+    return c + s + C_RST if _ANSI_OK and sys.stderr.isatty() else s
 
 def implausible_capacity(total_sectors):
     """True if the device is larger than an early iPod can address (LBA28 /
@@ -598,21 +610,23 @@ def write_layout(dev, fw_bytes, total_sectors, dry, do_format, lba48=False,
     plat = _plat.current()
     # 1. kill any existing partition signatures (MBR/GPT/FAT)
     plat.wipe_signatures(dev, False)
-    with plat.open_raw(dev, "r+b") as f:
-        # zero the leading area (old GPT/MBR region) and the tail (GPT backup)
-        f.seek(0); f.write(b"\x00" * (data_start * SECTOR))
-        f.seek(max(0, total_sectors - 34) * SECTOR); f.write(b"\x00" * (34 * SECTOR))
-        # 2. partition table (MBR)
-        f.seek(0); f.write(header)
-        # 3. firmware image at the firmware partition's start (sector 63)
-        f.seek(FW_START * SECTOR); f.write(fw_bytes)
-        f.flush(); os.fsync(f.fileno())
-    print(color("  wrote MBR partition table + firmware", C_GRN), file=sys.stderr)
-    # 4. data filesystem written straight into the data region
+    plat.invalidate_cached_partitions(dev)
+    f = plat.open_raw(dev, "r+b")
+    # zero the leading area (old GPT/MBR region) and the tail (GPT backup)
+    f.seek(0); f.write(b"\x00" * (data_start * SECTOR))
+    f.seek(max(0, total_sectors - 34) * SECTOR); f.write(b"\x00" * (34 * SECTOR))
+    # 2. firmware image at the firmware partition's start (sector 63)
+    f.seek(FW_START * SECTOR); f.write(fw_bytes)
+    # 3. data filesystem — written BEFORE the MBR so Windows can't see a
+    #    valid partition table and auto-mount the data region mid-write
     if do_format:
-        format_data(dev, data_start, data_blocks)
-    # 5. re-read the partition table so the OS sees the new map.
-    plat.reread_partition_table(dev)
+        format_data(f, dev, data_start, data_blocks)
+    # 4. MBR is deferred: written by flash() AFTER the before_eject callback
+    #    so the post-flash init can write to the FAT32 without the volume
+    #    manager blocking access (no valid MBR = no volume discovery).
+    f.flush()
+    print(color("  wrote MBR partition table + firmware", C_GRN), file=sys.stderr)
+    return f, header, data_start
 
 def fat_sectors_per_cluster(data_blocks):
     """Largest Apple-style cluster size that still yields a VALID FAT32.
@@ -627,14 +641,13 @@ def fat_sectors_per_cluster(data_blocks):
         spc //= 2
     return spc
 
-def format_data(dev, data_start, data_blocks):
+def format_data(f, dev, data_start, data_blocks):
     """Format the data partition FAT32 in pure Python — no mkfs, no losetup.
     Writes the filesystem structures straight onto the device at the partition
     offset, so this is identical on Linux, macOS, and Windows."""
     spc = fat_sectors_per_cluster(data_blocks)
     try:
-        with _plat.current().open_raw(dev, "r+b") as f:
-            geo = fat32.format_fat32(f, data_start, data_blocks, spc, label="IPOD")
+        geo = fat32.format_fat32(f, data_start, data_blocks, spc, label="IPOD")
     except ValueError as e:
         print(color("  %s - skipping data format; the iPod will likely reject "
                     "the card." % e, C_YEL), file=sys.stderr)
@@ -809,10 +822,18 @@ def flash(device=None, firmware=None,
                        "a disk, but reports size 0." % dev, C_RED))
     confirm(dev, total_sectors, assume_yes or dry_run, lba48, max_data_sectors)
     plat.unmount_all(dev, dry_run)
-    write_layout(dev, fw, total_sectors, dry_run, do_format, lba48, max_data_sectors)
+    result = write_layout(dev, fw, total_sectors, dry_run, do_format, lba48, max_data_sectors)
     verify_firmware(dev, fw, dry_run)
-    if before_eject and not dry_run:
-        before_eject(dev)
+    raw_fobj, mbr_header, data_start = result if result else (None, None, None)
+    try:
+        if before_eject and not dry_run:
+            before_eject(dev, raw_fobj, data_start)
+    finally:
+        if raw_fobj:
+            raw_fobj.seek(0); raw_fobj.write(mbr_header)
+            raw_fobj.flush()
+            raw_fobj.close()
+    plat.reread_partition_table(dev)
     plat.eject(dev, dry_run)
     print(color("\nDone. %s is ready — insert it into the iPod." % dev, C_GRN), file=sys.stderr)
     return 0
