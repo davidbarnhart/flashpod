@@ -48,6 +48,7 @@ from . import ipod_flash
 from . import itunesdb
 from . import platform
 from . import resources
+from . import __version__
 
 FIRMWARE_MANIFEST = resources.firmware_manifest()
 
@@ -326,7 +327,9 @@ def open_raw_fat(device, writable=False):
     plat = platform.current()
     max_xfer = _effective_xfer()
     node = plat.raw_read_node(device)
-    dev = fatfs.BlockDev(node, part_start=0, max_xfer=max_xfer, writable=writable)
+    mode = "r+b" if writable else "rb"
+    fobj = plat.open_raw(node, mode)
+    dev = fatfs.BlockDev(part_start=0, max_xfer=max_xfer, fileobj=fobj)
     boot = dev.read(0, 1)
     is_fat = boot[82:85] == b"FAT" and boot[510:512] == b"\x55\xaa"
     if not is_fat and boot[510:512] == b"\x55\xaa":
@@ -1851,7 +1854,8 @@ def cmd_add(mount, paths):
         load=lambda: load_library(mount),
         copy=lambda path, progress: itunesdb.copy_to_ipod(mount, path,
                                                            progress=progress),
-        save=lambda lib: (itunesdb.save(lib, mount), os.sync()),
+        save=lambda lib: (itunesdb.save(lib, mount),
+                          os.sync() if hasattr(os, "sync") else None),
         free_space=lambda: shutil.disk_usage(mount).free)
 
 
@@ -1884,7 +1888,8 @@ def cmd_rebuild(mount, name=None):
     win.clear()
     lib = _library_from_located(name or "iPod", located)
     itunesdb.save(lib, mount)
-    os.sync()
+    if hasattr(os, "sync"):
+        os.sync()
     n = len(lib.tracks)
     print(f"Rebuilt the iTunesDB on {mount}: {n} "
           f"track{'s' if n != 1 else ''} recovered from the iPod.")
@@ -2306,12 +2311,49 @@ def ask_yes(prompt, default_yes=True):
     return ans in ("y", "yes", "aye", "yea", "arr")
 
 
-def offer_init_after_flash(dev):
+def offer_init_after_flash(dev, raw_fobj=None, data_start=None):
     """Post-flash hook (ipod_flash.flash before_eject): offer to run init on
     the freshly flashed card right away, so it leaves the flash step fully
     usable. Must run before eject — eject powers the reader off and the
-    /dev node disappears until replug. Mounts the data partition at a temp
-    dir (we are root here), inits, unmounts; the normal eject follows."""
+    /dev node disappears until replug."""
+    if sys.platform == "win32":
+        _offer_init_after_flash_win(dev, raw_fobj, data_start)
+    else:
+        _offer_init_after_flash_unix(dev)
+
+
+def _offer_init_after_flash_win(dev, raw_fobj=None, data_start=None):
+    """Windows: init + add music via the raw FAT driver — no OS mount needed.
+    Reuses the still-open write handle from the flash (MBR not yet written)
+    so Windows can't discover the partition and block our writes."""
+    if raw_fobj is None or data_start is None:
+        target = open_raw_target(dev)
+    else:
+        max_xfer = _effective_xfer()
+        bdev = fatfs.BlockDev(part_start=data_start, max_xfer=max_xfer,
+                              fileobj=raw_fobj)
+        target = RawTarget(fatfs.Fat32(bdev), dev)
+    if target is None:
+        print("  could not reopen %s; run `flashpod init --raw %s` later."
+              % (dev, dev), file=sys.stderr)
+        return
+    if not ask_yes("\nThe card still needs the iPod database before it can "
+                   "take music (\"flashpod init\").\n"
+                   f"Run init on {dev} now? [Y/n] "):
+        print(f"Skipped. Later: run `flashpod init --raw {dev}`.",
+              file=sys.stderr)
+        return
+    target.init_structure("iPod")
+    print(f"Initialized iPod directory structure on {dev}")
+    if ask_yes("\nMusic can be loaded onto the card now, or later "
+               "when it is in the iPod.\n"
+               "Load music onto the card now? [Y/n] "):
+        cmd_add_raw(target, [prompt_for_path()])
+
+
+def _offer_init_after_flash_unix(dev):
+    """Linux/macOS: mount the data partition at a temp dir (we are root here),
+    init, unmount; the normal eject follows."""
     part = dev + ("p2" if dev[-1].isdigit() else "2")
     if not os.path.exists(part):
         return
@@ -2349,6 +2391,8 @@ def main():
     parser = argparse.ArgumentParser(
         prog="flashpod",
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--version", action="version",
+                        version="%(prog)s " + __version__)
     parser.add_argument("--mount", default=None,
                         help="iPod mountpoint (default: auto-detect from "
                              "mounted filesystems)")
