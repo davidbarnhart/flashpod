@@ -83,7 +83,14 @@ class FakePlat:
 
 
 def drive(node, exists=True, mounts=None, answers=("y", "n")):
-    """Run offer_init_after_flash, returning the recorded events."""
+    """Run the Unix arm of the init offer, returning the recorded events.
+
+    Calls _offer_init_after_flash_unix directly rather than the public
+    dispatcher: since #54 the dispatcher forks on sys.platform, so going
+    through it would run the Windows raw-FAT path on a Windows runner and
+    never reach the partition-naming logic these cases exist to check.
+    t_dispatch_by_platform covers the routing itself.
+    """
     events = []
     it = iter(answers)
 
@@ -95,7 +102,7 @@ def drive(node, exists=True, mounts=None, answers=("y", "n")):
     cli.itunesdb.init_ipod = lambda mnt, name: events.append(("init", mnt))
     cli.subprocess.run = lambda cmd, **kw: events.append((cmd[0], list(cmd)[1:]))
     try:
-        cli.offer_init_after_flash("/dev/fake")
+        cli._offer_init_after_flash_unix("/dev/fake")
     finally:
         cli.os.path.exists = _real_exists
     return events
@@ -137,6 +144,29 @@ def t_declining_skips_init():
     assert not any(e[0] == "init" for e in ev), "init ran after declining: %r" % (ev,)
 
 
+def t_dispatch_by_platform():
+    """The public hook routes to the raw-FAT path on Windows, mount elsewhere.
+
+    #54 split offer_init_after_flash in two; nothing covered the fork itself.
+    Windows must NOT take the mount path (it never mounts -- it writes through
+    the still-open handle), and Linux/macOS must not take the raw-FAT one.
+    """
+    calls = []
+    saved = (cli._offer_init_after_flash_win, cli._offer_init_after_flash_unix,
+             cli.sys.platform)
+    cli._offer_init_after_flash_win = lambda d, r=None, s=None: calls.append("win")
+    cli._offer_init_after_flash_unix = lambda d: calls.append("unix")
+    try:
+        for plat in ("win32", "darwin", "linux"):
+            cli.sys.platform = plat
+            cli.offer_init_after_flash("/dev/fake")
+    finally:
+        (cli._offer_init_after_flash_win, cli._offer_init_after_flash_unix,
+         cli.sys.platform) = saved
+    assert calls == ["win", "unix", "unix"], \
+        "dispatcher routed wrong: %r (want win, unix, unix)" % (calls,)
+
+
 print("post-flash init offer")
 for name, fn in [
     ("macOS names slices sN", t_macos_names_slices),
@@ -148,6 +178,7 @@ for name, fn in [
     ("mount argv comes from the platform", t_mount_command_comes_from_platform),
     ("reuses an existing mount", t_reuses_existing_mount),
     ("declining skips init", t_declining_skips_init),
+    ("dispatcher routes win -> raw-FAT, unix -> mount", t_dispatch_by_platform),
 ]:
     check(name, fn)
 
