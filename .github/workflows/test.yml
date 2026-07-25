@@ -39,9 +39,12 @@ jobs:
         os:
           - ubuntu-latest
           - windows-latest
-          - macos-latest      # arm64
-          - macos-13          # last Intel runner; closest to the Macs that
-                              # actually have FireWire. Retire when GitHub does.
+          - macos-latest      # arm64; the only macOS runner we can actually get
+          # macos-13 (the last Intel runner) was tried and dropped: the job sat
+          # queued for 7+ hours without ever being allocated, which blocks the
+          # whole run from completing. It was only ever extra confirmation --
+          # the macOS coverage that matters is the diskutil backend, and
+          # macos-latest exercises that. Revisit only if Intel capacity returns.
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
