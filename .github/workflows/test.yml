@@ -1,0 +1,83 @@
+name: test
+
+# Runs on every push and pull request — unlike release.yml, which only fires on
+# a `v*` tag or a manual dispatch and therefore cannot catch a regression until
+# release time.
+#
+# macOS is covered HERE even though release.yml deliberately does not build a
+# macOS binary (the ship target is OS X 10.8, which no runner supports). The
+# distinction matters: we cannot BUILD for 10.8 in CI, but we can and must
+# EXERCISE the macOS backend, which drives `diskutil` through its command line.
+# A `-plist` argument-order bug shipped precisely because no runner ever ran
+# that code — see scripts/test_macos_platform.py.
+
+on:
+  push:
+    branches: ["**"]          # tags are release.yml's job, not this one
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  compat:
+    name: py36 compatibility
+    runs-on: ubuntu-latest     # source-only grep; one run covers every platform
+    steps:
+      - uses: actions/checkout@v5
+      - run: sh scripts/check-py36-compat.sh
+
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest      # arm64
+          - macos-13          # last Intel runner; closest to the Macs that
+                              # actually have FireWire. Retire when GitHub does.
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install mutagen
+
+      - name: Self-test (layout + checksum maths, no device)
+        shell: bash
+        run: python -m flashpod flash --self-test
+
+      - name: Dry-run against an image (exercises the firmware download)
+        shell: bash
+        run: |
+          python -c "open('dummy.img','wb').truncate(64*1024*1024)"
+          python -m flashpod flash dummy.img --dry-run --yes
+
+      - name: Multi-iPod detection logic
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_multi_ipod_detect.py
+
+      - name: Firmware is resolved before sudo elevation
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_flash_preelevation.py
+
+      - name: Post-flash init offer (partition naming per platform)
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_post_flash_init_offer.py
+
+      - name: macOS backend against live diskutil
+        if: runner.os == 'macOS'
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_macos_platform.py
