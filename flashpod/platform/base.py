@@ -153,6 +153,23 @@ class Platform(object):
         ``dev``; empty if none."""
         raise NotImplementedError
 
+    def partition_node(self, dev, index):
+        """Device node for 1-based partition ``index`` of whole disk ``dev``,
+        or None where the OS exposes no such node.
+
+        Naming is per-OS and NOT interchangeable -- Linux appends ``2`` (or
+        ``p2`` after a trailing digit, e.g. mmcblk0p2) while macOS always
+        appends ``s2``. Building it inline is how the post-flash init offer
+        silently skipped itself on macOS: it looked for /dev/disk3p2, which
+        never exists there."""
+        raise NotImplementedError
+
+    def fat_mount_cmd(self, part, mnt):
+        """argv that mounts the FAT partition ``part`` at ``mnt``, or None if
+        this platform can't. Linux's mount(8) probes the type itself; macOS
+        needs it named (``-t msdos``)."""
+        raise NotImplementedError
+
     def validate_target(self, dev, dry_run):
         """Safety gate before writing: confirm ``dev`` exists, is a whole
         disk (not a partition), and is not the disk backing the running

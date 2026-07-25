@@ -19,8 +19,15 @@ from .base import Platform, AlignedRawIO, Unsupported, SECTOR
 
 
 def _diskutil_plist(args):
-    """Run `diskutil <args>` and parse its plist stdout into a dict."""
-    out = subprocess.run(["diskutil"] + args + ["-plist"],
+    """Run `diskutil <verb> -plist [operands]` and parse its plist stdout.
+
+    ``-plist`` has to sit immediately after the verb, not at the end of the
+    line: `list` and `info` read a trailing argument as the device to act on,
+    so appending the flag makes diskutil look for a disk named "-plist" and
+    fail ("Could not find disk for -plist"). Only the bare `list` form
+    survives being appended, since it has no operand to be confused with.
+    """
+    out = subprocess.run(["diskutil", args[0], "-plist"] + list(args[1:]),
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if out.returncode != 0 or not out.stdout:
         raise OSError("diskutil %s failed: %s"
@@ -119,6 +126,16 @@ class MacOSPlatform(Platform):
             if base == disk or base.startswith(disk + "s"):
                 out.append((d, mp))
         return out
+
+    def partition_node(self, dev, index):
+        # Always 'sN' here -- macOS has no 'pN' nodes at all, so the Linux
+        # convention silently yields a path that can never exist.
+        return "%ss%d" % (dev, index)
+
+    def fat_mount_cmd(self, part, mnt):
+        # mount(8) on macOS will not probe an unmounted FAT slice; name the
+        # filesystem or it fails with "unknown special file or file system".
+        return ["mount", "-t", "msdos", part, mnt]
 
     def validate_target(self, dev, dry_run):
         from .. import ipod_flash

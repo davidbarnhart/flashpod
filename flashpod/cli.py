@@ -185,6 +185,16 @@ def choose_firmware(manifest, model=None):
 
 
 def _firmware_cache_dir():
+    """Where downloaded firmware is cached.
+
+    `flash` resolves its firmware before elevating (see main()), so the normal
+    path reaches this as the invoking user and caches in their home. Running
+    `sudo flashpod flash` yourself instead does the download as root, which
+    caches somewhere else -- /root/.cache on Linux, and as root-owned files in
+    your own ~/.cache on macOS, where sudo preserves HOME. That path is not a
+    documented way to use flashpod; prefer plain `flashpod flash` and let it
+    elevate itself.
+    """
     base = os.environ.get("XDG_CACHE_HOME") or \
         os.path.join(os.path.expanduser("~"), ".cache")
     return os.path.join(base, "flashpod", "firmware")
@@ -1335,6 +1345,12 @@ def _cmd_args(opts):
             a.append(opts.device)
         if getattr(opts, "firmware", None):
             a += ["--firmware", opts.firmware]
+        # main() resolves the firmware before elevating and writes the result
+        # back onto opts, so this carries the caller's --max-data-gb AND any
+        # cap the chosen manifest entry set -- the child takes the --firmware
+        # path, where the entry (and its cap) is no longer consulted.
+        if getattr(opts, "max_data_gb", None) is not None:
+            a += ["--max-data-gb", str(opts.max_data_gb)]
         if getattr(opts, "yes", False):
             a.append("--yes")
         if getattr(opts, "no_format", False):
@@ -2311,9 +2327,18 @@ def offer_init_after_flash(dev):
     the freshly flashed card right away, so it leaves the flash step fully
     usable. Must run before eject — eject powers the reader off and the
     /dev node disappears until replug. Mounts the data partition at a temp
-    dir (we are root here), inits, unmounts; the normal eject follows."""
-    part = dev + ("p2" if dev[-1].isdigit() else "2")
-    if not os.path.exists(part):
+    dir (we are root here), inits, unmounts; the normal eject follows.
+
+    Partition naming and the mount invocation both come from the platform
+    backend: hardcoding Linux's here made this hook skip itself in silence on
+    macOS, which names the slice /dev/diskNs2 rather than /dev/diskNp2 and
+    needs mount(8) told the filesystem type."""
+    plat = platform.current()
+    try:
+        part = plat.partition_node(dev, 2)          # 2 = the FAT32 data partition
+    except NotImplementedError:
+        part = None
+    if not part or not os.path.exists(part):
         return
     if not ask_yes("\nThe card still needs the iPod database before it can "
                    "take music (\"flashpod init\").\n"
@@ -2321,10 +2346,25 @@ def offer_init_after_flash(dev):
         print("Skipped. Later: mount the card and run `flashpod init`.",
               file=sys.stderr)
         return
+
+    # macOS re-probes and auto-mounts the fresh FAT32 the moment the partition
+    # table is re-read, so the slice is often already mounted under /Volumes.
+    # Reuse that rather than mounting it a second time (which fails, busy) --
+    # and leave a mount we did not make alone afterwards.
+    existing = [mp for p, mp in plat.device_mountpoints(part)
+                if os.path.basename(p) == os.path.basename(part)]
     import tempfile
-    mnt = tempfile.mkdtemp(prefix="flashpod-init-")
+    mnt = existing[0] if existing else tempfile.mkdtemp(prefix="flashpod-init-")
+    ours = not existing
     try:
-        _run_quiet_mount(["mount", part, mnt], check=True)
+        if ours:
+            cmd = plat.fat_mount_cmd(part, mnt)
+            if not cmd:
+                print("init skipped: cannot mount %s on this platform; mount "
+                      "the card and run `flashpod init` instead." % part,
+                      file=sys.stderr)
+                return
+            _run_quiet_mount(cmd, check=True)
         try:
             itunesdb.init_ipod(mnt, "iPod")
             print(f"Initialized iPod directory structure on {part}")
@@ -2334,15 +2374,17 @@ def offer_init_after_flash(dev):
                 cmd_add(mnt, [prompt_for_path()])
             subprocess.run(["sync"], check=False)
         finally:
-            subprocess.run(["umount", mnt], check=False)
+            if ours:
+                subprocess.run(["umount", mnt], check=False)
     except subprocess.CalledProcessError as exc:
         print(f"init skipped: mounting {part} failed ({exc}); mount the card "
               "and run `flashpod init` instead.", file=sys.stderr)
     finally:
-        try:
-            os.rmdir(mnt)
-        except OSError:
-            pass
+        if ours:
+            try:
+                os.rmdir(mnt)
+            except OSError:
+                pass
 
 
 def main():
@@ -2433,18 +2475,17 @@ def main():
             ipod_flash.self_test()
             return 0
         plat = platform.current()
-        if not opts.dry_run and not plat.is_admin():
-            # Writing to a disk needs elevation — try sudo (prompts for
-            # credentials or shows a UAC dialog) rather than just bailing.
-            if sys.stdin.isatty():
-                role = "Administrator" if os.name == "nt" else "root"
-                print("flashpod flash: writing to a disk needs %s — "
-                      "elevating via sudo..." % role, file=sys.stderr)
-                _sudo_reexec(_cmd_args(opts))    # re-execs; returns only if sudo is missing
-            msg = "flashpod flash: " + plat.privilege_hint()
-            msg += "\n  sudo " + " ".join(_self_cmd() + _cmd_args(opts))
-            print(msg, file=sys.stderr)
-            return 1
+        # Pick and fetch the firmware BEFORE elevating. Downloading as root
+        # writes the cache into whatever HOME resolves to at that moment, and
+        # sudo does not treat HOME consistently: macOS preserves it (so root
+        # drops root-owned files in the user's ~/.cache and every later
+        # unprivileged run fails with EACCES), while Linux resets it to /root
+        # (so the user's cache is silently never reused). Resolving first
+        # sidesteps both -- the download runs as the invoking user, and the
+        # elevated child is handed the finished path via --firmware.
+        #
+        # It also means the model/firmware questions are answered before the
+        # password prompt instead of after it.
         max_data_gb = None
         if opts.firmware:
             firmware = opts.firmware          # bring-your-own; no network
@@ -2469,6 +2510,23 @@ def main():
                 return 1
         if opts.max_data_gb is not None:      # explicit override (or a BYO cap)
             max_data_gb = opts.max_data_gb
+        # Carry both resolved choices across the sudo boundary, so the elevated
+        # child re-runs neither the picker nor the download.
+        opts.firmware = firmware
+        opts.max_data_gb = max_data_gb
+
+        if not opts.dry_run and not plat.is_admin():
+            # Writing to a disk needs elevation — try sudo (prompts for
+            # credentials or shows a UAC dialog) rather than just bailing.
+            if sys.stdin.isatty():
+                role = "Administrator" if os.name == "nt" else "root"
+                print("flashpod flash: writing to a disk needs %s — "
+                      "elevating via sudo..." % role, file=sys.stderr)
+                _sudo_reexec(_cmd_args(opts))    # re-execs; returns only if sudo is missing
+            msg = "flashpod flash: " + plat.privilege_hint()
+            msg += "\n  sudo " + " ".join(_self_cmd() + _cmd_args(opts))
+            print(msg, file=sys.stderr)
+            return 1
         # Offer init on the fresh card only when it will work: interactive,
         # a real write, and a FAT32 data partition to mount.
         offer = offer_init_after_flash if (

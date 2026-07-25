@@ -211,6 +211,15 @@ class WindowsPlatform(Platform):
                 return size // SECTOR
         return 0
 
+    def partition_node(self, dev, index):
+        # Windows has no per-partition device path of this shape -- partitions
+        # are reached through drive letters / volume GUIDs, so callers that
+        # want one (the post-flash init offer) must skip themselves here.
+        return None
+
+    def fat_mount_cmd(self, part, mnt):
+        return None                       # volumes are mounted by the OS
+
     def device_mountpoints(self, dev):
         try:
             num = _drive_number(dev)

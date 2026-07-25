@@ -67,6 +67,15 @@ class LinuxPlatform(Platform):
         if os.path.basename(dev) in ipod_flash.root_disk_names():
             sys.exit(color("refusing: %s backs the running system." % dev, red))
 
+    def partition_node(self, dev, index):
+        # sdb -> sdb2, but mmcblk0/nvme0n1/loop0 -> mmcblk0p2: a trailing digit
+        # in the disk name needs the 'p' separator to stay unambiguous.
+        sep = "p" if dev[-1:].isdigit() else ""
+        return "%s%s%d" % (dev, sep, index)
+
+    def fat_mount_cmd(self, part, mnt):
+        return ["mount", part, mnt]        # util-linux probes the type itself
+
     # -- mutation around the raw write ------------------------------------
     def unmount_all(self, dev, dry):
         from .. import ipod_flash
