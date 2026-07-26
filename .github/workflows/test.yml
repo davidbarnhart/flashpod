@@ -84,3 +84,17 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: PYTHONPATH=. python scripts/test_macos_platform.py
+
+      # The only step that flashes for real: a sparse file attached as an
+      # actual block device (losetup on Linux, hdiutil on macOS), partitioned,
+      # formatted, inited and loaded with generated audio, then verified back
+      # out of the backing file. This is the coverage unit tests cannot reach
+      # -- the post-flash init offer broke twice without a single test failing.
+      #
+      # sudo is required (flashpod refuses non-dry-run writes without root) and
+      # is passwordless on hosted runners. sudo resets PATH, so the interpreter
+      # setup-python installed has to be named explicitly.
+      - name: End-to-end flash against a simulated card
+        if: runner.os != 'Windows'
+        shell: bash
+        run: sudo "$(which python)" scripts/simulate_card.py --size-gb 2
