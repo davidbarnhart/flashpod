@@ -205,6 +205,9 @@ def detach(node, img):
         if rc == 0:
             say("detached %s" % node)
             return True
+        if "already detached" in out:
+            say("%s was already detached" % node, GRN)
+            return True
         say("WARNING: could not detach %s:\n%s" % (node, out.strip()), RED)
         return False
     if not os.path.exists(node):
@@ -378,10 +381,9 @@ def _run_flashpod_conpty(argv, matcher, timeout, idle_warn):
     import threading
 
     # A wide terminal so no prompt line reaches the edge: ConPTY hard-wraps
-    # at the width, and a wrapped prompt would defeat the $-anchoring. Both
-    # dim values are >= 100 so the guarantee holds whichever way pywinpty
-    # reads (rows, cols).
-    proc = PtyProcess.spawn(argv, dim=(100, 250), env=dict(os.environ))
+    # at the width, and a wrapped prompt would defeat the $-anchoring.
+    proc = PtyProcess.spawn(argv, dimensions=(100, 250),   # (rows, cols)
+                            env=dict(os.environ))
     chunks = queue.Queue()
 
     def pump():
