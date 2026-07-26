@@ -58,6 +58,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install mutagen
 
+      # ConPTY driver for the simulated-card test: flashpod's prompts are
+      # gated on isatty, and on Windows only a pseudoconsole makes that true.
+      - name: Install pywinpty (Windows only)
+        if: runner.os == 'Windows'
+        run: pip install pywinpty
+
       - name: Self-test (layout + checksum maths, no device)
         shell: bash
         run: python -m flashpod flash --self-test
@@ -85,16 +91,23 @@ jobs:
         shell: bash
         run: PYTHONPATH=. python scripts/test_macos_platform.py
 
-      # The only step that flashes for real: a sparse file attached as an
-      # actual block device (losetup on Linux, hdiutil on macOS), partitioned,
-      # formatted, inited and loaded with generated audio, then verified back
-      # out of the backing file. This is the coverage unit tests cannot reach
-      # -- the post-flash init offer broke twice without a single test failing.
+      # The only step that flashes for real: a backing file attached as an
+      # actual block device (losetup on Linux, hdiutil on macOS, a diskpart
+      # VHD on Windows), partitioned, formatted, inited and loaded with
+      # generated audio, then verified back out of the backing file. This is
+      # the coverage unit tests cannot reach -- the post-flash init offer
+      # broke twice without a single test failing.
       #
-      # sudo is required (flashpod refuses non-dry-run writes without root) and
-      # is passwordless on hosted runners. sudo resets PATH, so the interpreter
-      # setup-python installed has to be named explicitly.
+      # Elevation is required (flashpod refuses non-dry-run writes without
+      # it). On Linux/macOS that means sudo, passwordless on hosted runners;
+      # sudo resets PATH, so the interpreter setup-python installed has to be
+      # named explicitly. Windows runners already execute as Administrator,
+      # so no wrapper is needed there.
       - name: End-to-end flash against a simulated card
-        if: runner.os != 'Windows'
         shell: bash
-        run: sudo "$(which python)" scripts/simulate_card.py --size-gb 2
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            python scripts/simulate_card.py --size-gb 2
+          else
+            sudo "$(which python)" scripts/simulate_card.py --size-gb 2
+          fi

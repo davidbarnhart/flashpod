@@ -188,6 +188,31 @@ def verify_filesystem(path, data_part, min_tracks):
         dev.close()
 
 
+def vhd_kind(path):
+    """'fixed' / 'dynamic' if `path` is a VHD, else None.
+
+    The Windows arm of simulate_card.py flashes a diskpart-attached VHD, and
+    the two VHD types differ completely for our purposes. A FIXED VHD is the
+    raw image with a 512-byte footer appended -- flat, so every check here
+    works unchanged; the footer sits past the tail reserve and nothing reads
+    it. A DYNAMIC VHD interleaves a block-allocation table and is not a raw
+    image at all, so checking one as if it were flat produces garbage
+    failures; better to say what it actually is. Both are recognized by the
+    footer's "conectix" cookie: at EOF for fixed, mirrored at offset 0 for
+    dynamic.
+    """
+    size = os.path.getsize(path)
+    if size < SECTOR:
+        return None
+    with open(path, "rb") as f:
+        if f.read(8) == b"conectix":
+            return "dynamic"
+        f.seek(size - SECTOR)
+        if f.read(8) == b"conectix":
+            return "fixed"
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -200,7 +225,14 @@ def main():
 
     if not os.path.exists(opts.image):
         sys.exit("no such image: %s" % opts.image)
+    kind = vhd_kind(opts.image)
+    if kind == "dynamic":
+        sys.exit("%s is a DYNAMIC VHD -- not a flat image, cannot verify.\n"
+                 "Recreate it with `create vdisk ... type=fixed`." % opts.image)
     size = os.path.getsize(opts.image)
+    if kind == "fixed":
+        size -= SECTOR
+        print("fixed VHD detected; ignoring the 512-byte trailing footer")
     print("verifying %s (%.1f GiB apparent)" % (opts.image, size / 2**30))
 
     print("\npartition table")
