@@ -201,15 +201,40 @@ def detach(node, img):
     if not node:
         return True
     if IS_WIN:
-        rc, out = _diskpart(['select vdisk file="%s"' % img, "detach vdisk"])
-        if rc == 0:
-            say("detached %s" % node)
-            return True
-        if "already detached" in out:
-            say("%s was already detached" % node, GRN)
-            return True
-        say("WARNING: could not detach %s:\n%s" % (node, out.strip()), RED)
-        return False
+        # Dismount-DiskImage rather than diskpart `select vdisk file=`: the
+        # latter matches the attached instance by comparing path STRINGS, so
+        # a short-name path (C:\Users\RUNNER~1\...) selects a phantom vdisk
+        # and reports "already detached" while the real one stays attached --
+        # holding an exclusive lock on the backing file, which then cannot
+        # be verified.
+        _powershell("Dismount-DiskImage -ImagePath '%s'" % img)
+        for _ in range(25):
+            txt = _powershell(
+                "(Get-DiskImage -ImagePath '%s').Attached" % img).strip()
+            if txt.lower() == "false":
+                break
+            time.sleep(0.2)
+        else:
+            rc, out = _diskpart(['select vdisk file="%s"' % img,
+                                 "detach vdisk"])
+            if rc != 0 and "already detached" not in out:
+                say("WARNING: could not detach %s:\n%s"
+                    % (node, out.strip()), RED)
+                return False
+        # The lock can outlive the dismount by a moment; verification needs
+        # the file readable, so wait for that, not just for detach to return.
+        for _ in range(25):
+            try:
+                with open(img, "rb"):
+                    pass
+                break
+            except OSError:
+                time.sleep(0.2)
+        else:
+            say("WARNING: %s is still locked after detach" % img, RED)
+            return False
+        say("detached %s" % node)
+        return True
     if not os.path.exists(node):
         say("%s was already detached (flashpod ejected it)" % node, GRN)
         return True
@@ -494,6 +519,11 @@ def main():
     img = opts.image or os.path.join(
         tempfile.gettempdir(),
         "flashpod-sim-card.vhd" if IS_WIN else "flashpod-sim-card.img")
+    # Resolve 8.3 short names (C:\Users\RUNNER~1\...) to the long form NOW:
+    # the virtual-disk service matches vdisks by path string, and a short
+    # spelling at detach time selects a phantom instead of the attached disk.
+    img = os.path.join(os.path.realpath(os.path.dirname(img) or "."),
+                       os.path.basename(img))
     if IS_WIN and not img.lower().endswith(".vhd"):
         # diskpart picks the VirtDisk provider from the extension; anything
         # else fails with "the specified file extension is not valid".
@@ -537,6 +567,7 @@ def main():
         vargv += ["--firmware", opts.firmware]
     v = subprocess.run(vargv)
     ret = v.returncode
+    say("verifier exited %d" % ret, GRN if ret == 0 else RED)
 
     if ret == 0:
         # The checker must discriminate, not just pass: break the MBR
@@ -564,8 +595,11 @@ def main():
         try:
             os.remove(img)
             say("removed %s" % img)
-        except OSError:
-            pass
+        except OSError as exc:
+            # A remove that fails means the image is still held open (an
+            # undetached VHD, say) -- exactly the kind of state worth
+            # hearing about rather than swallowing.
+            say("WARNING: could not remove %s: %s" % (img, exc), RED)
     else:
         say("kept %s" % img)
     return ret

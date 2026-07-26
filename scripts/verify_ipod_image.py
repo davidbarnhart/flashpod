@@ -223,8 +223,15 @@ def main():
                     help="minimum music files expected (default 1; 0 to allow none)")
     opts = ap.parse_args()
 
-    if not os.path.exists(opts.image):
-        sys.exit("no such image: %s" % opts.image)
+    # Try to open rather than os.path.exists(): on Windows a stat on a file
+    # another process holds exclusively (a still-attached VHD) fails too, and
+    # exists() turns that into False -- "no such image" would point away from
+    # the real problem. The OSError text names it.
+    try:
+        with open(opts.image, "rb"):
+            pass
+    except OSError as exc:
+        sys.exit("cannot read image %s: %s" % (opts.image, exc))
     kind = vhd_kind(opts.image)
     if kind == "dynamic":
         sys.exit("%s is a DYNAMIC VHD -- not a flat image, cannot verify.\n"
