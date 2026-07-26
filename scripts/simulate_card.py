@@ -565,7 +565,15 @@ def main():
              img, "--min-tracks", "1"]
     if opts.firmware:
         vargv += ["--firmware", opts.firmware]
-    v = subprocess.run(vargv)
+    # Capture and reprint rather than letting the child inherit the console:
+    # on the Windows runner the verifier's directly-written output never
+    # reached the log (post-ConPTY console handles are the suspect), which
+    # turned a failing verify into a silent exit code. The parent's stdout
+    # demonstrably works -- route everything through it.
+    v = subprocess.run(vargv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                       universal_newlines=True)
+    sys.stdout.write(v.stdout or "")
+    sys.stdout.flush()
     ret = v.returncode
     say("verifier exited %d" % ret, GRN if ret == 0 else RED)
 
@@ -579,7 +587,8 @@ def main():
             saved = f.read(2)
             f.seek(510)
             f.write(b"\x00\x00")
-        bad = subprocess.run(vargv, stdout=subprocess.DEVNULL)
+        bad = subprocess.run(vargv, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
         with open(img, "r+b") as f:
             f.seek(510)
             f.write(saved)
