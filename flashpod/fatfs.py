@@ -61,6 +61,10 @@ class BlockDev(object):
             self._fobj = fileobj
             return
         flags = os.O_RDWR if writable else os.O_RDONLY
+        # Windows: the CRT opens fds in TEXT mode by default, where a 0x1A
+        # byte in the data reads as EOF -- an iTunesDB is full of them, so
+        # image reads died mid-file as "short read". No-op elsewhere.
+        flags |= getattr(os, "O_BINARY", 0)
         if hasattr(os, "O_DIRECT") and stat.S_ISBLK(os.stat(path).st_mode):
             try:
                 self._fd = os.open(path, flags | os.O_DIRECT)
