@@ -792,9 +792,12 @@ def flash(device=None, firmware=None,
           lba48=False, max_data_gb=None):
     """Flash a card end-to-end; the `ipod flash` entry point.
     Exits via sys.exit() on errors and aborted confirmations.
-    `before_eject(dev)` runs after the firmware verify, while the partition
-    nodes still exist (eject powers the device off) — `flashpod` uses it to
-    offer running init on the fresh card.
+    `before_eject(dev, raw_fobj, data_start)` runs after the firmware verify
+    and before the eject (which powers the device off) — `flashpod` uses it
+    to offer running init on the fresh card. It runs either side of the
+    partition-table commit depending on `Platform.init_before_mbr`: Windows
+    gets the still-open raw handle and no MBR yet, everyone else gets the
+    table already written and re-read, with `raw_fobj`/`data_start` None.
     `max_data_gb` caps the data partition (manifest `max_data_gb` or the
     `--max-data-gb` flag); None means no cap."""
     try:
@@ -825,15 +828,30 @@ def flash(device=None, firmware=None,
     result = write_layout(dev, fw, total_sectors, dry_run, do_format, lba48, max_data_sectors)
     verify_firmware(dev, fw, dry_run)
     raw_fobj, mbr_header, data_start = result if result else (None, None, None)
-    try:
-        if before_eject and not dry_run:
-            before_eject(dev, raw_fobj, data_start)
-    finally:
+    hook = before_eject if (before_eject and not dry_run) else None
+
+    def commit_mbr():
+        """Write the deferred partition table and release the raw handle."""
         if raw_fobj:
             raw_fobj.seek(0); raw_fobj.write(mbr_header)
             raw_fobj.flush()
             raw_fobj.close()
-    plat.reread_partition_table(dev)
+
+    # Where the init hook sits relative to the MBR is per-platform; see
+    # Platform.init_before_mbr. Windows must go first, through the still-open
+    # handle, while the disk has no partition table to be discovered. Everyone
+    # else mounts the partition instead and therefore needs it to exist.
+    if hook and plat.init_before_mbr():
+        try:
+            hook(dev, raw_fobj, data_start)
+        finally:
+            commit_mbr()
+        plat.reread_partition_table(dev)
+    else:
+        commit_mbr()
+        plat.reread_partition_table(dev)
+        if hook:
+            hook(dev, None, None)
     plat.eject(dev, dry_run)
     print(color("\nDone. %s is ready — insert it into the iPod." % dev, C_GRN), file=sys.stderr)
     return 0

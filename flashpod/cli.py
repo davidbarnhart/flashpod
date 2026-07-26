@@ -2380,7 +2380,21 @@ def _offer_init_after_flash_unix(dev):
         part = plat.partition_node(dev, 2)          # 2 = the FAT32 data partition
     except NotImplementedError:
         part = None
-    if not part or not os.path.exists(part):
+    if not part:
+        return
+    # The node only appears once the OS has re-probed the table flash() just
+    # committed, and that is asynchronous — macOS re-probes in the background,
+    # Linux waits on udev. Give it a few seconds instead of racing it, and say
+    # so if it never turns up: skipping in silence is how this hook went
+    # unnoticed on macOS in the first place.
+    for _ in range(50):
+        if os.path.exists(part):
+            break
+        time.sleep(0.1)
+    else:
+        print("init skipped: %s never appeared after the partition table was "
+              "re-read.\n  Mount the card and run `flashpod init` instead."
+              % part, file=sys.stderr)
         return
     if not ask_yes("\nThe card still needs the iPod database before it can "
                    "take music (\"flashpod init\").\n"

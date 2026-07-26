@@ -297,6 +297,12 @@ class WindowsPlatform(Platform):
                 return size // SECTOR
         return 0
 
+    def init_before_mbr(self):
+        # See base.init_before_mbr: the raw-FAT init path only works while
+        # the disk has no valid partition table for the volume manager to
+        # latch onto.
+        return True
+
     def partition_node(self, dev, index):
         # Windows has no per-partition device path of this shape -- partitions
         # are reached through drive letters / volume GUIDs, so callers that

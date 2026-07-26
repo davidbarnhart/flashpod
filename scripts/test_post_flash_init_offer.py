@@ -167,6 +167,72 @@ def t_dispatch_by_platform():
         "dispatcher routed wrong: %r (want win, unix, unix)" % (calls,)
 
 
+def t_init_before_mbr_flag():
+    """Windows inits before the MBR exists; Linux/macOS need it committed."""
+    assert WindowsPlatform().init_before_mbr() is True
+    assert LinuxPlatform().init_before_mbr() is False
+    assert MacOSPlatform().init_before_mbr() is False
+
+
+def t_flash_orders_hook_around_mbr():
+    """flash() must commit the MBR + re-read BEFORE the hook on Unix.
+
+    #54 deferred the MBR so Windows could init through the raw handle, and
+    put the hook first unconditionally. On Unix that left no partition node
+    to mount, so the init offer silently did nothing on a real card -- the
+    flash finished and never asked. Pin the ordering for both families.
+    """
+    from flashpod import ipod_flash
+
+    def run_for(plat_obj):
+        events = []
+
+        class FakeRaw:
+            def seek(self, *a): pass
+            def write(self, b): events.append("mbr")
+            def flush(self): pass
+            def close(self): events.append("close")
+
+        class P:
+            def __init__(self, inner): self._i = inner
+            def __getattr__(self, n): return getattr(self._i, n)
+            def is_admin(self): return True
+            def validate_target(self, d, dry): pass
+            def device_sectors(self, d): return 200000
+            def unmount_all(self, d, dry): pass
+            def reread_partition_table(self, d): events.append("reread")
+            def eject(self, d, dry): pass
+
+        p = P(plat_obj)
+        saved = (ipod_flash._plat.current, ipod_flash.load_firmware,
+                 ipod_flash.confirm, ipod_flash.write_layout,
+                 ipod_flash.verify_firmware)
+        ipod_flash._plat.current = lambda: p
+        ipod_flash.load_firmware = lambda f: b"\x00" * 16
+        ipod_flash.confirm = lambda *a, **k: None
+        ipod_flash.write_layout = lambda *a, **k: (FakeRaw(), b"MBR", 65599)
+        ipod_flash.verify_firmware = lambda *a, **k: None
+        try:
+            ipod_flash.flash(device="/dev/fake", firmware="fw.bin",
+                             assume_yes=True,
+                             before_eject=lambda d, r, s: events.append("hook"))
+        finally:
+            (ipod_flash._plat.current, ipod_flash.load_firmware,
+             ipod_flash.confirm, ipod_flash.write_layout,
+             ipod_flash.verify_firmware) = saved
+        return events
+
+    unix = run_for(LinuxPlatform())
+    assert unix.index("mbr") < unix.index("hook"), \
+        "Unix ran the init hook before the MBR was committed: %r" % (unix,)
+    assert unix.index("reread") < unix.index("hook"), \
+        "Unix ran the init hook before the partition re-read: %r" % (unix,)
+
+    win = run_for(WindowsPlatform())
+    assert win.index("hook") < win.index("mbr"), \
+        "Windows committed the MBR before the raw-FAT init: %r" % (win,)
+
+
 print("post-flash init offer")
 for name, fn in [
     ("macOS names slices sN", t_macos_names_slices),
@@ -179,6 +245,8 @@ for name, fn in [
     ("reuses an existing mount", t_reuses_existing_mount),
     ("declining skips init", t_declining_skips_init),
     ("dispatcher routes win -> raw-FAT, unix -> mount", t_dispatch_by_platform),
+    ("init_before_mbr differs per platform", t_init_before_mbr_flag),
+    ("flash() orders the hook around the MBR commit", t_flash_orders_hook_around_mbr),
 ]:
     check(name, fn)
 

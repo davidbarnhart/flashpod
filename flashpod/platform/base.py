@@ -190,6 +190,20 @@ class Platform(object):
         """Tell the OS to re-read ``dev``'s partition table after writing."""
         raise NotImplementedError
 
+    def init_before_mbr(self):
+        """True if the post-flash init hook must run BEFORE the partition
+        table is committed.
+
+        The two families want opposite things and cannot be served by one
+        ordering. Windows writes the fresh FAT through the still-open raw
+        handle and must do it while no valid MBR exists, or the volume
+        manager discovers the partition, mounts it, and blocks writes to
+        those sectors. Linux and macOS instead mount the partition, so they
+        need the MBR written and the table re-read first -- with the
+        Windows ordering there is no /dev/sdb2 or /dev/diskNs2 to mount and
+        the hook silently does nothing."""
+        return False
+
     def invalidate_cached_partitions(self, dev):
         """After zeroing the partition table, tell the OS to drop cached
         volume state so raw writes to any sector succeed.  No-op except on
