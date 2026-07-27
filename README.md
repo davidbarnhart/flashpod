@@ -78,13 +78,26 @@ flashpod --help
 **Windows** (`flashpod-windows-x86_64.zip`): unzip it and run `flashpod.exe`
 from a terminal (an Administrator terminal for `flash`).
 
-The **Linux and Windows** builds don't bundle firmware — `flashpod flash`
-downloads the image you pick (verified by checksum), or you supply your own with
-`--firmware`. (The **macOS 10.8** build is different — see below.) Building the
-binaries yourself is documented in [BUILD.md](BUILD.md).
+**Modern Macs — Intel and Apple Silicon** (`flashpod-macos-universal2.tar.gz`):
+one universal binary, macOS picks the right architecture. Extract, then make
+it runnable and clear the Gatekeeper quarantine (it's unsigned):
 
-**Vintage Macs (OS X 10.8):** use `flashpod-macos-10.8.tar.gz`. Extract it,
-then make the binary runnable and clear the Gatekeeper quarantine (it's unsigned):
+```sh
+tar xzf flashpod-macos-universal2.tar.gz && cd flashpod-macos-universal2
+chmod +x flashpod
+xattr -d com.apple.quarantine flashpod   # or right-click → Open once
+./flashpod --help
+```
+
+The **Linux, Windows, and modern-macOS** builds don't bundle firmware —
+`flashpod flash` downloads the image you pick (verified by checksum), or you
+supply your own with `--firmware`. (The **macOS 10.8** build is different —
+see below.) Building the binaries yourself is documented in
+[BUILD.md](BUILD.md).
+
+**Vintage Macs (OS X 10.8)** (`flashpod-macos-10.8.tar.gz`): this is the build
+for FireWire-era Macs — firmware baked in, no network needed — **not** the one
+for a modern Mac. Same extract-and-dequarantine dance as above:
 
 ```sh
 tar xzf flashpod-macos-10.8.tar.gz && cd flashpod-macos-10.8

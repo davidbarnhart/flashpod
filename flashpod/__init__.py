@@ -4,4 +4,8 @@
 Pure Python, no libgpod. See the README for usage.
 """
 
-__version__ = "0.3.0"
+# The ONE place the version lives. pyproject.toml reads it (setuptools
+# dynamic attr), release.yml refuses to build a tag that doesn't match it.
+# v0.3.1 shipped self-reporting 0.3.0 because pyproject and this line were
+# bumped independently -- never again.
+__version__ = "0.3.2"

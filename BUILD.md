@@ -5,11 +5,12 @@ flashpod ships as a single self-contained executable per OS, built with
 images and the udev rule are bundled inside the binary, so the download is the
 only file a user needs.
 
-## Linux & Windows — automated
+## Linux, Windows & modern macOS — automated
 
 Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the
-Linux and Windows binaries (attached to a GitHub Release) **and publishes the
-pure-Python package to PyPI** (see [Releasing to PyPI](#releasing-to-pypi)):
+Linux, Windows, and modern-macOS (Apple Silicon) binaries (attached to a
+GitHub Release) **and publishes the pure-Python package to PyPI** (see
+[Releasing to PyPI](#releasing-to-pypi)):
 
 ```sh
 git tag v0.1.0
@@ -26,6 +27,11 @@ Artifacts:
 |------|----------|
 | `flashpod-linux-x86_64` | Linux (built on glibc 2.35 / Ubuntu 22.04, runs on that and newer) |
 | `flashpod-windows-x86_64.exe` | Windows 10/11 x86-64 |
+| `flashpod-macos-universal2` | Modern macOS, Intel + Apple Silicon (one fat binary; built with python.org's universal2 Python, both slices smoke-tested in CI) |
+
+The tag must match `__version__` in `flashpod/__init__.py` — **the single
+place the version lives** (pyproject.toml reads it dynamically; the workflow
+refuses a mismatched tag). To cut a release, bump that one line, commit, tag.
 
 ## Releasing to PyPI
 
@@ -53,10 +59,12 @@ the project on PyPI automatically.
 bump the version first):
 
 ```sh
-# 1. bump `version` in pyproject.toml (e.g. 0.1.5 -> 0.1.6) and commit
+# 1. bump `__version__` in flashpod/__init__.py (the ONLY version string;
+#    pyproject.toml reads it dynamically) and commit
 # 2. optionally verify the package builds:
 pip install build twine && python -m build && twine check dist/*
-# 3. tag — this triggers the binaries + the PyPI publish together:
+# 3. tag — this triggers the binaries + the PyPI publish together; the
+#    workflow refuses the tag if it doesn't match __version__:
 git tag v0.1.6 && git push origin v0.1.6
 ```
 
