@@ -24,6 +24,15 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  # The SHIPPED ARTIFACT, built and flashed for real on all three OSes, on
+  # every push. Same workflow release.yml calls, so a regression in the frozen
+  # build surfaces here instead of after a tag. Everything below tests the
+  # source tree, which is not the same thing: v0.3.1's macOS binary passed the
+  # source suite and still could not download firmware.
+  binary:
+    name: binary
+    uses: ./.github/workflows/binary.yml
+
   compat:
     name: py36 compatibility
     runs-on: ubuntu-latest     # source-only grep; one run covers every platform
