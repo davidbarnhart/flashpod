@@ -6,8 +6,8 @@ the Intel (x86_64) and Apple Silicon (arm64) versions; macOS runs the
 right one automatically. It needs macOS 10.13 or newer (the embedded
 Python's floor). If you are setting up a vintage FireWire-era Mac
 (OS X 10.8), this build will NOT launch there ("Symbol not found:
-___sincos_stret") — use flashpod-macos-10.8.tar.gz instead: firmware
-baked in, built for that hardware.
+___sincos_stret") — use flashpod-macos-vintage-no-internet.tar.gz
+instead: firmware baked in, built for that hardware.
 
 This archive contains:
 

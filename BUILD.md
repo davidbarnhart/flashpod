@@ -119,7 +119,7 @@ The macOS target is **OS X 10.8 Mountain Lion** — a FireWire-equipped Mac is
 the native environment for these iPods. No GitHub runner or modern Python can
 produce a 10.8-compatible binary, so this one is built **by hand on 10.8
 hardware** and uploaded to the release afterwards. The recipe below is
-battle-tested (it's how `flashpod-macos-10.8` is built).
+battle-tested (it's how `flashpod-macos-vintage-no-internet` is built).
 
 **Build it heavy** (firmware baked in). An end user's 10.8 machine generally
 can't do the runtime firmware download (a frozen binary's `urllib` has no CA
@@ -195,17 +195,17 @@ no `--firmware`. See "Self-contained builds" above.
 6. **Package it like the CI builds** — a tarball with the binary, README, and
    license (so it isn't a lone mystery executable on the releases page):
    ```sh
-   stage=flashpod-macos-10.8
+   stage=flashpod-macos-vintage-no-internet
    mkdir -p "$stage"
    cp dist/flashpod "$stage/flashpod" && chmod +x "$stage/flashpod"
    cp packaging/macos/README.txt LICENSE "$stage/"
-   tar czf flashpod-macos-10.8.tar.gz "$stage"
+   tar czf flashpod-macos-vintage-no-internet.tar.gz "$stage"
    ```
 
 7. **Attach it to the release** from any machine with `gh` (gh won't run on
    10.8 — copy the tarball off via a share/USB):
    ```sh
-   gh release upload v0.1.4 flashpod-macos-10.8.tar.gz
+   gh release upload v0.3.2 flashpod-macos-vintage-no-internet.tar.gz
    ```
 
 > If you're forced onto a newer PyInstaller, you'd need a `codesign` no-op

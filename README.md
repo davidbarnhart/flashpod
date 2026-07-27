@@ -81,8 +81,8 @@ from a terminal (an Administrator terminal for `flash`).
 **Modern Macs — Intel and Apple Silicon** (`flashpod-macos-universal2.tar.gz`):
 one universal binary, macOS picks the right architecture. Needs **macOS 10.13
 or newer** (the embedded Python's floor) — on a vintage FireWire-era Mac it
-dies at launch with a `Symbol not found` dlopen error; use the 10.8 build
-below instead. Extract, then make it runnable and clear the Gatekeeper
+dies at launch with a `Symbol not found` dlopen error; use the vintage
+build below instead. Extract, then make it runnable and clear the Gatekeeper
 quarantine (it's unsigned):
 
 ```sh
@@ -98,12 +98,13 @@ supply your own with `--firmware`. (The **macOS 10.8** build is different —
 see below.) Building the binaries yourself is documented in
 [BUILD.md](BUILD.md).
 
-**Vintage Macs (OS X 10.8)** (`flashpod-macos-10.8.tar.gz`): this is the build
-for FireWire-era Macs — firmware baked in, no network needed — **not** the one
-for a modern Mac. Same extract-and-dequarantine dance as above:
+**Vintage Macs (OS X 10.8)** (`flashpod-macos-vintage-no-internet.tar.gz`):
+this is the build for FireWire-era Macs — firmware baked in, no network
+needed — **not** the one for a modern Mac. Same extract-and-dequarantine
+dance as above:
 
 ```sh
-tar xzf flashpod-macos-10.8.tar.gz && cd flashpod-macos-10.8
+tar xzf flashpod-macos-vintage-no-internet.tar.gz && cd flashpod-macos-vintage-no-internet
 chmod +x flashpod
 xattr -d com.apple.quarantine flashpod   # or right-click → Open once
 ./flashpod --help
