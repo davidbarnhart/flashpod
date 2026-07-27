@@ -72,9 +72,16 @@ def t_existing_capath_is_left_alone():
 
 
 # -- the frozen-binary case ----------------------------------------------------
-def t_missing_cafile_falls_back():
-    """The actual bug: the baked-in path does not exist on this machine."""
-    got = with_paths("/nope/does/not/exist/cert.pem", None, cli._ca_bundle)
+# What has to hold on EVERY platform is that we end up able to verify, not that
+# we found a file. Windows has no CA file: ssl loads the system certificate
+# store, so _ca_bundle returning None is the correct answer there and
+# create_default_context still comes back with a few hundred CAs. Asserting a
+# path would be asserting a POSIX implementation detail.
+def _assert_usable_bundle(got):
+    if os.name == "nt":
+        assert got is None or os.path.exists(got), \
+            "pointed Windows at a bundle that isn't there: %r" % got
+        return
     assert got is not None, \
         "no fallback found -- every HTTPS fetch would fail on this machine"
     assert os.path.exists(got), "fell back to something that isn't there: %r" % got
@@ -82,9 +89,14 @@ def t_missing_cafile_falls_back():
         "unexpected bundle %r" % got
 
 
+def t_missing_cafile_falls_back():
+    """The actual bug: the baked-in path does not exist on this machine."""
+    _assert_usable_bundle(with_paths("/nope/does/not/exist/cert.pem", None,
+                                     cli._ca_bundle))
+
+
 def t_no_paths_at_all_falls_back():
-    got = with_paths(None, None, cli._ca_bundle)
-    assert got is not None and os.path.exists(got), got
+    _assert_usable_bundle(with_paths(None, None, cli._ca_bundle))
 
 
 def t_context_is_verifying():
@@ -104,11 +116,21 @@ def t_context_is_verifying():
 
 
 def t_fallback_loaded_real_certs():
-    """The chosen bundle must contain usable CAs, not just exist."""
-    ctx = with_paths("/nope/cert.pem", None, cli._ssl_context)
-    n = len(ctx.get_ca_certs())
-    assert n > 0, "context loaded 0 CA certificates; verification would fail"
-    print("         (%d CA certificates loaded)" % n)
+    """The real invariant: whatever we resolve to, we can actually verify.
+
+    Covers both broken shapes -- a cafile pointing nowhere, and nothing
+    configured at all -- because on Windows this is the ONLY assertion with
+    teeth: _ca_bundle correctly returns None there and the certificates come
+    from the system store rather than any file.
+    """
+    for cafile, capath, label in (("/nope/cert.pem", None, "missing cafile"),
+                                  (None, None, "nothing configured")):
+        ctx = with_paths(cafile, capath, cli._ssl_context)
+        n = len(ctx.get_ca_certs())
+        assert n > 0, \
+            "%s: context loaded 0 CA certificates; every HTTPS fetch would " \
+            "fail" % label
+        print("         (%s -> %d CA certificates loaded)" % (label, n))
 
 
 print("CA bundle fallback")
