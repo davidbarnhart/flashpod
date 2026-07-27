@@ -11,16 +11,20 @@ This archive contains:
 
 Run it
 ------
-This binary is unsigned, so macOS quarantines downloads. Clear that and make
-it executable:
-
-  chmod +x flashpod
-  xattr -d com.apple.quarantine flashpod      # or right-click -> Open once
-
-Then run it (optionally move it onto your PATH, e.g. /usr/local/bin):
+Just run it (optionally move it onto your PATH, e.g. /usr/local/bin) -- the
+archive already carries the executable bit:
 
   ./flashpod --help
   sudo ./flashpod flash      # writing a card needs root
+
+If macOS refuses to launch it, the binary is quarantined -- this build is
+unsigned. Clear it:
+
+  xattr -d com.apple.quarantine flashpod      # or right-click -> Open once
+
+That flag is only set when you download with a BROWSER and unpack by
+double-clicking in Finder; curl/scp downloads and command-line tar do not
+set it, so most people never need this.
 
 Attaching an iPod over FireWire
 ------------------------------

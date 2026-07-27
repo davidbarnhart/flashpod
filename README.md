@@ -82,15 +82,20 @@ from a terminal (an Administrator terminal for `flash`).
 one universal binary, macOS picks the right architecture. Needs **macOS 10.13
 or newer** (the embedded Python's floor) — on a vintage FireWire-era Mac it
 dies at launch with a `Symbol not found` dlopen error; use the vintage
-build below instead. Extract, then make it runnable and clear the Gatekeeper
-quarantine (it's unsigned):
+build below instead.
 
 ```sh
 tar xzf flashpod-macos-universal2.tar.gz && cd flashpod-macos-universal2
-chmod +x flashpod
-xattr -d com.apple.quarantine flashpod   # or right-click → Open once
 ./flashpod --help
 ```
+
+> **If macOS refuses to run it** ("cannot be opened because the developer
+> cannot be verified", or it's just `killed`), the binary is quarantined —
+> clear it with `xattr -d com.apple.quarantine flashpod`, or right-click →
+> Open once. This only happens when you download with a **browser** *and*
+> unpack by double-clicking in Finder; `curl`/`scp` downloads and
+> command-line `tar` don't set the flag, so most people never see it. The
+> executable bit is preserved by the archive, so no `chmod` is needed.
 
 The **Linux, Windows, and modern-macOS** builds don't bundle firmware —
 `flashpod flash` downloads the image you pick (verified by checksum), or you
@@ -100,13 +105,12 @@ see below.) Building the binaries yourself is documented in
 
 **Vintage Macs (OS X 10.8)** (`flashpod-macos-vintage-no-internet.tar.gz`):
 this is the build for FireWire-era Macs — firmware baked in, no network
-needed — **not** the one for a modern Mac. Same extract-and-dequarantine
-dance as above:
+needed — **not** the one for a modern Mac. Extract and run it the same way
+(including the quarantine note above, if macOS refuses):
 
 ```sh
-tar xzf flashpod-macos-vintage-no-internet.tar.gz && cd flashpod-macos-vintage-no-internet
-chmod +x flashpod
-xattr -d com.apple.quarantine flashpod   # or right-click → Open once
+tar xzf flashpod-macos-vintage-no-internet.tar.gz
+cd flashpod-macos-vintage-no-internet
 ./flashpod --help
 ```
 
