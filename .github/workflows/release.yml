@@ -121,6 +121,39 @@ jobs:
         if: runner.os == 'macOS'
         run: arch -x86_64 dist/flashpod flash --self-test
 
+      # The smoke tests above never write to a device: --self-test is pure
+      # arithmetic and --dry-run stops before the first byte. So until here,
+      # nothing had ever watched the SHIPPED ARTIFACT actually flash. Only the
+      # source tree gets that, in test.yml.
+      #
+      # That gap matters because a frozen build differs from source exactly
+      # where it hurts: the firmware catalog is read out of sys._MEIPASS
+      # rather than the package directory, hidden imports are resolved by
+      # PyInstaller's machinery instead of the source tree, and the ssl module
+      # carries the build machine's CA paths -- which is precisely how v0.3.1
+      # shipped a macOS binary that could not download firmware at all.
+      #
+      # simulate_card.py --flashpod runs the whole thing (partition, format,
+      # init, load music, verify the backing file) against the binary instead
+      # of `python -m flashpod`.
+      - name: End-to-end flash with the built binary (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          sudo "$(which python)" scripts/simulate_card.py \
+            --size-gb 2 --flashpod "$PWD/dist/flashpod"
+
+      # --flashpod is split as a command line, so prefixing `arch -x86_64`
+      # runs the Intel slice for real. Without this the x86_64 half of the
+      # universal binary only ever gets --self-test, and a real flash on Intel
+      # Macs -- the ones with FireWire -- would ship unexercised.
+      - name: End-to-end flash with the Intel slice under Rosetta (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          sudo "$(which python)" scripts/simulate_card.py \
+            --size-gb 2 --flashpod "arch -x86_64 $PWD/dist/flashpod"
+
       - name: Package archive
         shell: bash
         run: |
