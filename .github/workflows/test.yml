@@ -26,12 +26,22 @@ env:
 jobs:
   # The SHIPPED ARTIFACT, built and flashed for real on all three OSes, on
   # every push. Same workflow release.yml calls, so a regression in the frozen
-  # build surfaces here instead of after a tag. Everything below tests the
-  # source tree, which is not the same thing: v0.3.1's macOS binary passed the
-  # source suite and still could not download firmware.
+  # build surfaces here instead of after a tag.
+  #
+  # `source` below runs the SAME full simulated-card flash -- this is not a
+  # cheap check versus a thorough one. The difference is only what gets
+  # driven: `python -m flashpod` there, dist/flashpod here. Both are needed,
+  # because they can disagree: v0.3.1's macOS binary passed the entire source
+  # suite and still could not download firmware, the frozen build having
+  # carried the build machine's CA paths.
   binary:
     name: binary
     uses: ./.github/workflows/binary.yml
+    # Independent of `source` below -- no `needs:`. Both run the same full
+    # simulated-card flash; the only difference is what they drive. This one
+    # drives the frozen artifact, `source` drives the source tree, and neither
+    # consumes the other's output, so they run in parallel and finish in
+    # whatever order their own work takes.
 
   compat:
     name: py36 compatibility
@@ -40,8 +50,8 @@ jobs:
       - uses: actions/checkout@v5
       - run: sh scripts/check-py36-compat.sh
 
-  test:
-    name: test (${{ matrix.os }})
+  source:
+    name: source (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:

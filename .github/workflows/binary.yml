@@ -41,8 +41,12 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  # Rendered as "binary / build + flash (ubuntu-22.04)" and so on. Spelled out
+  # because a job called just "build" sitting next to one called "test" reads
+  # like a pipeline stage that "test" waits for -- it isn't. These jobs build
+  # the artifact AND prove it, in one job, and nothing depends on them.
   build:
-    name: ${{ matrix.os }}
+    name: build + flash (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
