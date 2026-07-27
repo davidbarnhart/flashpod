@@ -79,8 +79,11 @@ flashpod --help
 from a terminal (an Administrator terminal for `flash`).
 
 **Modern Macs — Intel and Apple Silicon** (`flashpod-macos-universal2.tar.gz`):
-one universal binary, macOS picks the right architecture. Extract, then make
-it runnable and clear the Gatekeeper quarantine (it's unsigned):
+one universal binary, macOS picks the right architecture. Needs **macOS 10.13
+or newer** (the embedded Python's floor) — on a vintage FireWire-era Mac it
+dies at launch with a `Symbol not found` dlopen error; use the 10.8 build
+below instead. Extract, then make it runnable and clear the Gatekeeper
+quarantine (it's unsigned):
 
 ```sh
 tar xzf flashpod-macos-universal2.tar.gz && cd flashpod-macos-universal2
