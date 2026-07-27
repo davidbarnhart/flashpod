@@ -224,6 +224,26 @@ class Platform(object):
         POSIX device nodes; Windows overrides for ``\\\\.\\PhysicalDriveN``."""
         return open(dev, mode)
 
+    def raw_open_direct(self):
+        """True when the userspace FAT driver should let fatfs.BlockDev open
+        the raw node itself (path mode: os.open, O_DIRECT on block devices,
+        bounce-buffered I/O) instead of wrapping :meth:`open_raw`'s file
+        object.
+
+        Linux overrides this to True: a buffered open() of a Linux block
+        device reads and writes through the page cache, whose readahead and
+        writeback re-batch our capped transfers into exactly the large/queued
+        I/O the gen-1 FireWire bridge corrupts — safe only while the device
+        queue is pinned (the udev rule / per-command auto-pin). O_DIRECT
+        removes that dependency, making the raw path self-sufficiently
+        bridge-safe. macOS gets the same property from the rdisk character
+        device (via open_raw + AlignedRawIO) and Windows from WinHandleIO,
+        so they keep the file-object path. Regression history: PR #54
+        (2026-07-25) rewired open_raw_fat through open_raw()/fileobj for
+        Windows and silently dropped Linux's O_DIRECT — a FireWire add on
+        that build crashed the bridge the next day."""
+        return False
+
     def raw_read_node(self, dev):
         """The device path to open for UNBUFFERED reads of ``dev``. Default is
         ``dev`` itself; macOS maps ``/dev/diskN`` → ``/dev/rdiskN`` so the FAT

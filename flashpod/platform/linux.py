@@ -76,6 +76,11 @@ class LinuxPlatform(Platform):
     def fat_mount_cmd(self, part, mnt):
         return ["mount", part, mnt]        # util-linux probes the type itself
 
+    def raw_open_direct(self):
+        # Linux has no /dev/rdiskN: unbuffered block I/O means O_DIRECT,
+        # which lives in fatfs.BlockDev's path mode. See base for why.
+        return True
+
     # -- mutation around the raw write ------------------------------------
     def unmount_all(self, dev, dry):
         from .. import ipod_flash
@@ -131,36 +136,91 @@ class LinuxPlatform(Platform):
         return out
 
     def fat_disk_candidates(self):
-        """FAT (vfat) partitions on removable/USB/FireWire disks, as raw
-        partition nodes (e.g. ``/dev/sdb2``) for the caller to probe. Restricted
-        to external/removable transports so we never read the system disk; the
-        real iPod test (iPod_Control/iTunes/iTunesDB) is done by the caller, not
-        by any label or transport heuristic."""
+        """External disks worth probing for an iPod filesystem, as raw nodes
+        for the caller to probe.
+
+        Partitions lsblk/udev already identify as FAT (vfat/exfat) are
+        returned directly (e.g. ``/dev/sdb2``). But udev is only trusted
+        POSITIVELY, never for absence: its attach-time blkid probe reads the
+        device through the buffered block layer, and the gen-1 FireWire
+        bridge can zero those reads — the partition then carries no recorded
+        fstype at all, and requiring one made the iPod invisible while our
+        own O_DIRECT driver could read it perfectly. So a disk with no
+        identified FAT partition is offered as its WHOLE-disk node
+        (``/dev/sdb``) for the caller's FAT driver to judge (open_raw_fat
+        walks the MBR itself) — the same probe-everything approach the macOS
+        backend uses. Only a disk whose every filesystem slot is positively
+        identified as something non-FAT (an ext4 USB stick) is skipped.
+        Restricted to external/removable transports so we never read the
+        system disk; the real iPod test (iPod_Control/iTunes/iTunesDB) is
+        done by the caller, not by any label or transport heuristic."""
         import json
-        try:
-            out = subprocess.run(
-                ["lsblk", "-J", "-o", "NAME,TYPE,FSTYPE,LABEL,TRAN,RM,HOTPLUG,SIZE"],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                universal_newlines=True, check=True).stdout
-        except (OSError, subprocess.CalledProcessError):
-            return []
+        import time
+        # One retry: lsblk can fail transiently while a just-attached disk
+        # (an sbp2 login, a reader power-up) is mid-enumeration, and a single
+        # failed listing here silently turned a present iPod into "no
+        # hardware found" (the fallback mount path then raced ahead of the
+        # queue pinning).
+        for attempt in (0, 1):
+            try:
+                out = subprocess.run(
+                    ["lsblk", "-J", "-o",
+                     "NAME,TYPE,FSTYPE,LABEL,TRAN,RM,HOTPLUG,SIZE"],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    universal_newlines=True, check=True).stdout
+                break
+            except (OSError, subprocess.CalledProcessError):
+                if attempt:
+                    return []
+                time.sleep(0.5)
+        FAT = ("vfat", "exfat")
         cands = []
 
-        def walk(node, tran, removable):
-            tran = node.get("tran") or tran or ""
-            removable = removable or bool(node.get("rm")) or bool(node.get("hotplug"))
-            external = removable or tran in ("usb", "sbp", "ieee1394")
-            if (node.get("type") == "part" and external
-                    and (node.get("fstype") or "") in ("vfat", "exfat")):
-                label = node.get("label") or ""
-                # lsblk reports FireWire as the kernel transport "sbp" (or the
-                # legacy "ieee1394"); show the friendly name in the chooser.
-                tran_label = "FireWire" if tran in ("sbp", "ieee1394") else tran
-                bits = [b for b in (label, tran_label, node.get("size")) if b]
-                cands.append(("/dev/" + node["name"], " ".join(bits)))
-            for child in node.get("children") or []:
-                walk(child, tran, removable)
+        def describe(node, tran):
+            # lsblk reports FireWire as the kernel transport "sbp" (or the
+            # legacy "ieee1394"); show the friendly name in the chooser.
+            tran_label = "FireWire" if tran in ("sbp", "ieee1394") else tran
+            bits = [b for b in (node.get("label") or "", tran_label,
+                                node.get("size")) if b]
+            return " ".join(bits)
 
-        for dev in json.loads(out)["blockdevices"]:
-            walk(dev, None, False)
+        def partitions(node):
+            out = []
+            for child in node.get("children") or []:
+                if child.get("type") == "part":
+                    out.append(child)
+                out.extend(partitions(child))
+            return out
+
+        for disk in json.loads(out)["blockdevices"]:
+            # "rbc": early iPods speak SCSI Reduced Block Commands over
+            # SBP-2, and lsblk reports that device type verbatim — the
+            # FireWire iPod is NOT type "disk". (Filtering on "disk" alone
+            # made the iPod invisible; found live 2026-07-26.)
+            if disk.get("type") not in ("disk", "rbc"):
+                continue                     # rom/loop can't be an iPod
+            tran = disk.get("tran") or ""
+            removable = bool(disk.get("rm")) or bool(disk.get("hotplug"))
+            if not (removable or tran in ("usb", "sbp", "ieee1394")):
+                continue                     # internal disk: never probed
+            parts = partitions(disk)
+            fat_parts = [p for p in parts
+                         if (p.get("fstype") or "") in FAT]
+            if fat_parts:
+                for p in fat_parts:
+                    cands.append(("/dev/" + p["name"], describe(p, tran)))
+                continue
+            if (disk.get("fstype") or "") in FAT:
+                # partitionless "superfloppy" FAT directly on the disk
+                cands.append(("/dev/" + disk["name"], describe(disk, tran)))
+                continue
+            # No FAT identified. If every filesystem slot is positively
+            # identified as something else, the disk truly isn't an iPod;
+            # otherwise udev may just be blind (zeroed probe) — offer the
+            # whole disk and let the caller's driver decide.
+            fstypes = [p.get("fstype") or "" for p in parts] \
+                or [disk.get("fstype") or ""]
+            if all(fstypes):
+                continue
+            cands.append(("/dev/" + disk["name"], describe(disk, tran)))
         return cands

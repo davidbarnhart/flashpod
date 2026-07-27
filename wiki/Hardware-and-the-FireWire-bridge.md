@@ -8,7 +8,9 @@ learned about it the hard way, so you don't have to rediscover it.
 
 - 64 GB **flash-modded** iPod (reports 63,996,657,664 bytes), a pre-2007 model.
 - Connects over **FireWire** (shows up as an `sbp` transport on Linux,
-  "Apple Computer, Inc." / FireWire in macOS `diskutil`).
+  "Apple Computer, Inc." / FireWire in macOS `diskutil`). On Linux, lsblk
+  reports its device TYPE as `rbc` (SCSI Reduced Block Commands), **not**
+  `disk` — filter on either, or the iPod vanishes from your tooling.
 - Pre-2007 ⇒ **no iTunesDB checksum/hash** needed — plain library writes work.
 - Partition layout written by flashpod: a 32 MiB firmware partition (MBR type
   0x00, hidden from macOS `diskutil`) followed by a FAT32 data partition (type
@@ -35,9 +37,15 @@ directions.** (On Linux the kernel queue cap of 4 KiB happens to be safe for
 the *kernel's* access pattern, but the macOS raw device has no such cap and
 corrupts at 4 KiB — see below.)
 
-## Linux: pin the block queue (flashpod does this for you)
+## Linux: flashpod's raw path is O_DIRECT (queue settings optional for it)
 
-On Linux the fix is per-device queue settings:
+flashpod's own raw driver opens Linux block devices with **O_DIRECT** — the
+page-cache bypass, Linux's equivalent of macOS `/dev/rdiskN` — so its capped
+transfers reach the hardware exactly as issued, with no kernel readahead or
+writeback re-batching. The raw path (`ls`/`add`/`rm`/`init` without a mount)
+is therefore bridge-safe on its own, whatever the queue settings say.
+
+What still wants the per-device queue settings pinned:
 
 ```
 max_sectors_kb = 4      # cap transfers at 4 KiB
@@ -45,11 +53,18 @@ read_ahead_kb  = 0      # no prefetch
 queue_depth    = 1      # one request at a time
 ```
 
+- using an **OS mount** of a FireWire iPod (the kernel FAT driver reads big),
+- **udev's own blkid probe** at every (re-)attach and any other buffered
+  reader — I/O flashpod doesn't issue and can't intercept.
+
 These **reset on every re-attach**, and unsafe defaults (128/128) are
-*data-eating*. flashpod checks before every command and auto-pins them via
-sudo; refuses to touch a FireWire iPod that's still unsafe (`--unsafe-queue`
-overrides). For a permanent fix, install the udev rule in
-`contrib/99-flashpod-firewire-ipod.rules`.
+*data-eating* for buffered access. flashpod checks before every command and
+auto-pins them via sudo; it refuses to touch a FireWire iPod that's still
+unsafe (`--unsafe-queue` overrides). The udev rule in
+`contrib/99-flashpod-firewire-ipod.rules` is optional defense-in-depth that
+covers the attach-time window no userspace program can reach; nothing in
+flashpod requires it — detection probes disks with flashpod's own driver and
+works even when udev's records are blank.
 
 > **Incident (the cautionary tale):** an afternoon attach ran with default
 > queue settings, an `ls` triggered EIO on the iTunesDB, the device collapsed

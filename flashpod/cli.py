@@ -337,9 +337,19 @@ def open_raw_fat(device, writable=False):
     plat = platform.current()
     max_xfer = _effective_xfer()
     node = plat.raw_read_node(device)
-    mode = "r+b" if writable else "rb"
-    fobj = plat.open_raw(node, mode)
-    dev = fatfs.BlockDev(part_start=0, max_xfer=max_xfer, fileobj=fobj)
+    if plat.raw_open_direct():
+        # Linux: BlockDev opens the node itself so block devices get O_DIRECT
+        # — a buffered file object here re-introduces the page cache, whose
+        # readahead/writeback re-batching only pinned queue settings tame
+        # (that regression shipped in v0.3.0 and preceded a bridge crash).
+        dev = fatfs.BlockDev(node, part_start=0, max_xfer=max_xfer,
+                             writable=writable)
+    else:
+        # macOS (rdisk + AlignedRawIO) and Windows (WinHandleIO) wrap their
+        # raw handles in platform-specific file objects instead.
+        mode = "r+b" if writable else "rb"
+        fobj = plat.open_raw(node, mode)
+        dev = fatfs.BlockDev(part_start=0, max_xfer=max_xfer, fileobj=fobj)
     boot = dev.read(0, 1)
     is_fat = boot[82:85] == b"FAT" and boot[510:512] == b"\x55\xaa"
     if not is_fat and boot[510:512] == b"\x55\xaa":
@@ -821,6 +831,19 @@ def mount_device(dev, label=None):
     unresponsive (a real failure mode on this machine — the FireWire iPod can
     leave it timing out), falls back to `sudo mount`, which prompts for the
     password on a terminal."""
+    # A FireWire iPod must have its queue pinned BEFORE mounting: the mount
+    # itself is big buffered kernel reads, and at default settings those are
+    # what crash the bridge. (Learned the hard way: mount-then-pin left the
+    # bridge EIO'ing before the pin ever ran.)
+    if not ensure_firewire_disk_safe(dev):
+        disk = _disk_of_dev(dev)
+        print(f"flashpod: {dev} is a FireWire iPod and its host I/O settings "
+              f"could not be made safe — refusing to mount it (mounting reads "
+              f"big and can crash the bridge). Pin them and retry:\n"
+              f"  sudo sh -c 'echo 4 >/sys/block/{disk}/queue/max_sectors_kb; "
+              f"echo 0 >/sys/block/{disk}/queue/read_ahead_kb'",
+              file=sys.stderr)
+        return None
     res = None
     try:
         res = subprocess.run(["udisksctl", "mount", "-b", dev],
@@ -916,7 +939,8 @@ def _attached_ipod_count():
         return None
     n = 0
     for d in data.get("blockdevices", []):
-        if d.get("type") != "disk":
+        # "rbc" too: early iPods are SCSI RBC devices over FireWire/SBP-2
+        if d.get("type") not in ("disk", "rbc"):
             continue
         ident = (" ".join(str(d.get(k) or "") for k in ("vendor", "model"))).lower()
         labels = " ".join((c.get("label") or "") for c in (d.get("children") or [])).upper()
@@ -976,28 +1000,24 @@ def offer_mount(announce_empty=True):
     return None
 
 
-def firewire_queue_problem(mount):
-    """Early iPod FireWire bridges crash on large or queued reads; the
+def _disk_of_dev(dev):
+    """Whole-disk name for a partition or disk node: /dev/sdb2 -> sdb,
+    /dev/nvme0n1p2 -> nvme0n1, /dev/sdb -> sdb."""
+    name = os.path.basename(dev)
+    stripped = re.sub(r"p?\d+$", "", name)
+    # nvme0n1 / mmcblk0 / loop0 ARE whole disks; only strip when the result
+    # still names a real disk (sdb2 -> sdb). Best answered by sysfs.
+    if stripped and os.path.isdir("/sys/block/" + stripped):
+        return stripped
+    return name
+
+
+def firewire_disk_problem(disk):
+    """Early iPod FireWire bridges crash on large or queued transfers; the
     kernel's default block-queue settings are therefore data-eating for
     them, and they reset on every re-attach.
-    If `mount` is backed by a FireWire disk with unsafe settings, return
+    If /dev/<disk> is a FireWire disk with unsafe settings, return
     (disk, [problems]); otherwise None."""
-    dev = None
-    try:
-        f = open(MOUNTS_FILE)
-    except OSError:  # no /proc/mounts (macOS) -> no Linux queue to pin
-        return None
-    with f:
-        for line in f:
-            parts = line.split()
-            if len(parts) >= 2:
-                mnt = re.sub(r"\\([0-7]{3})",
-                             lambda m: chr(int(m.group(1), 8)), parts[1])
-                if mnt == mount:
-                    dev = parts[0]
-    if not dev or not dev.startswith("/dev/"):
-        return None
-    disk = re.sub(r"p?\d+$", "", os.path.basename(dev))  # sdb2 -> sdb
     res = subprocess.run(["lsblk", "-dno", "TRAN", "/dev/" + disk],
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
     if res.returncode != 0 or res.stdout.strip() not in ("sbp", "ieee1394"):
@@ -1021,13 +1041,51 @@ def firewire_queue_problem(mount):
     return (disk, bad) if bad else None
 
 
+def firewire_queue_problem(mount):
+    """firewire_disk_problem() for the disk backing `mount`; None when the
+    mount isn't backed by a FireWire disk (or there's no /proc/mounts)."""
+    dev = None
+    try:
+        f = open(MOUNTS_FILE)
+    except OSError:  # no /proc/mounts (macOS) -> no Linux queue to pin
+        return None
+    with f:
+        for line in f:
+            parts = line.split()
+            if len(parts) >= 2:
+                mnt = re.sub(r"\\([0-7]{3})",
+                             lambda m: chr(int(m.group(1), 8)), parts[1])
+                if mnt == mount:
+                    dev = parts[0]
+    if not dev or not dev.startswith("/dev/"):
+        return None
+    return firewire_disk_problem(_disk_of_dev(dev))
+
+
+def ensure_firewire_disk_safe(dev):
+    """Pin the queue of the FireWire disk backing `dev` BEFORE it is touched
+    with buffered I/O (an OS mount, most of all — the kernel FAT driver reads
+    big). Returns True when safe to proceed: not a FireWire disk, or pinned
+    (now) successfully. flashpod once mounted first and pinned after; the
+    mount-time reads ran at the data-eating defaults and EIO'd the bridge."""
+    disk = _disk_of_dev(dev)
+    problem = firewire_disk_problem(disk)
+    if not problem:
+        return True
+    pin_firewire_queue(disk)
+    return firewire_disk_problem(disk) is None  # verify, don't trust
+
+
 def pin_firewire_queue(disk):
-    """Write the safe queue settings (root or sudo). queue_depth is
-    best-effort (not writable on every device)."""
+    """Write the safe queue settings (root or sudo). queue_depth is only
+    written when it isn't already 1: some drivers (firewire_sbp2 here)
+    expose it read-only — and `[ -w ]` can't detect that under root, where
+    access(2) says yes but the store-less sysfs attr still refuses. sbp2
+    defaults to depth 1 anyway, which is exactly what we need."""
+    qd = f"/sys/block/{disk}/device/queue_depth"
     script = (f"echo 4 >/sys/block/{disk}/queue/max_sectors_kb && "
               f"echo 0 >/sys/block/{disk}/queue/read_ahead_kb && "
-              f"{{ [ ! -w /sys/block/{disk}/device/queue_depth ] || "
-              f"echo 1 >/sys/block/{disk}/device/queue_depth; }}")
+              f'{{ [ "$(cat {qd} 2>/dev/null)" = "1" ] || echo 1 >{qd}; }}')
     cmd = ["sh", "-c", script]
     if os.geteuid() != 0:
         print(f"flashpod: pinning safe FireWire I/O settings on {disk} "
@@ -1069,7 +1127,8 @@ def firewire_sbp2_needed():
 def _wait_for_firewire_disk(timeout=8.0):
     """After loading sbp2, poll until a FireWire (sbp/ieee1394) block disk shows
     up so the following scan can see it, then let the FAT probe settle so
-    fat_disk_candidates() reports the partition's fstype. Best-effort."""
+    fat_disk_candidates() reports the partition's fstype. Best-effort; returns
+    the disk name (e.g. "sdb") or None."""
     import time
     deadline = time.monotonic() + timeout
     while True:
@@ -1078,13 +1137,16 @@ def _wait_for_firewire_disk(timeout=8.0):
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                  universal_newlines=True, timeout=5).stdout
             for d in json.loads(out).get("blockdevices", []):
-                if d.get("type") == "disk" and d.get("tran") in ("sbp", "ieee1394"):
+                # type "rbc", not "disk": early iPods are SCSI RBC devices
+                # (checking "disk" alone made this wait always time out)
+                if d.get("type") in ("disk", "rbc") \
+                        and d.get("tran") in ("sbp", "ieee1394"):
                     time.sleep(1.0)               # let the partition probe land
-                    return True
+                    return d.get("name")
         except (OSError, ValueError, subprocess.SubprocessError):
             pass
         if time.monotonic() >= deadline:
-            return False
+            return None
         time.sleep(0.4)
 
 
@@ -1113,7 +1175,14 @@ def load_firewire_sbp2():
     except (OSError, KeyboardInterrupt) as exc:
         print(f"flashpod: couldn't load firewire_sbp2 ({exc}).", file=sys.stderr)
         return False
-    _wait_for_firewire_disk()
+    disk = _wait_for_firewire_disk()
+    if disk:
+        # Pin the fresh attach's queue NOW, while the sudo credentials from
+        # the modprobe are still cached — before anything (a mount offer, a
+        # scan, another process) touches the disk with buffered I/O at the
+        # data-eating default settings. Best-effort: the command-level checks
+        # still verify and refuse.
+        ensure_firewire_disk_safe(disk)
     return os.path.isdir("/sys/module/firewire_sbp2")
 
 
@@ -1169,10 +1238,27 @@ def _mounted_devices():
 def _unmounted_disks(disks):
     """Filter fat_disk_candidates() down to the ones NOT currently mounted —
     i.e. attached FAT disks that could be a second, unmounted iPod (the FireWire
-    unit sitting next to a freshly-flashed card in a reader)."""
+    unit sitting next to a freshly-flashed card in a reader). A WHOLE-disk
+    candidate (/dev/sdb — offered when udev couldn't identify its filesystems)
+    counts as mounted when any of its partitions is, so the mounted iPod isn't
+    re-offered as a "second" iPod via its own disk node."""
     mounted = _mounted_devices()
-    return [(node, desc) for node, desc in disks
-            if os.path.realpath(node) not in mounted]
+
+    def is_mounted(node):
+        real = os.path.realpath(node)
+        if real in mounted:
+            return True
+        for m in mounted:
+            # /dev/sdb covers /dev/sdb2; /dev/nvme0n1 covers /dev/nvme0n1p2.
+            # (A bare "p" separator or digits only — anything else is a
+            # different disk that merely shares the prefix, e.g. sdba1.)
+            tail = m[len(real):] if m.startswith(real) else ""
+            if tail and (tail.isdigit()
+                         or (tail[0] == "p" and tail[1:].isdigit())):
+                return True
+        return False
+
+    return [(node, desc) for node, desc in disks if not is_mounted(node)]
 
 
 def _choose_source(sources):

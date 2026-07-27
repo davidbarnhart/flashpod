@@ -78,6 +78,22 @@ jobs:
         shell: bash
         run: PYTHONPATH=. python scripts/test_multi_ipod_detect.py
 
+      - name: Linux disk-candidate enumeration logic
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_linux_fat_candidates.py
+
+      # The raw driver must open the device PATH on Linux (that's where
+      # O_DIRECT lives); PR #54 silently swapped in a buffered fileobj and
+      # no test noticed. The simulated-card run exercises the real O_DIRECT
+      # I/O; this pins the wiring cheaply on every platform.
+      - name: Raw-open wiring (O_DIRECT on Linux)
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_raw_open_wiring.py
+
+      - name: FireWire queue pinned before mounting
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_firewire_pin_order.py
+
       - name: Firmware is resolved before sudo elevation
         shell: bash
         run: PYTHONPATH=. python scripts/test_flash_preelevation.py
