@@ -46,6 +46,14 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data)
 
+# macOS: FLASHPOD_TARGET_ARCH=universal2 makes CI emit a fat binary (Intel +
+# Apple Silicon) — requires a universal2 build Python (python.org's, not
+# setup-python's arm64-only one). Passed only when set, so toolchains whose
+# EXE() predates the kwarg (the 10.8 build) never see it.
+exe_kwargs = {}
+if os.environ.get("FLASHPOD_TARGET_ARCH"):
+    exe_kwargs["target_arch"] = os.environ["FLASHPOD_TARGET_ARCH"]
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -58,4 +66,5 @@ exe = EXE(
     strip=False,
     upx=False,
     console=True,
+    **exe_kwargs
 )

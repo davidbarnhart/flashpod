@@ -11,9 +11,11 @@ name: release
 # shipped self-reporting 0.3.0 because two version strings were bumped
 # independently.
 #
-# macOS here means MODERN macOS (Apple Silicon, macos-latest). The OS X 10.8
-# build — the FireWire-era target — cannot be produced by any GitHub runner
-# and is built by hand on 10.8 hardware and uploaded afterwards; see BUILD.md.
+# macOS here means MODERN macOS: a universal2 binary (Intel + Apple Silicon)
+# built on macos-latest with python.org's fat Python, both slices smoke-tested
+# (arm64 natively, x86_64 under Rosetta). The OS X 10.8 build — the
+# FireWire-era target — cannot be produced by any GitHub runner and is built
+# by hand on 10.8 hardware and uploaded afterwards; see BUILD.md.
 
 on:
   push:
@@ -45,10 +47,11 @@ jobs:
             slug: windows-x86_64
             bin: flashpod.exe
             archive: flashpod-windows-x86_64.zip
-          - os: macos-latest        # arm64; for MODERN Macs — the 10.8 build
-            slug: macos-arm64       # stays manual (BUILD.md), this one exists
-            bin: flashpod           # so modern-Mac users stop grabbing it
-            archive: flashpod-macos-arm64.tar.gz
+          - os: macos-latest        # for MODERN Macs, Intel AND Apple Silicon
+            slug: macos-universal2  # (universal2 fat binary) — the 10.8 build
+            bin: flashpod           # stays manual (BUILD.md); this one exists
+            archive: flashpod-macos-universal2.tar.gz   # so modern-Mac users
+            target_arch: universal2                     # stop grabbing it
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -67,6 +70,19 @@ jobs:
             exit 1
           fi
 
+      # A universal2 binary needs a universal2 build Python; setup-python's
+      # macOS build is arm64-only. Install python.org's fat build and work in
+      # a venv made from it (the venv wins the PATH for all later steps).
+      - name: Install universal2 Python (macOS only)
+        if: runner.os == 'macOS'
+        run: |
+          curl -sSLo /tmp/python.pkg \
+            https://www.python.org/ftp/python/3.12.10/python-3.12.10-macos11.pkg
+          sudo installer -pkg /tmp/python.pkg -target /
+          /Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12 \
+            -m venv "$RUNNER_TEMP/u2env"
+          echo "$RUNNER_TEMP/u2env/bin" >> "$GITHUB_PATH"
+
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
@@ -77,7 +93,19 @@ jobs:
         run: sh scripts/check-py36-compat.sh
 
       - name: Build the binary
+        env:
+          FLASHPOD_TARGET_ARCH: ${{ matrix.target_arch || '' }}
         run: pyinstaller --clean --noconfirm flashpod.spec
+
+      - name: Verify both architectures (macOS only)
+        if: runner.os == 'macOS'
+        run: |
+          archs="$(lipo -archs dist/flashpod)"
+          echo "slices: $archs"
+          case "$archs" in
+            *x86_64*arm64*|*arm64*x86_64*) ;;
+            *) echo "::error::binary is not universal2 (got: $archs)"; exit 1 ;;
+          esac
 
       - name: Smoke test (self-test + firmware download)
         shell: bash
@@ -86,6 +114,12 @@ jobs:
           "./$BIN" flash --self-test
           python -c "open('dummy.img','wb').truncate(64*1024*1024)"
           "./$BIN" flash dummy.img --dry-run --yes
+
+      # The runner is arm64, so the smoke test above exercised the arm64
+      # slice; Rosetta lets us genuinely run the Intel slice too.
+      - name: Smoke test the Intel slice under Rosetta (macOS only)
+        if: runner.os == 'macOS'
+        run: arch -x86_64 dist/flashpod flash --self-test
 
       - name: Package archive
         shell: bash
@@ -98,7 +132,7 @@ jobs:
             cp packaging/windows/README.txt "$stage/"
             7z a -tzip "${{ matrix.archive }}" "$stage" >/dev/null
           elif [ "${{ runner.os }}" = "macOS" ]; then
-            cp packaging/macos-arm64/README.txt "$stage/"
+            cp packaging/macos-universal2/README.txt "$stage/"
             chmod +x "$stage/${{ matrix.bin }}"
             tar czf "${{ matrix.archive }}" "$stage"
           else

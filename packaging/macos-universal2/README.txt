@@ -1,10 +1,11 @@
-flashpod for macOS (Apple Silicon, modern macOS)
-================================================
+flashpod for macOS (modern Macs — Intel and Apple Silicon)
+==========================================================
 
-This is the build for MODERN Macs. If you are setting up a vintage
-FireWire-era Mac (OS X 10.8), use flashpod-macos-10.8.tar.gz instead —
-that one has the firmware images baked in and runs on hardware this
-build cannot.
+This is the build for MODERN Macs: one universal binary containing both
+the Intel (x86_64) and Apple Silicon (arm64) versions; macOS runs the
+right one automatically. If you are setting up a vintage FireWire-era
+Mac (OS X 10.8), use flashpod-macos-10.8.tar.gz instead — that one has
+the firmware images baked in and runs on hardware this build cannot.
 
 This archive contains:
 
@@ -26,7 +27,7 @@ Then run it (optionally move it onto your PATH, e.g. /usr/local/bin):
   sudo ./flashpod flash      # writing a card needs root
 
 Prefer pip? `pip install flashpod` (or pipx) gives you the same tool as
-a normal Python package.
+a normal Python package, on any Mac with Python 3.
 
 Firmware
 --------

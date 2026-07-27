@@ -27,7 +27,7 @@ Artifacts:
 |------|----------|
 | `flashpod-linux-x86_64` | Linux (built on glibc 2.35 / Ubuntu 22.04, runs on that and newer) |
 | `flashpod-windows-x86_64.exe` | Windows 10/11 x86-64 |
-| `flashpod-macos-arm64` | Modern macOS, Apple Silicon (Intel Macs: `pip install flashpod`) |
+| `flashpod-macos-universal2` | Modern macOS, Intel + Apple Silicon (one fat binary; built with python.org's universal2 Python, both slices smoke-tested in CI) |
 
 The tag must match `__version__` in `flashpod/__init__.py` — **the single
 place the version lives** (pyproject.toml reads it dynamically; the workflow

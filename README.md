@@ -78,17 +78,16 @@ flashpod --help
 **Windows** (`flashpod-windows-x86_64.zip`): unzip it and run `flashpod.exe`
 from a terminal (an Administrator terminal for `flash`).
 
-**Modern Macs (Apple Silicon)** (`flashpod-macos-arm64.tar.gz`): extract, then
-make the binary runnable and clear the Gatekeeper quarantine (it's unsigned):
+**Modern Macs — Intel and Apple Silicon** (`flashpod-macos-universal2.tar.gz`):
+one universal binary, macOS picks the right architecture. Extract, then make
+it runnable and clear the Gatekeeper quarantine (it's unsigned):
 
 ```sh
-tar xzf flashpod-macos-arm64.tar.gz && cd flashpod-macos-arm64
+tar xzf flashpod-macos-universal2.tar.gz && cd flashpod-macos-universal2
 chmod +x flashpod
 xattr -d com.apple.quarantine flashpod   # or right-click → Open once
 ./flashpod --help
 ```
-
-(On an Intel Mac, use `pip install flashpod` instead.)
 
 The **Linux, Windows, and modern-macOS** builds don't bundle firmware —
 `flashpod flash` downloads the image you pick (verified by checksum), or you
