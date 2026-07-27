@@ -99,6 +99,53 @@ or pull the card into a USB reader, or use flashpod's
 This is specific to this flaky bridge + flash mod; stock 1G/2G iPods mount on
 Macs over FireWire fine.
 
+### The "disk you inserted was not readable" dialog
+
+Because the mount probe fails, macOS offers **Initialize… / Ignore / Eject**
+every time you attach the iPod.
+
+> **Always click Ignore. Never Initialize** — that opens Disk Utility pointed
+> at your iPod, one click from erasing the card.
+
+flashpod doesn't care either way: it reads `/dev/rdiskN` itself and never
+needs the volume mounted. To stop the panel appearing at all, disable the GUI
+agent that draws it (run in Terminal **on the Mac** — over SSH it lands in a
+different launchd bootstrap and won't affect your desktop session):
+
+```sh
+launchctl unload -w /System/Library/LaunchAgents/com.apple.DiskArbitrationAgent.plist
+```
+
+`diskarbitrationd` — the daemon that actually probes and mounts — keeps
+running, so ordinary disks still automount as before; only the notification
+panels stop. It persists across reboots; `load -w` puts it back. The
+trade-off: it silences the panel for *every* unreadable disk, not just the
+iPod. (An `/etc/fstab` entry can't help here — fstab matches on volume UUID
+or label, and the whole problem is that macOS can't read either one off this
+bridge.)
+
+### "It vanished from `diskutil` entirely"
+
+Different symptom, different cause: **the bridge is wedged**, not the card.
+Seen live on 10.8 — macOS had the whole driver stack attached
+(`IOFireWireSBP2LUN` → `iPodFireWireTransport` → `IOBlockStorageDriver`) but
+published **no `IOMedia`**, so no `/dev/diskN` existed and nothing could find
+it. That means the OS asked for the medium/capacity and got nothing back —
+the same collapse Linux shows as a 0-byte disk.
+
+The bridge is powered by the iPod's own battery, so **its state survives
+unplugging** — carrying a wedged iPod to another machine brings the wedge
+along, and a cable replug won't clear it. Reset the iPod itself: Hold on,
+Hold off, then **Menu + Play/Pause** until the Apple logo appears. The disk
+comes back.
+
+Diagnose it with:
+
+```sh
+ioreg -c IOFireWireSBP2LUN -r -d 6 | grep -E '\+-o'   # stack attached?
+ioreg -c IOMedia | grep -i ipod                       # any media node?
+```
+
 ## Write bandwidth
 
 Raw writes over the bridge are **bandwidth-limited at ~270 KiB/s** (a hard

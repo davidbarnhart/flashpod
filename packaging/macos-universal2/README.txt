@@ -3,9 +3,11 @@ flashpod for macOS (modern Macs — Intel and Apple Silicon)
 
 This is the build for MODERN Macs: one universal binary containing both
 the Intel (x86_64) and Apple Silicon (arm64) versions; macOS runs the
-right one automatically. If you are setting up a vintage FireWire-era
-Mac (OS X 10.8), use flashpod-macos-10.8.tar.gz instead — that one has
-the firmware images baked in and runs on hardware this build cannot.
+right one automatically. It needs macOS 10.13 or newer (the embedded
+Python's floor). If you are setting up a vintage FireWire-era Mac
+(OS X 10.8), this build will NOT launch there ("Symbol not found:
+___sincos_stret") — use flashpod-macos-vintage-no-internet.tar.gz
+instead: firmware baked in, built for that hardware.
 
 This archive contains:
 
@@ -15,19 +17,35 @@ This archive contains:
 
 Run it
 ------
-This binary is unsigned, so macOS quarantines downloads. Clear that and
-make it executable:
-
-  chmod +x flashpod
-  xattr -d com.apple.quarantine flashpod      # or right-click -> Open once
-
-Then run it (optionally move it onto your PATH, e.g. /usr/local/bin):
+Just run it (optionally move it onto your PATH, e.g. /usr/local/bin) --
+the archive already carries the executable bit:
 
   ./flashpod --help
   sudo ./flashpod flash      # writing a card needs root
 
+No chmod or xattr ceremony needed. macOS flags browser downloads with a
+quarantine attribute, but that does not affect running a binary from a
+terminal -- only launching it from Finder, where Gatekeeper objects
+because this build is unsigned. If you go that route, right-click ->
+Open once, or clear the flag:
+
+  xattr -d com.apple.quarantine flashpod
+
 Prefer pip? `pip install flashpod` (or pipx) gives you the same tool as
 a normal Python package, on any Mac with Python 3.
+
+Attaching an iPod over FireWire
+------------------------------
+macOS cannot mount these iPods' FAT volume (the early FireWire bridge
+corrupts the OS's read-ahead), so on attach you get a "disk you inserted
+was not readable" panel. ALWAYS CLICK IGNORE -- "Initialize" opens Disk
+Utility pointed at your iPod and is one click from erasing it. flashpod
+doesn't need the mount; it reads the raw device itself.
+
+If the iPod disappears from `diskutil` completely, the bridge is wedged:
+reset the iPod (Hold on, Hold off, then Menu + Play/Pause until the Apple
+logo). The bridge runs off the iPod's battery, so replugging the cable
+does not reset it.
 
 Firmware
 --------

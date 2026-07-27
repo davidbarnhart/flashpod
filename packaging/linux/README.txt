@@ -14,9 +14,9 @@ Install
   ./install.sh          install to ~/.local/bin   (no root needed)
   sudo ./install.sh     install to /usr/local/bin (system-wide)
 
-…or don't install at all — just run it where it is:
+…or don't install at all — just run it where it is (the archive already
+carries the executable bit):
 
-  chmod +x flashpod
   ./flashpod --help
 
 Usage

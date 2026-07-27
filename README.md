@@ -19,8 +19,10 @@ the library on the device too — adding and removing songs right on the iPod.
 - **Flash cards:** CompactFlash card, or SD card with a CompactFlash adapter.
 - **Card reader:** USB CompactFlash reader (to flash the card and load the bulk
   of your music).
-- **Operating system:** Linux and macOS (tested). Windows has a backend but
-  isn't tested yet.
+- **Operating system:** Linux, macOS (Intel, Apple Silicon, and vintage
+  OS X 10.8), and Windows — card flashing is hardware-tested on all three.
+  Managing music on the iPod itself is Linux and macOS; on Windows, load the
+  card in the reader.
 
 flashpod was originally written to run from a modern Linux desktop. The
 one-time flashing operation only needs a working USB card reader. For a 3rd- or
@@ -37,9 +39,17 @@ machine with a FireWire card lets flashpod manage a 1st- or 2nd-gen iPod.
 That's not the only option, though. Older Macs shipped with FireWire built in,
 and flashpod was deliberately written with as few external dependencies as
 possible — and against a relatively old Python — to stay runnable on vintage
-Mac hardware. It's been tested on a MacBook running OS X 10.8 so far. Since old
-Macs often can't get online, the macOS release can be copied to a USB drive on
-a modern machine and installed on the MacBook from there.
+Mac hardware. It's been tested on a MacBook running OS X 10.8, listing and
+adding music over FireWire. Since old Macs often can't get online, the
+`flashpod-macos-vintage-no-internet` release is built for exactly that: the
+firmware images are baked in, so you can copy it to a USB drive on a modern
+machine and run it on the vintage Mac with no network at all.
+
+One caveat on the Mac: these iPods' FireWire bridge corrupts the large reads
+macOS uses to mount a volume, so macOS **cannot mount the iPod** and offers to
+initialize it on every attach — always choose **Ignore** ("Initialize" opens
+Disk Utility aimed at your iPod). flashpod is unaffected: it reads the raw
+device directly, so `ls`, `add`, and `rm` all work with the volume unmounted.
 
 ## Loading music
 
@@ -79,15 +89,22 @@ flashpod --help
 from a terminal (an Administrator terminal for `flash`).
 
 **Modern Macs — Intel and Apple Silicon** (`flashpod-macos-universal2.tar.gz`):
-one universal binary, macOS picks the right architecture. Extract, then make
-it runnable and clear the Gatekeeper quarantine (it's unsigned):
+one universal binary, macOS picks the right architecture. Needs **macOS 10.13
+or newer** (the embedded Python's floor) — on a vintage FireWire-era Mac it
+dies at launch with a `Symbol not found` dlopen error; use the vintage
+build below instead.
 
 ```sh
 tar xzf flashpod-macos-universal2.tar.gz && cd flashpod-macos-universal2
-chmod +x flashpod
-xattr -d com.apple.quarantine flashpod   # or right-click → Open once
 ./flashpod --help
 ```
+
+> No `chmod` or `xattr` ceremony needed: the archive preserves the
+> executable bit, and macOS's download quarantine doesn't affect running a
+> binary from a terminal (verified — a Firefox-downloaded copy is flagged
+> and runs fine). Only if you launch it from **Finder** does Gatekeeper
+> object, this build being unsigned; then either right-click → Open once,
+> or `xattr -d com.apple.quarantine flashpod`.
 
 The **Linux, Windows, and modern-macOS** builds don't bundle firmware —
 `flashpod flash` downloads the image you pick (verified by checksum), or you
@@ -95,14 +112,14 @@ supply your own with `--firmware`. (The **macOS 10.8** build is different —
 see below.) Building the binaries yourself is documented in
 [BUILD.md](BUILD.md).
 
-**Vintage Macs (OS X 10.8)** (`flashpod-macos-10.8.tar.gz`): this is the build
-for FireWire-era Macs — firmware baked in, no network needed — **not** the one
-for a modern Mac. Same extract-and-dequarantine dance as above:
+**Vintage Macs (OS X 10.8)** (`flashpod-macos-vintage-no-internet.tar.gz`):
+this is the build for FireWire-era Macs — firmware baked in, no network
+needed — **not** the one for a modern Mac. Extract and run it the same way
+(including the quarantine note above, if macOS refuses):
 
 ```sh
-tar xzf flashpod-macos-10.8.tar.gz && cd flashpod-macos-10.8
-chmod +x flashpod
-xattr -d com.apple.quarantine flashpod   # or right-click → Open once
+tar xzf flashpod-macos-vintage-no-internet.tar.gz
+cd flashpod-macos-vintage-no-internet
 ./flashpod --help
 ```
 
