@@ -90,27 +90,12 @@ from a terminal (an Administrator terminal for `flash`).
 
 **Modern Macs — Intel and Apple Silicon** (`flashpod-macos-universal2.tar.gz`):
 one universal binary, macOS picks the right architecture. Needs **macOS 10.13
-or newer** (the embedded Python's floor) — on a vintage FireWire-era Mac it
-dies at launch with a `Symbol not found` dlopen error; use the vintage
-build below instead.
+or newer**.
 
 ```sh
 tar xzf flashpod-macos-universal2.tar.gz && cd flashpod-macos-universal2
 ./flashpod --help
 ```
-
-> No `chmod` or `xattr` ceremony needed: the archive preserves the
-> executable bit, and macOS's download quarantine doesn't affect running a
-> binary from a terminal (verified — a Firefox-downloaded copy is flagged
-> and runs fine). Only if you launch it from **Finder** does Gatekeeper
-> object, this build being unsigned; then either right-click → Open once,
-> or `xattr -d com.apple.quarantine flashpod`.
-
-The **Linux, Windows, and modern-macOS** builds don't bundle firmware —
-`flashpod flash` downloads the image you pick (verified by checksum), or you
-supply your own with `--firmware`. (The **macOS 10.8** build is different —
-see below.) Building the binaries yourself is documented in
-[BUILD.md](BUILD.md).
 
 **Vintage Macs (OS X 10.8)** (`flashpod-macos-vintage-no-internet.tar.gz`):
 this is the build for FireWire-era Macs — firmware baked in, no network
@@ -123,6 +108,12 @@ cd flashpod-macos-vintage-no-internet
 ./flashpod --help
 ```
 
+The **Linux, Windows, and modern-macOS** builds don't bundle firmware —
+`flashpod flash` downloads the image you pick (verified by checksum), or you
+supply your own with `--firmware`. (The **Vintage Mac OS 10.8** build is the exception) 
+Building the binaries yourself is documented in [BUILD.md](BUILD.md).
+
+
 ## Typical workflow
 
 **Set the card up in a USB reader first — transfers are far faster there than
@@ -130,8 +121,9 @@ over FireWire.** Flash it, then let flashpod initialize the database and load
 your music, all in one sitting:
 
 ```sh
-flashpod flash    # flash firmware + format the card; then answer Y to
-                  # init the database, and Y to load your music onto it
+flashpod flash    # full workflow to partition and format a card,
+                  # write the firmware, init the database, and
+                  # add music all at once
 ```
 
 <details>
