@@ -23,11 +23,13 @@ the archive already carries the executable bit:
   ./flashpod --help
   sudo ./flashpod flash      # writing a card needs root
 
-In the unlikely event macOS refuses ("cannot be opened because the
-developer cannot be verified", or it is simply killed), this build is
-unsigned and got flagged on download. Clear the flag:
+No chmod or xattr ceremony needed. macOS flags browser downloads with a
+quarantine attribute, but that does not affect running a binary from a
+terminal -- only launching it from Finder, where Gatekeeper objects
+because this build is unsigned. If you go that route, right-click ->
+Open once, or clear the flag:
 
-  xattr -d com.apple.quarantine flashpod      # or right-click -> Open once
+  xattr -d com.apple.quarantine flashpod
 
 Prefer pip? `pip install flashpod` (or pipx) gives you the same tool as
 a normal Python package, on any Mac with Python 3.
