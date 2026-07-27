@@ -31,6 +31,19 @@ Then run it (optionally move it onto your PATH, e.g. /usr/local/bin):
 Prefer pip? `pip install flashpod` (or pipx) gives you the same tool as
 a normal Python package, on any Mac with Python 3.
 
+Attaching an iPod over FireWire
+------------------------------
+macOS cannot mount these iPods' FAT volume (the early FireWire bridge
+corrupts the OS's read-ahead), so on attach you get a "disk you inserted
+was not readable" panel. ALWAYS CLICK IGNORE -- "Initialize" opens Disk
+Utility pointed at your iPod and is one click from erasing it. flashpod
+doesn't need the mount; it reads the raw device itself.
+
+If the iPod disappears from `diskutil` completely, the bridge is wedged:
+reset the iPod (Hold on, Hold off, then Menu + Play/Pause until the Apple
+logo). The bridge runs off the iPod's battery, so replugging the cable
+does not reset it.
+
 Firmware
 --------
 At flash time the chosen firmware image is downloaded from the project's
