@@ -34,6 +34,7 @@ import subprocess
 import sys
 import textwrap
 import time
+import ssl
 import urllib.error
 import urllib.request
 
@@ -209,10 +210,62 @@ def _sha256(path):
     return h.hexdigest()
 
 
+# Well-known CA bundles, in the order we'd rather find them.
+_CA_BUNDLES = (
+    "/etc/ssl/cert.pem",                    # macOS, FreeBSD
+    "/etc/ssl/certs/ca-certificates.crt",   # Debian, Ubuntu, Alpine
+    "/etc/pki/tls/certs/ca-bundle.crt",     # RHEL, Fedora, CentOS
+    "/etc/ssl/ca-bundle.pem",               # openSUSE
+    "/etc/ssl/certs",                       # a hashed directory, as a last resort
+)
+
+
+def _ca_bundle():
+    """A CA bundle we can actually verify against, or None to use the defaults.
+
+    The frozen builds are the problem this exists for. PyInstaller bundles no
+    certificates, and the ssl module it packages was compiled with the CA path
+    of the BUILD machine baked in -- so on someone else's Mac that path simply
+    does not exist and every HTTPS fetch dies with CERTIFICATE_VERIFY_FAILED
+    (unable to get local issuer certificate). Nothing is wrong with the user's
+    machine or the network; Python is just looking in a directory that was
+    never there.
+
+    Order: honour whatever ssl already resolves to (that covers a normal pip
+    install, and SSL_CERT_FILE, which get_default_verify_paths reflects), then
+    certifi if a build bundled it, then the platform's own store.
+    """
+    paths = ssl.get_default_verify_paths()
+    if (paths.cafile and os.path.exists(paths.cafile)) or \
+       (paths.capath and os.path.isdir(paths.capath)):
+        return None                        # defaults are fine -- don't override
+    try:
+        import certifi                     # not a dependency; used if present
+        where = certifi.where()
+        if os.path.exists(where):
+            return where
+    except Exception:                      # noqa: BLE001 - absent or broken
+        pass
+    for cand in _CA_BUNDLES:
+        if os.path.exists(cand):
+            return cand
+    return None                            # nothing found; let ssl raise
+
+
+def _ssl_context():
+    bundle = _ca_bundle()
+    if bundle and os.path.isdir(bundle):
+        ctx = ssl.create_default_context(capath=bundle)
+    else:
+        ctx = ssl.create_default_context(cafile=bundle)   # None = ssl defaults
+    return ctx
+
+
 def _download(url, dst, total=None):
     """Stream `url` to `dst` with a progress line. Raises on network/IO error."""
     req = urllib.request.Request(url, headers={"User-Agent": "flashpod"})
-    with urllib.request.urlopen(req) as resp, open(dst, "wb") as out:
+    with urllib.request.urlopen(req, context=_ssl_context()) as resp, \
+            open(dst, "wb") as out:
         total = total or int(resp.headers.get("Content-Length") or 0)
         done = 0
         last = 0.0
@@ -278,9 +331,17 @@ def ensure_firmware(entry, base_url):
         _download(url, tmp, entry.get("size"))
     except (urllib.error.URLError, OSError) as exc:
         _rm(tmp)
-        print(f"flashpod flash: download failed ({exc}).\n"
-              f"  Download it yourself from {url} and pass it with --firmware.",
-              file=sys.stderr)
+        print(f"flashpod flash: download failed ({exc}).", file=sys.stderr)
+        if "CERTIFICATE_VERIFY" in str(exc):
+            # Say what this actually is: not a broken machine or a bad network,
+            # but a Python that cannot find any CA certificates.
+            print("  That's a certificate-store problem, not a network one — "
+                  "this build of\n  Python has no CA bundle it can find. Point "
+                  "it at your system's:\n"
+                  "    SSL_CERT_FILE=/etc/ssl/cert.pem flashpod flash ...",
+                  file=sys.stderr)
+        print(f"  Or download it yourself from {url} and pass it with "
+              f"--firmware.", file=sys.stderr)
         return None
     if want and _sha256(tmp) != want:
         _rm(tmp)

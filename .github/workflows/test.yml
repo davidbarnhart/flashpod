@@ -98,6 +98,14 @@ jobs:
         shell: bash
         run: PYTHONPATH=. python scripts/test_flash_preelevation.py
 
+      # A frozen build carries no CA certificates and its ssl module has the
+      # BUILD machine's cert path compiled in, so firmware downloads died with
+      # CERTIFICATE_VERIFY_FAILED on every other Mac. CI never saw it: the
+      # runners' own cert paths are always valid.
+      - name: HTTPS still verifies when ssl's CA path is missing
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_ca_bundle_fallback.py
+
       - name: Post-flash init offer (partition naming per platform)
         shell: bash
         run: PYTHONPATH=. python scripts/test_post_flash_init_offer.py
