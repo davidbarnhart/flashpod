@@ -19,6 +19,10 @@ venv/
 # Local Claude Code project instructions (not for the public repo)
 /CLAUDE.md
 
+# Hand-built release tarballs passing through (the 10.8 build gets scp'd
+# here on its way to `gh release upload`)
+/flashpod-macos-*.tar.gz
+
 # Editor / OS junk
 *.swp
 .DS_Store

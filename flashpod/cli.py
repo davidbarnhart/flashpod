@@ -246,8 +246,16 @@ def ensure_firmware(entry, base_url):
     # manifest for fully-offline use — e.g. the macOS 10.8 release, where the
     # HTTPS download can't negotiate the TLS that GitHub requires.
     bundled = os.path.join(resources.firmware_dir(), name)
-    if os.path.exists(bundled) and (not want or _sha256(bundled) == want):
-        return bundled
+    if os.path.exists(bundled):
+        if not want or _sha256(bundled) == want:
+            return bundled
+        # Never fall back SILENTLY: on the offline-first heavy build the
+        # fallback download often can't work at all (no CA bundle on 10.8),
+        # so a quiet skip here turns "corrupted bundle" into a baffling
+        # SSL error somewhere else.
+        print(f"flashpod flash: the bundled {name} fails checksum "
+              f"verification (corrupted build?) — ignoring it and trying "
+              f"the cache/download instead.", file=sys.stderr)
 
     dst = os.path.join(_firmware_cache_dir(), name)
     url = entry.get("url") or (base_url.rstrip("/") + "/" + name if base_url else None)
