@@ -54,8 +54,13 @@ queue_depth    = 1      # one request at a time
 ```
 
 - using an **OS mount** of a FireWire iPod (the kernel FAT driver reads big),
-- **udev's own blkid probe** at every (re-)attach and any other buffered
-  reader — I/O flashpod doesn't issue and can't intercept.
+- **udev's own blkid probe** — at every (re-)attach, and **again every time a
+  writable handle on the device is closed** (udev watches block devices via
+  inotify). That second one bites pure-raw workflows: an unpinned post-write
+  probe collapsed the bridge to 0 capacity immediately after a successful
+  `rm` whose own O_DIRECT I/O had run clean. flashpod therefore pins at the
+  start of every raw session too (it's root there, so it's silent),
+- any other buffered reader — I/O flashpod doesn't issue and can't intercept.
 
 These **reset on every re-attach**, and unsafe defaults (128/128) are
 *data-eating* for buffered access. flashpod checks before every command and

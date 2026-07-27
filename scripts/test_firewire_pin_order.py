@@ -74,6 +74,25 @@ try:
     cli.subprocess.run = no_mount_allowed
     check("mount_device refuses unsafe disk without mounting",
           cli.mount_device("/dev/sdb2", "IPOD") is None, repr(calls))
+
+    # RAW sessions must pin too — before the device is opened. Not for our
+    # own O_DIRECT I/O (safe at any settings) but because closing a writable
+    # handle makes udev re-probe the disk with big buffered reads; at
+    # default settings that probe collapsed the bridge right after a
+    # successful `rm` (2026-07-27).
+    del calls[:]
+    cli.firewire_disk_problem = fake_problem_factory(
+        [("sdb", ["read_ahead_kb=128 (need 0)"]), None])
+    real_orf = cli.open_raw_fat
+    cli.open_raw_fat = lambda device, writable=False: \
+        calls.append("open:" + device) or "FAKE-FS"
+    try:
+        target = cli.open_raw_target("/dev/sdb2")
+        check("open_raw_target pins the queue before opening",
+              calls == ["check:sdb", "pin:sdb", "check:sdb", "open:/dev/sdb2"]
+              and target is not None, repr(calls))
+    finally:
+        cli.open_raw_fat = real_orf
 finally:
     (cli.firewire_disk_problem, cli.pin_firewire_queue, cli.subprocess.run,
      cli._disk_of_dev) = real
