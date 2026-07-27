@@ -626,6 +626,17 @@ class RawTarget:
 
 def open_raw_target(device, writable=True):
     """Open `device` as a writable RawTarget, or print why and return None."""
+    # Pin the FireWire queue for the SESSION — not for our own I/O, which is
+    # O_DIRECT and safe at any settings (proven: ls and rm both ran clean at
+    # kernel defaults). It's for what happens AFTER: closing a writable
+    # handle on a block device makes udev re-probe it with big BUFFERED
+    # reads, and at default settings that probe alone collapsed the bridge
+    # to 0 capacity right after a successful `rm` (2026-07-27). The raw path
+    # runs as root, so the pin is silent; no-op off Linux / off FireWire.
+    if not ensure_firewire_disk_safe(device):
+        print(f"flashpod: couldn't pin safe FireWire I/O settings for "
+              f"{device}; the kernel may probe it unsafely after writes.",
+              file=sys.stderr)
     try:
         fs = open_raw_fat(device, writable=writable)
     except PermissionError:
@@ -1018,8 +1029,12 @@ def firewire_disk_problem(disk):
     them, and they reset on every re-attach.
     If /dev/<disk> is a FireWire disk with unsafe settings, return
     (disk, [problems]); otherwise None."""
-    res = subprocess.run(["lsblk", "-dno", "TRAN", "/dev/" + disk],
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    try:
+        res = subprocess.run(["lsblk", "-dno", "TRAN", "/dev/" + disk],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             universal_newlines=True)
+    except OSError:        # no lsblk (macOS/Windows) -> no Linux queue to pin
+        return None
     if res.returncode != 0 or res.stdout.strip() not in ("sbp", "ieee1394"):
         return None
     bad = []
@@ -1184,6 +1199,29 @@ def load_firewire_sbp2():
         # still verify and refuse.
         ensure_firewire_disk_safe(disk)
     return os.path.isdir("/sys/module/firewire_sbp2")
+
+
+def _hint_if_bridge_collapsed(disks):
+    """After a failed scan: a FireWire disk reporting 0 sectors is the
+    bridge-collapse signature (large/queued buffered I/O wedged it — the
+    device stays on the bus but its capacity reads as zero). Say so, because
+    'none held an iPod database' points at the card when the cure is a
+    replug. Whole-disk nodes only; partitions vanish in a collapse anyway."""
+    for node, _desc in disks:
+        name = os.path.basename(node)
+        try:
+            if int(open("/sys/block/%s/size" % name).read()) != 0:
+                continue
+            res = subprocess.run(["lsblk", "-dno", "TRAN", node],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 universal_newlines=True)
+        except (OSError, ValueError):
+            continue
+        if res.returncode == 0 and res.stdout.strip() in ("sbp", "ieee1394"):
+            print(f"flashpod: {node} is a FireWire device reporting 0 bytes — "
+                  "its bridge has collapsed (this iPod's bridge does that "
+                  "after large/queued I/O). Unplug the iPod, plug it back "
+                  "in, and retry.", file=sys.stderr)
 
 
 def scan_for_ipod(cands):
@@ -1395,6 +1433,7 @@ def detect_ls_source(opts):
         for node, desc in disks:
             print(f"  checked {node}" + (f"  ({desc})" if desc else ""),
                   file=sys.stderr)
+        _hint_if_bridge_collapsed(disks)
         return None
     if len(found) == 1:
         node, desc = found[0]
@@ -1556,6 +1595,7 @@ def resolve_raw_target(opts):
         print(f"flashpod: scanned {len(disks)} disk(s); none held an iPod "
               "database. For a fresh card, run `flashpod init` first.",
               file=sys.stderr)
+        _hint_if_bridge_collapsed(disks)
         return None
     if len(found) == 1:
         node, desc = found[0]
