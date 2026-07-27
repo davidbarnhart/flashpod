@@ -162,14 +162,16 @@ def _attach_windows(img, size):
     return "\\\\.\\PhysicalDrive%d" % num
 
 
-def attach(img, size):
+def attach(img, size, create=True):
     """Create `img` (`size` bytes) and attach it as a block device; returns
-    its node."""
+    its node. With ``create=False`` the existing image is re-attached as-is
+    (POSIX only) -- creating would truncate away the flashed contents."""
     if IS_WIN:
         return _attach_windows(img, size)
-    say("creating %s (%.1f GB, sparse)" % (img, size / 1e9))
-    with open(img, "wb") as f:
-        f.truncate(size)
+    if create:
+        say("creating %s (%.1f GB, sparse)" % (img, size / 1e9))
+        with open(img, "wb") as f:
+            f.truncate(size)
     if sys.platform == "darwin":
         out = subprocess.run(
             ["hdiutil", "attach", "-imagekey", "diskimage-class=CRawDiskImage",
@@ -496,6 +498,58 @@ def require_elevation():
                  "it):\n  sudo PYTHONPATH=. python3 %s ..." % sys.argv[0])
 
 
+def raw_path_exercise(img, size, opts):
+    """Re-attach the flashed image and drive the no-mount raw path (`ls
+    --raw`, `add --raw`) against a real block device.
+
+    This is the only place CI exercises fatfs.BlockDev's direct mode on an
+    actual block device (image files fall back to plain fds): on Linux that
+    mode opens O_DIRECT, the property that makes the raw driver bridge-safe
+    without pinned queue settings -- and that wiring was silently lost once
+    (PR #54, a buffered fileobj swapped in) with no test noticing. On macOS
+    the same stage covers the rdisk/AlignedRawIO path. Returns 0 ok / 1."""
+    cmd = opts.flashpod.split() if opts.flashpod else \
+        [sys.executable, "-m", "flashpod"]
+    extra_dir = os.path.join(os.path.dirname(img), "flashpod-sim-extra")
+    tune = os.path.join(extra_dir, "raw-path-extra.wav")
+    made = generate_music(extra_dir, count=1)
+    os.replace(made[0], tune)
+
+    node = None
+    ok = True
+    try:
+        node = attach(img, size, create=False)
+        say("raw exercise: re-attached as %s" % node)
+        # ls sees the flash-time tracks; add writes one more via O_DIRECT;
+        # ls again proves the write round-trips (titles = filename stems).
+        # With --music the flash-time titles are unknown -- only check exit.
+        for argv, expect in (
+                (cmd + ["ls", "all", "--raw", node],
+                 None if opts.music else "test-track"),
+                (cmd + ["add", "--raw", node, tune], None),
+                (cmd + ["ls", "all", "--raw", node], "raw-path-extra")):
+            say("running: %s" % " ".join(argv))
+            r = subprocess.run(argv, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT,
+                               universal_newlines=True)
+            sys.stdout.write(r.stdout or "")
+            sys.stdout.flush()
+            if r.returncode != 0:
+                say("raw exercise: exited %d" % r.returncode, RED)
+                ok = False
+                break
+            if expect and expect not in (r.stdout or ""):
+                say("raw exercise: %r missing from ls output" % expect, RED)
+                ok = False
+                break
+    finally:
+        if node:
+            detach(node, img)
+    say("raw-path exercise %s" % ("passed" if ok else "FAILED"),
+        GRN if ok else RED)
+    return 0 if ok else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -599,6 +653,12 @@ def main():
         else:
             say("corrupted image rejected (exit %d), as it should be"
                 % bad.returncode, GRN)
+
+    if ret == 0 and not IS_WIN:
+        # Windows is skipped: its raw path (WinHandleIO) was already driven
+        # by the in-flash init+add, and VHD re-attach churn buys no new
+        # coverage there.
+        ret = raw_path_exercise(img, size, opts)
 
     if not opts.keep:
         try:
