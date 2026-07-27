@@ -19,8 +19,10 @@ the library on the device too — adding and removing songs right on the iPod.
 - **Flash cards:** CompactFlash card, or SD card with a CompactFlash adapter.
 - **Card reader:** USB CompactFlash reader (to flash the card and load the bulk
   of your music).
-- **Operating system:** Linux and macOS (tested). Windows has a backend but
-  isn't tested yet.
+- **Operating system:** Linux, macOS (Intel, Apple Silicon, and vintage
+  OS X 10.8), and Windows — card flashing is hardware-tested on all three.
+  Managing music on the iPod itself is Linux and macOS; on Windows, load the
+  card in the reader.
 
 flashpod was originally written to run from a modern Linux desktop. The
 one-time flashing operation only needs a working USB card reader. For a 3rd- or
@@ -37,9 +39,17 @@ machine with a FireWire card lets flashpod manage a 1st- or 2nd-gen iPod.
 That's not the only option, though. Older Macs shipped with FireWire built in,
 and flashpod was deliberately written with as few external dependencies as
 possible — and against a relatively old Python — to stay runnable on vintage
-Mac hardware. It's been tested on a MacBook running OS X 10.8 so far. Since old
-Macs often can't get online, the macOS release can be copied to a USB drive on
-a modern machine and installed on the MacBook from there.
+Mac hardware. It's been tested on a MacBook running OS X 10.8, listing and
+adding music over FireWire. Since old Macs often can't get online, the
+`flashpod-macos-vintage-no-internet` release is built for exactly that: the
+firmware images are baked in, so you can copy it to a USB drive on a modern
+machine and run it on the vintage Mac with no network at all.
+
+One caveat on the Mac: these iPods' FireWire bridge corrupts the large reads
+macOS uses to mount a volume, so macOS **cannot mount the iPod** and offers to
+initialize it on every attach — always choose **Ignore** ("Initialize" opens
+Disk Utility aimed at your iPod). flashpod is unaffected: it reads the raw
+device directly, so `ls`, `add`, and `rm` all work with the volume unmounted.
 
 ## Loading music
 
