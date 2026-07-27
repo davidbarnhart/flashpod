@@ -139,7 +139,11 @@ check("description: label + friendly transport + size",
 
 
 print("_unmounted_disks (whole-disk candidates vs the mount table):")
-# The fake nodes don't exist, so realpath passes them through unchanged.
+# On Linux, realpath passes the (non-existent) fake nodes through unchanged;
+# on Windows it would prepend a drive letter (D:\dev\sdb) and break the
+# comparisons, so pin it to the Linux behavior — the code under test only
+# ever runs on Linux.
+cli.os.path.realpath = lambda p: p
 cli._mounted_devices = lambda: {"/dev/sdb2"}
 check("whole-disk candidate with a mounted partition -> filtered",
       cli._unmounted_disks([("/dev/sdb", "FireWire 119.1G")]),
