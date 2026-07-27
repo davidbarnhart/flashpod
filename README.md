@@ -89,13 +89,11 @@ tar xzf flashpod-macos-universal2.tar.gz && cd flashpod-macos-universal2
 ./flashpod --help
 ```
 
-> **If macOS refuses to run it** ("cannot be opened because the developer
-> cannot be verified", or it's just `killed`), the binary is quarantined —
-> clear it with `xattr -d com.apple.quarantine flashpod`, or right-click →
-> Open once. This only happens when you download with a **browser** *and*
-> unpack by double-clicking in Finder; `curl`/`scp` downloads and
-> command-line `tar` don't set the flag, so most people never see it. The
-> executable bit is preserved by the archive, so no `chmod` is needed.
+> No `chmod` needed — the archive preserves the executable bit. **In the
+> unlikely event macOS refuses to run it** ("cannot be opened because the
+> developer cannot be verified", or it's just `killed`), this build is
+> unsigned and got flagged on download: clear it with `xattr -d
+> com.apple.quarantine flashpod`, or right-click → Open once.
 
 The **Linux, Windows, and modern-macOS** builds don't bundle firmware —
 `flashpod flash` downloads the image you pick (verified by checksum), or you
