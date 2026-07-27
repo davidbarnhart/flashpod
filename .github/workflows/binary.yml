@@ -97,6 +97,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller mutagen
 
+      # ConPTY driver for the simulated-card flash below: flashpod's prompts
+      # are gated on isatty, and on Windows only a pseudoconsole makes that
+      # true. release.yml never needed this because it only ever got as far as
+      # --dry-run, which asks nothing.
+      - name: Install pywinpty (Windows only)
+        if: runner.os == 'Windows'
+        run: pip install pywinpty
+
       - name: Python 3.6 compatibility check (macOS 10.8 build target)
         shell: bash
         run: sh scripts/check-py36-compat.sh
@@ -189,9 +197,15 @@ jobs:
           fi
           ls -l "${{ matrix.archive }}"
 
+      # GitHub keeps artifacts 90 days by default, which quietly accumulated
+      # ~4.4 GB across this account and ran the storage quota out. Two weeks
+      # is plenty: these are reproducible build outputs, and anything meant to
+      # last is attached to a GitHub Release instead (release assets are
+      # stored separately and are not affected by artifact retention).
       - uses: actions/upload-artifact@v4
         if: inputs.package
         with:
           name: ${{ matrix.archive }}
           path: ${{ matrix.archive }}
+          retention-days: 14
           if-no-files-found: error
