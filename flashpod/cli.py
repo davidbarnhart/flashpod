@@ -442,10 +442,54 @@ def _self_cmd():
     return [sys.argv[0]]                            # ./flashpod / installed script
 
 
+def _windows_sudo_mode():
+    """Sudo for Windows state: None if there's no sudo.exe (pre-24H2),
+    else the HKLM\\...\\CurrentVersion\\Sudo "Enabled" DWORD — 0 disabled,
+    1 "In a new window", 2 "With input disabled", 3 "Inline". Only Inline
+    elevates within the current console. A missing/unreadable key means
+    the feature was never enabled: 0."""
+    if shutil.which("sudo") is None:
+        return None
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                             r"SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo")
+        with key:
+            return int(winreg.QueryValueEx(key, "Enabled")[0])
+    except OSError:
+        return 0
+
+
+_WIN_SUDO_WHY = {
+    None: "this Windows has no `sudo` (it ships with Windows 11 24H2+)",
+    0: "Windows sudo is disabled",
+    1: 'Windows sudo is in "In a new window" mode — the elevated flashpod '
+       "would run in a separate console that closes when it exits",
+    2: 'Windows sudo is in "With input disabled" mode — flashpod\'s '
+       "interactive prompts couldn't read the keyboard",
+}
+
+
+def _windows_elevation_help(extra):
+    why = _WIN_SUDO_WHY.get(_windows_sudo_mode(),
+                            "Windows sudo is in an unrecognized mode")
+    rerun = " ".join(_self_cmd() + extra)
+    print(f"flashpod: can't self-elevate — {why}.\n"
+          "  Either run flashpod from an Administrator console:\n"
+          '    Win+X -> "Terminal (Admin)"  (or right-click PowerShell ->\n'
+          '    "Run as administrator"), then:\n'
+          f"      {rerun}\n"
+          "  or enable inline sudo once (Settings > System > For developers\n"
+          '    > enable "sudo", mode "Inline"; from an Administrator\n'
+          "    console: `sudo config --enable normal`) — after that,\n"
+          "  flashpod elevates itself.", file=sys.stderr)
+
+
 def _sudo_reexec(extra):
     """Re-exec this same flashpod under sudo with ``extra`` args appended
     (prompting for the password on a terminal). REPLACES the process and never
-    returns on success; returns only if it can't elevate (non-tty / no sudo)."""
+    returns on success; returns only if it can't elevate (non-tty / no sudo /
+    Windows sudo absent-disabled-or-not-Inline — with printed guidance)."""
     if not sys.stdin.isatty():
         return
     if os.name == "nt":
@@ -453,11 +497,17 @@ def _sudo_reexec(extra):
         # within the same console, preserving interactive prompts — unlike
         # ShellExecute "runas" which opens a detached window.  The
         # environment is inherited, so no env/PYTHONPATH dance needed.
-        cmd = ["sudo"] + _self_cmd() + extra
-        try:
-            sys.exit(subprocess.call(cmd))
-        except OSError:
-            return                                 # no sudo.exe — caller handles it
+        # Any other mode (or no/disabled sudo): don't run it — a disabled
+        # stub exits with only Microsoft's one-liner, and the window modes
+        # break interactivity. Say what to do instead.
+        if _windows_sudo_mode() == 3:
+            cmd = ["sudo"] + _self_cmd() + extra
+            try:
+                sys.exit(subprocess.call(cmd))
+            except OSError:
+                pass                               # sudo.exe vanished — fall through
+        _windows_elevation_help(extra)
+        return
     # sudo resets the environment, so the FLASHPOD_* tuning knobs the user set
     # would be lost across elevation. Re-assert them in the child via `env`.
     passthru = ["%s=%s" % (k, v) for k, v in sorted(os.environ.items())
@@ -2807,7 +2857,8 @@ def main():
                       "elevating via sudo..." % role, file=sys.stderr)
                 _sudo_reexec(_cmd_args(opts))    # re-execs; returns only if sudo is missing
             msg = "flashpod flash: " + plat.privilege_hint()
-            msg += "\n  sudo " + " ".join(_self_cmd() + _cmd_args(opts))
+            if os.name != "nt":   # Windows guidance already printed in full
+                msg += "\n  sudo " + " ".join(_self_cmd() + _cmd_args(opts))
             print(msg, file=sys.stderr)
             return 1
         # Offer init on the fresh card only when it will work: interactive,
