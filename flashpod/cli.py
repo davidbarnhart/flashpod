@@ -1683,6 +1683,39 @@ def _choose_init_disk(disks):
         int(choice) < len(labelled) else None
 
 
+def _is_firewire_disk(dev):
+    """True when the disk backing `dev` sits on FireWire (lsblk TRAN
+    sbp/ieee1394). False on error or off-Linux (no lsblk)."""
+    disk = _disk_of_dev(dev)
+    try:
+        res = subprocess.run(["lsblk", "-dno", "TRAN", "/dev/" + disk],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             universal_newlines=True)
+    except OSError:
+        return False
+    return res.returncode == 0 and res.stdout.strip() in ("sbp", "ieee1394")
+
+
+def _raw_or_mounted(node, desc):
+    """A scanned iPod on a non-FireWire disk (USB reader, etc.) is better
+    served by the kernel's FAT driver: big transfers and page cache, vs the
+    raw path's bridge-safe 4 KiB transfer ceiling. Try to mount it and use
+    the mount; fall back to raw when mounting fails (whole-disk node, no
+    udisks, ...). FireWire keeps the raw path — its bridge is the reason
+    the ceiling exists, and an OS mount is the risky route there (big
+    buffered kernel reads)."""
+    if _is_firewire_disk(node):
+        return ("raw", node)
+    print(f"flashpod: {node} isn't FireWire — mounting it to use the "
+          "kernel's (much faster) FAT driver...", file=sys.stderr)
+    mnt = mount_device(node)
+    if mnt:
+        return ("mount", mnt)
+    print("flashpod: mount didn't work out; continuing over the raw device "
+          "(slower, but fine).", file=sys.stderr)
+    return ("raw", node)
+
+
 def resolve_raw_target(opts):
     """Resolve a target for a WRITE command (add/rm/init) with no --mount/--raw.
     Returns ('mount', path), ('raw', node), or None. Mirrors detect_ls_source
@@ -1729,7 +1762,7 @@ def resolve_raw_target(opts):
         node, desc = found[0]
         print(f"Found iPod on {node}" + (f" ({desc})" if desc else "") + ".",
               file=sys.stderr)
-        return ("raw", node)
+        return _raw_or_mounted(node, desc)
     print("Multiple iPod disks found:")
     for i, (node, desc) in enumerate(found):
         print(f"  [{i}] {node}" + (f"  ({desc})" if desc else ""))
@@ -1739,7 +1772,7 @@ def resolve_raw_target(opts):
         print()
         return None
     idx = int(choice) if choice.isdigit() and int(choice) < len(found) else 0
-    return ("raw", found[idx][0])
+    return _raw_or_mounted(*found[idx])
 
 
 def detect_mount():
