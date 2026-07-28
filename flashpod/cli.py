@@ -1934,13 +1934,23 @@ def prompt_for_paths():
     if sys.stdin.isatty() and sys.stdout.isatty():
         # The picker takes over the whole screen; pause first so what was
         # just printed (which device was identified, mount-vs-raw mode)
-        # can actually be read before it disappears.
+        # can actually be read before it disappears. Typing a path here
+        # skips the picker entirely — the old direct workflow, and what
+        # scripted drivers (scripts/simulate_card.py) rely on.
         try:
-            input("\nPress ENTER to select content to add to the iPod ")
+            typed = input("\nPress ENTER to select content to add to the "
+                          "iPod (or type a path): ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             print("flashpod add: cancelled", file=sys.stderr)
             return None
+        if typed:
+            path = os.path.expanduser(typed)
+            if not os.path.exists(path):
+                print(f"flashpod add: no such file or directory: {path}",
+                      file=sys.stderr)
+                return None
+            return [path]
         try:
             from .pathpicker import DirectoryPicker
             picked = DirectoryPicker(_invoking_home()).run()
