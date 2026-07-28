@@ -375,11 +375,29 @@ class WindowsPlatform(Platform):
         """Raw data writes (add/rm/init over the FAT driver) hit the same
         volume-manager guard as flashing: sectors inside a recognized
         volume are write-denied (WinError 5) until the volume is locked
-        and dismounted. Reuse the flash path's lock machinery; the handles
-        stay held for the process lifetime (closed at exit, letting the
-        volume re-online)."""
-        if re.match(r"^\\\\\.\\PhysicalDrive\d+$", dev):
-            self._lock_volumes(dev)
+        and dismounted. Reuse the flash path's lock machinery — verbosely,
+        because a silent lock failure here surfaces later as every single
+        WriteFile failing. The handles stay held for the process lifetime
+        (closed at exit, letting the volume re-online)."""
+        if not re.match(r"^\\\\\.\\PhysicalDrive\d+$", dev):
+            return
+        vols = self.device_mountpoints(dev)
+        if not vols:
+            print("flashpod: found no volumes on %s to lock (Get-Partition "
+                  "listed no access paths) — if writes are denied, the "
+                  "volume manager is still claiming the partition." % dev,
+                  file=sys.stderr)
+            return
+        results = self._lock_volumes(dev)
+        for vol, err in results:
+            if err is None:
+                print("flashpod: locked volume %s for raw writing" % vol,
+                      file=sys.stderr)
+            else:
+                print("flashpod: could NOT lock volume %s (%s) — raw "
+                      "writes will likely be denied. Something may be "
+                      "holding the volume (AV scan, indexer, an open "
+                      "Explorer window)." % (vol, err), file=sys.stderr)
 
     # -- mutation around the raw write ------------------------------------
     def _lock_volumes(self, dev):
@@ -388,26 +406,41 @@ class WindowsPlatform(Platform):
         IOCTL_VOLUME_OFFLINE tells the volume manager to release its
         claim on the partition's sectors, so subsequent PhysicalDrive
         writes don't get ACCESS DENIED.  The handle is held open to
-        prevent Windows from re-onlining the volume while we write."""
+        prevent Windows from re-onlining the volume while we write.
+        If the initial LOCK is refused (another handle is open), force a
+        DISMOUNT first — that invalidates the other handles — and retry
+        the lock. Returns [(handle_path, error_or_None)] per volume."""
         already = {v for v, _h in self._held_locks}
+        results = []
         for vol, _mp in self.device_mountpoints(dev):
             handle_path = "\\\\.\\%s" % vol.rstrip("\\")
             if handle_path in already:
+                results.append((handle_path, None))
                 continue
             try:
                 h = self._open_handle(handle_path, write=True)
+            except OSError as exc:
+                results.append((handle_path, "open failed: %s" % exc))
+                continue
+            try:
                 try:
                     self._ioctl(h, FSCTL_LOCK_VOLUME)
-                    self._ioctl(h, FSCTL_DISMOUNT_VOLUME)
-                    try:
-                        self._ioctl(h, IOCTL_VOLUME_OFFLINE)
-                    except OSError:
-                        pass
-                    self._held_locks.append((handle_path, h))
                 except OSError:
-                    _k32().CloseHandle(h)
-            except OSError:
-                pass
+                    # lock refused: force-dismount to invalidate whatever
+                    # holds the volume, then the lock normally succeeds
+                    self._ioctl(h, FSCTL_DISMOUNT_VOLUME)
+                    self._ioctl(h, FSCTL_LOCK_VOLUME)
+                self._ioctl(h, FSCTL_DISMOUNT_VOLUME)
+                try:
+                    self._ioctl(h, IOCTL_VOLUME_OFFLINE)
+                except OSError:
+                    pass
+                self._held_locks.append((handle_path, h))
+                results.append((handle_path, None))
+            except OSError as exc:
+                _k32().CloseHandle(h)
+                results.append((handle_path, str(exc)))
+        return results
 
     def _release_locks(self):
         """Close all held volume-lock handles."""
