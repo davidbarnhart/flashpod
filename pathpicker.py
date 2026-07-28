@@ -283,6 +283,8 @@ class DirectoryPicker(object):
     HELP2 = "v sweep lock   [.] hidden   Enter done   Esc cancel"
     MIN_COL_WIDTH = 20
     MAX_COL_WIDTH = 42
+    STYLE_DIR = "\x1b[47;30m"    # folders: white background, black text
+    STYLE_FILE = "\x1b[40;37m"   # files: black background, white text
 
     def __init__(self, start_dir=None, show_hidden=False):
         start = os.path.abspath(start_dir or os.path.expanduser("~"))
@@ -486,6 +488,21 @@ class DirectoryPicker(object):
             rows.append("  (empty)")
         return rows
 
+    def _name_styled(self, text, entry, width, bold=False):
+        """A listing row with the folder/file color applied to just the
+        name (marker, gutter, and padding keep the terminal's colors).
+        bold styles the whole row (the trail highlight)."""
+        plain = text[:width].ljust(width)
+        start = self.GUTTER + 4          # past "  [x] "
+        end = min(len(text), width)
+        if end <= start:
+            return "\x1b[1m" + plain + "\x1b[0m" if bold else plain
+        base = self.STYLE_DIR if entry.is_dir else self.STYLE_FILE
+        b_on = "\x1b[1m" if bold else ""
+        b_re = "\x1b[0m\x1b[1m" if bold else "\x1b[0m"
+        return (b_on + plain[:start] + base + plain[start:end]
+                + b_re + plain[end:] + ("\x1b[0m" if bold else ""))
+
     def _cursor_cell(self, col, width):
         """The active cursor row: arrow gutters on both sides of the row
         body — '← ' when Left can go up, ' →' when the highlighted
@@ -558,13 +575,14 @@ class DirectoryPicker(object):
                 idx = col.scroll + r
                 rows = all_rows[i]
                 text = rows[idx] if idx < len(rows) else ""
-                on_cursor = idx == col.cursor and idx < len(col.entries)
+                is_entry = idx < len(col.entries)
+                on_cursor = is_entry and idx == col.cursor
                 if on_cursor and i == self.active:
                     cell = ("\x1b[7m"
                             + self._cursor_cell(col, widths[i]) + "\x1b[0m")
-                elif on_cursor:
-                    cell = ("\x1b[1m"
-                            + text[:widths[i]].ljust(widths[i]) + "\x1b[0m")
+                elif is_entry:
+                    cell = self._name_styled(text, col.entries[idx],
+                                             widths[i], bold=on_cursor)
                 else:
                     cell = text[:widths[i]].ljust(widths[i])
                 parts.append(cell)
