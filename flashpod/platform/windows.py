@@ -241,6 +241,24 @@ class WindowsPlatform(Platform):
                  if not d[4] and d[3] in ("USB", "SD", "MMC", "1394")]
         return cands or [d for d in disks if not d[4]]
 
+    def fat_disk_candidates(self):
+        """Removable/USB disks worth probing for an iPod, as raw
+        ``\\\\.\\PhysicalDriveN`` nodes. Windows can't say which hold FAT
+        slices without mounting a volume — and volume mounting may be
+        policy-blocked (the very case this raw path serves) — so every
+        non-empty removable disk is offered; the caller's database probe
+        is the actual test. Empty multi-slot-reader slots (size 0) are
+        skipped, not offered as 0-byte disks."""
+        cands = []
+        for num, size, name, bus, _sys in self._removable_disks():
+            if not size:
+                continue               # empty reader slot ("No Media")
+            desc = " ".join(part for part in
+                            (name.strip(), bus,
+                             "%.1fG" % (size / 1e9)) if part)
+            cands.append(("\\\\.\\PhysicalDrive%d" % num, desc))
+        return cands
+
     def choose_device(self):
         from .. import ipod_flash
         color = ipod_flash.color
