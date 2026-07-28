@@ -224,6 +224,14 @@ class Platform(object):
         POSIX device nodes; Windows overrides for ``\\\\.\\PhysicalDriveN``."""
         return open(dev, mode)
 
+    def prepare_raw_write(self, dev):
+        """Make raw WRITES to ``dev`` possible, before the writable handle
+        opens. Windows overrides this to lock/dismount the disk's volumes —
+        the volume manager otherwise denies writes to any sector inside a
+        recognized volume (WinError 5), even a letterless one. Elsewhere:
+        nothing to do."""
+        return
+
     def raw_open_direct(self):
         """True when the userspace FAT driver should let fatfs.BlockDev open
         the raw node itself (path mode: os.open, O_DIRECT on block devices,

@@ -765,6 +765,11 @@ def open_raw_target(device, writable=True):
         print(f"flashpod: couldn't pin safe FireWire I/O settings for "
               f"{device}; the kernel may probe it unsafely after writes.",
               file=sys.stderr)
+    if writable:
+        # Windows: lock/dismount the disk's volumes BEFORE the writable
+        # handle opens, or every data write inside the partition is denied
+        # (WinError 5) by the volume manager. No-op elsewhere.
+        platform.current().prepare_raw_write(device)
     try:
         fs = open_raw_fat(device, writable=writable)
     except PermissionError:

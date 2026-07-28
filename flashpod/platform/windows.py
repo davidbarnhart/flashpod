@@ -371,6 +371,16 @@ class WindowsPlatform(Platform):
             if d[0] == num and d[4]:
                 sys.exit(color("refusing: PhysicalDrive%d backs the running system." % num, red))
 
+    def prepare_raw_write(self, dev):
+        """Raw data writes (add/rm/init over the FAT driver) hit the same
+        volume-manager guard as flashing: sectors inside a recognized
+        volume are write-denied (WinError 5) until the volume is locked
+        and dismounted. Reuse the flash path's lock machinery; the handles
+        stay held for the process lifetime (closed at exit, letting the
+        volume re-online)."""
+        if re.match(r"^\\\\\.\\PhysicalDrive\d+$", dev):
+            self._lock_volumes(dev)
+
     # -- mutation around the raw write ------------------------------------
     def _lock_volumes(self, dev):
         """Lock, dismount, and take offline every volume on *dev*.
