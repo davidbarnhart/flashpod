@@ -1703,8 +1703,12 @@ def _raw_or_mounted(node, desc):
     the mount; fall back to raw when mounting fails (whole-disk node, no
     udisks, ...). FireWire keeps the raw path — its bridge is the reason
     the ceiling exists, and an OS mount is the risky route there (big
-    buffered kernel reads)."""
-    if _is_firewire_disk(node):
+    buffered kernel reads). Linux-only: _is_firewire_disk answers via
+    lsblk, so off Linux it can't tell FireWire apart — and on macOS the
+    FireWire iPod is exactly the disk the OS must never try to mount
+    (buffered mount-probe reads poke the bridge). Windows auto-mounts
+    lettered FAT volumes anyway; the raw path there is for letterless."""
+    if not sys.platform.startswith("linux") or _is_firewire_disk(node):
         return ("raw", node)
     print(f"flashpod: {node} isn't FireWire — mounting it to use the "
           "kernel's (much faster) FAT driver...", file=sys.stderr)
