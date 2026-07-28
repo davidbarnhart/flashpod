@@ -1927,6 +1927,15 @@ def prompt_for_paths():
     picker can't run. Returns a list of paths, or None (caller exits
     nonzero) on cancel / nothing usable."""
     if sys.stdin.isatty() and sys.stdout.isatty():
+        # The picker takes over the whole screen; pause first so what was
+        # just printed (which device was identified, mount-vs-raw mode)
+        # can actually be read before it disappears.
+        try:
+            input("\nPress ENTER to select content to add to the iPod ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            print("flashpod add: cancelled", file=sys.stderr)
+            return None
         try:
             from .pathpicker import DirectoryPicker
             picked = DirectoryPicker(_invoking_home()).run()
