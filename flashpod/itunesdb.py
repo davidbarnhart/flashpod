@@ -309,13 +309,15 @@ def copy_to_ipod(mount, src, ext=None, progress=None):
     total = os.path.getsize(src)
     done = 0
     last = 0.0
+    timing = os.environ.get("FLASHPOD_TIMING")
+    t0 = time.monotonic()
     # copy with modest buffers; shutil.copyfile is fine on a sane host but
     # the FireWire iPod path likes small sequential writes
     with open(src, "rb") as fin, open(dst, "wb") as fout:
-        while True:
-            chunk = fin.read(1 << 16)
-            if not chunk:
-                break
+        t_open = time.monotonic()
+        chunk = fin.read(1 << 16)
+        t_first = time.monotonic()
+        while chunk:
             fout.write(chunk)
             done += len(chunk)
             if progress:
@@ -323,8 +325,17 @@ def copy_to_ipod(mount, src, ext=None, progress=None):
                 if now - last >= 0.25:
                     progress(done, total)
                     last = now
+            chunk = fin.read(1 << 16)
         if progress:
             progress(done, total)        # final 100% before the (slow) flush
+        t_stream = time.monotonic()
         fout.flush()
         os.fsync(fout.fileno())
+        t_sync = time.monotonic()
+    if timing:
+        import sys
+        print("[timing] %s: open %.2fs  first-read %.2fs  stream %.2fs  "
+              "fsync %.2fs"
+              % (os.path.basename(src), t_open - t0, t_first - t_open,
+                 t_stream - t_first, t_sync - t_stream), file=sys.stderr)
     return ":".join(["", "iPod_Control", "Music", fdir, name])
