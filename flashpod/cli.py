@@ -717,14 +717,23 @@ class RawTarget:
             raise OSError("no Music/F## directories (run init first?)")
         fdir = random.choice(fdirs)
         ext = (ext or os.path.splitext(src)[1] or ".mp3").lower()
+        timing = os.environ.get("FLASHPOD_TIMING")
+        t0 = time.monotonic()
         while True:
             name = "fp%06d%s" % (random.randrange(10 ** 6), ext)
             dst = "%s/%s/%s" % (music, fdir, name)
             if not self.fs.exists(dst):
                 break
+        t_setup = time.monotonic()
         with open(src, "rb") as f:
             data = f.read()
+        t_read = time.monotonic()
         self.fs.write_file(dst, data, progress=progress)
+        if timing:
+            print("[timing] %s: setup %.2fs  source-read %.2fs  "
+                  "card-write %.2fs"
+                  % (os.path.basename(src), t_setup - t0, t_read - t_setup,
+                     time.monotonic() - t_read), file=sys.stderr)
         return ":".join(["", "iPod_Control", "Music", fdir, name])
 
     # -- rm ----------------------------------------------------------------

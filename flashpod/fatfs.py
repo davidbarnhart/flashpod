@@ -697,10 +697,14 @@ class Fat32(object):
         parent directory must already exist. ``progress(done, total)`` is
         called as data clusters are written (useful on the slow FireWire bridge,
         where a multi-MB write is many single-sector transfers)."""
+        import time as _time
+        timing = os.environ.get("FLASHPOD_TIMING")
+        t0 = _time.monotonic()
         parent, name = self._split(path)
         parent_first = self._resolve_dir(parent)
         nclusters = (len(data) + self._bytes_per_cluster() - 1) // self._bytes_per_cluster()
         chain = self._alloc_chain(nclusters) if nclusters else []
+        t_alloc = _time.monotonic()
         # write the data, padded to whole clusters
         bpc = self._bytes_per_cluster()
         if progress and data:
@@ -712,6 +716,7 @@ class Fat32(object):
             self.dev.write(self._cluster_lba(cl), chunk)
             if progress:
                 progress(min((i + 1) * bpc, len(data)), len(data))
+        t_stream = _time.monotonic()
         first = chain[0] if chain else 0
 
         existing = self.resolve(path)
@@ -726,6 +731,13 @@ class Fat32(object):
             blob = self._make_entries(name, 0x20, first, len(data), parent_first)
             self._place_entries(parent_first, blob)
         self._flush_fsinfo()
+        if timing:
+            import sys as _sys
+            t_meta = _time.monotonic()
+            print("[timing]   fat-write %s: resolve+alloc %.2fs  stream %.2fs"
+                  "  dirent+fsinfo %.2fs"
+                  % (name, t_alloc - t0, t_stream - t_alloc, t_meta - t_stream),
+                  file=_sys.stderr)
 
     def _update_entry(self, dir_first, name, first_cluster, size):
         """Patch the 8.3 entry for ``name`` in ``dir_first`` with a new first
