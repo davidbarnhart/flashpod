@@ -7,7 +7,7 @@ Subcommands:
   flashpod ls artist|album        flat per-artist or per-album track counts
   flashpod add [path1 path2 ...]  add audio files; directories are scanned
                                   recursively (tags read via mutagen);
-                                  with no paths, prompts for one
+                                  with no paths, opens a directory picker
   flashpod rm id [id ...]         remove tracks by id (see `flashpod ls`)
   flashpod rm artist|album <name> remove all tracks by an artist / in an album
   flashpod init [name]            create iPod_Control structure + empty DB
@@ -1582,7 +1582,7 @@ def run_raw(opts, node):
     if cmd in ("rm", "remove", "delete", "erase"):
         return cmd_rm_raw(target, opts.what)
     if cmd == "add":
-        return cmd_add_raw(target, opts.files or [prompt_for_path()])
+        return cmd_add_raw(target, opts.files or prompt_for_paths())
     print(f"flashpod: --raw doesn't support `{cmd}`.", file=sys.stderr)
     return 1
 
@@ -1751,6 +1751,36 @@ def expand(paths):
             print(f"warning: no audio files found under {p}", file=sys.stderr)
         out.extend(found)
     return out
+
+
+def prompt_for_paths():
+    """`flashpod add` with no paths: open the interactive directory picker
+    (Miller columns, Space selects, Enter confirms) starting at the user's
+    home directory. Falls back to the single-path typed prompt when the
+    picker can't run. Returns a list of paths, or None (caller exits
+    nonzero) on cancel / nothing usable."""
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            from .pathpicker import DirectoryPicker
+            picked = DirectoryPicker().run()
+        except Exception as exc:
+            print(f"flashpod: directory picker failed ({exc}); "
+                  "type a path instead.", file=sys.stderr)
+            path = prompt_for_path()
+            return [path] if path else None
+        if picked is None:
+            print("flashpod add: cancelled", file=sys.stderr)
+            return None
+        if not picked:
+            print("flashpod add: nothing selected", file=sys.stderr)
+            return None
+        print(f"Adding {len(picked)} selected "
+              f"path{'s' if len(picked) != 1 else ''}:")
+        for path in picked:
+            print(f"  {path}")
+        return picked
+    path = prompt_for_path()
+    return [path] if path else None
 
 
 def prompt_for_path():
@@ -2559,7 +2589,7 @@ def _offer_init_after_flash_win(dev, raw_fobj=None, data_start=None):
     if ask_yes("\nMusic can be loaded onto the card now, or later "
                "when it is in the iPod.\n"
                "Load music onto the card now? [Y/n] "):
-        cmd_add_raw(target, [prompt_for_path()])
+        cmd_add_raw(target, prompt_for_paths())
 
 
 def _offer_init_after_flash_unix(dev):
@@ -2622,7 +2652,7 @@ def _offer_init_after_flash_unix(dev):
             if ask_yes("\nMusic can be loaded onto the card now, or later "
                        "when it is in the iPod.\n"
                        "Load music onto the card now? [Y/n] "):
-                cmd_add(mnt, [prompt_for_path()])
+                cmd_add(mnt, prompt_for_paths())
             subprocess.run(["sync"], check=False)
         finally:
             if ours:
@@ -2906,7 +2936,7 @@ def main():
         if opts.command == "rebuild":
             return cmd_rebuild(mount, getattr(opts, "name", None))
 
-        return cmd_add(mount, opts.files or [prompt_for_path()])
+        return cmd_add(mount, opts.files or prompt_for_paths())
     except OSError as exc:
         _report_io_error(mount, exc)
         return 1

@@ -11,7 +11,9 @@ import shutil
 import sys
 import tempfile
 
-from pathpicker import DirectoryLister, DirectoryPicker, SelectionSet
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from flashpod.pathpicker import (DirectoryLister, DirectoryPicker,
+                                 SelectionSet)
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 

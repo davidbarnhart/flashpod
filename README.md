@@ -189,7 +189,9 @@ Initialized iPod directory structure on /dev/sdb2
 
 Music can be loaded onto the card now, or later when it is in the iPod.
 Load music onto the card now? [Y/n] Y
-File or directory to add (TAB to complete): /mnt/homestore/sound/mp3/New Order/Technique/
+  (the directory picker opens — Space to select, Enter to confirm)
+Adding 1 selected path:
+  /mnt/homestore/sound/mp3/New Order/Technique/
 flashpod add: this batch is 54.8 MiB. You've got 118.94 GiB more than you need, Dude. That's gnarly!
 [6/9] Adding: Run — New Order... 100% (6.2/6.2 MiB)
 [7/9] Adding: Mr. Disco — New Order... 100% (6.0/6.0 MiB)
@@ -366,7 +368,9 @@ window, are counted in the summary, and don't stop the batch:
 $ flashpod add
 flashpod: add over the iPod's raw device needs root — elevating via sudo...
 Found iPod on /dev/sdb2 (IPOD FireWire 119.1G).
-File or directory to add (TAB to complete): /mnt/homestore/sound/mp3/New Order/Brotherhood/
+  (the directory picker opens — Space to select, Enter to confirm)
+Adding 1 selected path:
+  /mnt/homestore/sound/mp3/New Order/Brotherhood/
 flashpod add: this batch is 51.0 MiB. You've got 118.89 GiB more than you need, Dude. That's gnarly!
 [6/9] Adding: Bizarre Love Triangle — New Order... 100% (6.0/6.0 MiB)
 [7/9] Adding: All Day Long — New Order... 100% (7.2/7.2 MiB)
@@ -375,9 +379,12 @@ flashpod add: this batch is 51.0 MiB. You've got 118.89 GiB more than you need, 
 9 tracks added in 2m38s (51.0 MiB at 330 KiB/s)
 ```
 
-Run with no arguments, `add` finds the iPod itself and prompts for a path (with
-tab completion). Only the last four progress lines stay on screen — tracks 1–5
-scrolled away above.
+Run with no arguments, `add` finds the iPod itself and opens a full-screen
+directory picker starting at your home directory: arrows navigate (Left/Right
+move between directory columns), Space selects files or whole directories,
+Shift+Up/Down sweep-selects (on Windows use `v`, the sweep lock), Enter
+confirms, Esc cancels. Only the last four progress lines stay on screen —
+tracks 1–5 scrolled away above.
 
 </details>
 

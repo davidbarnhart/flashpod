@@ -7,9 +7,11 @@ Browses from the start directory (default: your home directory); on Enter
 it prints every selected path, one per line.
 """
 
+import os
 import sys
 
-from pathpicker import DirectoryPicker
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from flashpod.pathpicker import DirectoryPicker
 
 
 def main(argv):
