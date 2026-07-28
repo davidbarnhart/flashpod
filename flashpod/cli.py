@@ -1696,23 +1696,72 @@ def _is_firewire_disk(dev):
     return res.returncode == 0 and res.stdout.strip() in ("sbp", "ieee1394")
 
 
+def _macos_disk_protocol(node):
+    """The bus a macOS disk sits on, from `diskutil info` ("USB",
+    "FireWire", "SATA", "Secure Digital", ...), or None when it can't be
+    determined — callers must treat None as unsafe-to-mount."""
+    disk = re.sub(r"^/dev/r", "/dev/", node)
+    try:
+        res = subprocess.run(["diskutil", "info", disk],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             universal_newlines=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode != 0:
+        return None
+    m = re.search(r"^\s*Protocol:\s*(.+?)\s*$", res.stdout, re.MULTILINE)
+    return m.group(1) if m else None
+
+
+def _macos_mount_ipod(node):
+    """Mount a scanned (non-FireWire) iPod disk on macOS and return the
+    iPod's mountpoint, or None. diskutil mounts the whole disk's volumes;
+    the iPod volume is then re-found via the normal mounted-iPod scan."""
+    disk = re.sub(r"^/dev/r", "/dev/", node)
+    try:
+        res = subprocess.run(["diskutil", "mountDisk", disk],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             universal_newlines=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode != 0:
+        print(f"flashpod: diskutil mountDisk failed: "
+              f"{(res.stderr or res.stdout).strip()}", file=sys.stderr)
+        return None
+    mounts = candidate_mounts()
+    return mounts[0] if mounts else None
+
+
 def _raw_or_mounted(node, desc):
     """A scanned iPod on a non-FireWire disk (USB reader, etc.) is better
-    served by the kernel's FAT driver: big transfers and page cache, vs the
-    raw path's bridge-safe 4 KiB transfer ceiling. Try to mount it and use
-    the mount; fall back to raw when mounting fails (whole-disk node, no
-    udisks, ...). FireWire keeps the raw path — its bridge is the reason
-    the ceiling exists, and an OS mount is the risky route there (big
-    buffered kernel reads). Linux-only: _is_firewire_disk answers via
-    lsblk, so off Linux it can't tell FireWire apart — and on macOS the
-    FireWire iPod is exactly the disk the OS must never try to mount
-    (buffered mount-probe reads poke the bridge). Windows auto-mounts
-    lettered FAT volumes anyway; the raw path there is for letterless."""
-    if not sys.platform.startswith("linux") or _is_firewire_disk(node):
+    served by the OS's FAT driver: big transfers and page cache, vs the
+    raw path's bridge-safe transfer ceiling (4 KiB on Linux, 1 sector on
+    macOS). Try to mount it and use the mount; fall back to raw when
+    mounting fails. FireWire keeps the raw path — its bridge is the
+    reason the ceiling exists, and an OS mount is the risky route there
+    (big buffered kernel reads).
+
+    Per platform: Linux discriminates FireWire via lsblk (sbp/ieee1394);
+    macOS via `diskutil info` Protocol, treating UNKNOWN as FireWire
+    (never mount what can't be identified — the FireWire iPod is exactly
+    the disk macOS must not probe with buffered reads). Windows never
+    reaches here usefully: lettered FAT volumes are auto-mounted and
+    detection already prefers them; letterless stays raw."""
+    if sys.platform.startswith("linux"):
+        if _is_firewire_disk(node):
+            return ("raw", node)
+        print(f"flashpod: {node} isn't FireWire — mounting it to use the "
+              "kernel's (much faster) FAT driver...", file=sys.stderr)
+        mnt = mount_device(node)
+    elif sys.platform == "darwin":
+        proto = _macos_disk_protocol(node)
+        if proto is None or "firewire" in proto.lower():
+            return ("raw", node)
+        print(f"flashpod: {node} is on {proto}, not FireWire — mounting it "
+              "to use the OS's (much faster) FAT driver...", file=sys.stderr)
+        mnt = _macos_mount_ipod(node)
+    else:
         return ("raw", node)
-    print(f"flashpod: {node} isn't FireWire — mounting it to use the "
-          "kernel's (much faster) FAT driver...", file=sys.stderr)
-    mnt = mount_device(node)
     if mnt:
         return ("mount", mnt)
     print("flashpod: mount didn't work out; continuing over the raw device "
