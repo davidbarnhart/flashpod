@@ -15,8 +15,10 @@ directory has contents to descend into.
 
 Keys:
   Up/Down       move the cursor within the current column
-  Right         open the highlighted directory
-  Left          move to the parent directory's column
+  Right         open the highlighted directory (blocked when it has
+                nothing to show — the view bumps instead)
+  Left          move to the parent directory's column (bumps at the
+                filesystem root)
   Space         select / deselect the highlighted entry
   Shift+Up/Dn   sweep: move and select everything passed over; a sweep
                 started on a selected entry deselects instead, and a
@@ -32,6 +34,7 @@ Keys:
 import os
 import shutil
 import sys
+import time
 from collections import OrderedDict
 
 IS_WINDOWS = os.name == "nt"
@@ -213,12 +216,14 @@ class Screen(object):
         if IS_WINDOWS:
             self._enable_windows_vt()
         self._out = sys.stdout
-        self._out.write("\x1b[?1049h\x1b[?25l")
+        # alt screen, hidden cursor, autowrap off (overlong lines clip
+        # instead of wrapping — keeps nudged "bump" frames intact)
+        self._out.write("\x1b[?1049h\x1b[?25l\x1b[?7l")
         self._out.flush()
         return self
 
     def __exit__(self, *exc):
-        self._out.write("\x1b[?1049l\x1b[?25h")
+        self._out.write("\x1b[?1049l\x1b[?25h\x1b[?7h")
         self._out.flush()
         return False
 
@@ -289,6 +294,7 @@ class DirectoryPicker(object):
         self._sweep_op = None   # 'add'/'discard' while a sweep run is live
         self._sweep_key = None  # last shift-move key of the run
         self._openable = {}     # path -> has-contents probe cache
+        self._bump = False      # a navigation push had nowhere to go
         self._first_vis = 0
         self._page = 1
 
@@ -414,11 +420,16 @@ class DirectoryPicker(object):
             else:
                 self._sweep_op = None
         elif key == "left":
-            self._go_up()
+            if self._can_go_up():
+                self._go_up()
+            else:
+                self._bump = True
         elif key == "right" and n:
             entry = col.entries[col.cursor]
-            if entry.is_dir:
+            if entry.is_dir and self._has_children(entry.path):
                 self._open(entry)
+            else:  # file, or nothing inside — same test as the arrow
+                self._bump = True
         elif key == "space" and n:
             self.selection.toggle(col.entries[col.cursor].path)
         elif key == ".":
@@ -563,6 +574,13 @@ class DirectoryPicker(object):
         lines.append(self.HELP2[:term_cols])
         return lines
 
+    def _bumped(self, lines):
+        """The frame with its column area nudged two cells right — shown
+        for one beat when a navigation push has nowhere to go."""
+        body = ["  " + l for l in
+                lines[self.HEADER_ROWS:-self.FOOTER_ROWS]]
+        return lines[:self.HEADER_ROWS] + body + lines[-self.FOOTER_ROWS:]
+
     # -- controller -------------------------------------------------------
 
     def run(self):
@@ -581,3 +599,7 @@ class DirectoryPicker(object):
                     result = self._handle(key)
                     if result is not self:
                         return result
+                    if self._bump:
+                        self._bump = False
+                        screen.draw(self._bumped(self._frame(cols, rows)))
+                        time.sleep(0.08)
