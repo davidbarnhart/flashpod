@@ -9,6 +9,10 @@ screen as side-by-side columns. Going up prepends the parent directory as
 a new leftmost column (the others shift right); going into a directory
 adds its listing as a new column on the right.
 
+The cursor row carries affordance hints: a left arrow in the gutter when
+going up to a parent is possible, and a right arrow when the highlighted
+directory has contents to descend into.
+
 Keys:
   Up/Down       move the cursor within the current column
   Right         open the highlighted directory
@@ -284,6 +288,7 @@ class DirectoryPicker(object):
         self.sweep = False
         self._sweep_op = None   # 'add'/'discard' while a sweep run is live
         self._sweep_key = None  # last shift-move key of the run
+        self._openable = {}     # path -> has-contents probe cache
         self._first_vis = 0
         self._page = 1
 
@@ -418,28 +423,70 @@ class DirectoryPicker(object):
             self.selection.toggle(col.entries[col.cursor].path)
         elif key == ".":
             self.lister.show_hidden = not self.lister.show_hidden
+            self._openable.clear()  # probe results depend on the filter
             for c in self.columns:
                 here = c.entries[c.cursor].path if c.entries else None
                 self._fill(c, remember=here)
         return self
 
+    def _can_go_up(self):
+        """True when Left would do something: there's a trail column to
+        the left, or the active directory has a parent."""
+        if self.active > 0:
+            return True
+        path = self.columns[self.active].path
+        return os.path.dirname(path) != path
+
+    def _has_children(self, path):
+        """True when the directory has at least one entry the current
+        filter would show. Probed lazily (one scandir, stops at the first
+        hit) and cached per path."""
+        if path not in self._openable:
+            found = False
+            try:
+                for it in os.scandir(path):
+                    if (self.lister.show_hidden
+                            or not it.name.startswith(".")):
+                        found = True
+                        break
+            except OSError:
+                found = False
+            self._openable[path] = found
+        return self._openable[path]
+
     # -- view -------------------------------------------------------------
+
+    GUTTER = 2  # room for the left/right affordance arrows
 
     @staticmethod
     def _row_text(entry, selected):
         mark = "*" if selected else " "
-        return " [%s] %s%s" % (mark, entry.name,
-                               os.sep if entry.is_dir else "")
+        return "  [%s] %s%s" % (mark, entry.name,
+                                os.sep if entry.is_dir else "")
 
     def _column_rows(self, col):
-        """The column's full listing as plain-text rows."""
+        """The column's full listing as plain-text rows (each starts with
+        the arrow gutter)."""
         rows = [self._row_text(e, e.path in self.selection)
                 for e in col.entries]
         if col.error is not None:
-            rows.append(" (unreadable: %s)" % col.error)
+            rows.append("  (unreadable: %s)" % col.error)
         elif not col.entries:
-            rows.append(" (empty)")
+            rows.append("  (empty)")
         return rows
+
+    def _cursor_cell(self, col, width):
+        """The active cursor row: arrow gutters on both sides of the row
+        body — '← ' when Left can go up, ' →' when the highlighted
+        directory has contents to open."""
+        entry = col.entries[col.cursor]
+        body_w = max(0, width - 2 * self.GUTTER)
+        body = self._row_text(entry, entry.path in self.selection)
+        body = body[self.GUTTER:]  # the plain gutter; arrows replace it
+        left = "← " if self._can_go_up() else "  "
+        right = (" →" if entry.is_dir and self._has_children(entry.path)
+                 else "  ")
+        return left + body[:body_w].ljust(body_w) + right
 
     def _visible_range(self, widths, term_cols):
         """Choose which consecutive columns to show: keep the active one
@@ -500,10 +547,15 @@ class DirectoryPicker(object):
                 idx = col.scroll + r
                 rows = all_rows[i]
                 text = rows[idx] if idx < len(rows) else ""
-                cell = text[:widths[i]].ljust(widths[i])
-                if idx == col.cursor and idx < len(col.entries):
-                    style = "\x1b[7m" if i == self.active else "\x1b[1m"
-                    cell = style + cell + "\x1b[0m"
+                on_cursor = idx == col.cursor and idx < len(col.entries)
+                if on_cursor and i == self.active:
+                    cell = ("\x1b[7m"
+                            + self._cursor_cell(col, widths[i]) + "\x1b[0m")
+                elif on_cursor:
+                    cell = ("\x1b[1m"
+                            + text[:widths[i]].ljust(widths[i]) + "\x1b[0m")
+                else:
+                    cell = text[:widths[i]].ljust(widths[i])
                 parts.append(cell)
             lines.append("│".join(parts))
 
