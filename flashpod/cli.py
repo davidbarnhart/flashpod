@@ -1732,6 +1732,12 @@ def _macos_mount_ipod(node):
     return mounts[0] if mounts else None
 
 
+_RAW_FALLBACK_MSG = (
+    "iPod partition could not be successfully mounted by the operating "
+    "system. flashpod will use the partition in raw mode via its internal "
+    "FAT driver (slower).")
+
+
 def _raw_or_mounted(node, desc):
     """A scanned iPod on a non-FireWire disk (USB reader, etc.) is better
     served by the OS's FAT driver: big transfers and page cache, vs the
@@ -1761,11 +1767,13 @@ def _raw_or_mounted(node, desc):
               "to use the OS's (much faster) FAT driver...", file=sys.stderr)
         mnt = _macos_mount_ipod(node)
     else:
+        # Windows: the volume isn't OS-mounted (no drive letter — often
+        # policy-denied) and flashpod doesn't attempt one; say why raw.
+        print(_RAW_FALLBACK_MSG, file=sys.stderr)
         return ("raw", node)
     if mnt:
         return ("mount", mnt)
-    print("flashpod: mount didn't work out; continuing over the raw device "
-          "(slower, but fine).", file=sys.stderr)
+    print(_RAW_FALLBACK_MSG, file=sys.stderr)
     return ("raw", node)
 
 
