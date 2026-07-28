@@ -1803,6 +1803,20 @@ def expand(paths):
     return out
 
 
+def _invoking_home():
+    """The human's home directory, even when flashpod has sudo-elevated
+    itself (HOME is /root there — the picker would open in the wrong
+    place; the post-flash add offer always runs elevated)."""
+    user = os.environ.get("SUDO_USER")
+    if user and os.name != "nt" and os.geteuid() == 0:
+        try:
+            import pwd
+            return pwd.getpwnam(user).pw_dir
+        except (ImportError, KeyError):
+            pass
+    return os.path.expanduser("~")
+
+
 def prompt_for_paths():
     """`flashpod add` with no paths: open the interactive directory picker
     (Miller columns, Space selects, Enter confirms) starting at the user's
@@ -1812,7 +1826,7 @@ def prompt_for_paths():
     if sys.stdin.isatty() and sys.stdout.isatty():
         try:
             from .pathpicker import DirectoryPicker
-            picked = DirectoryPicker().run()
+            picked = DirectoryPicker(_invoking_home()).run()
         except Exception as exc:
             print(f"flashpod: directory picker failed ({exc}); "
                   "type a path instead.", file=sys.stderr)
