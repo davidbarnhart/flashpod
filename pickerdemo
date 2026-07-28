@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""Demo driver for pathpicker.DirectoryPicker.
+
+Usage: pickerdemo [start-dir]        (Windows: python pickerdemo [start-dir])
+
+Browses from the start directory (default: your home directory); on Enter
+it prints every selected path, one per line.
+"""
+
+import sys
+
+from pathpicker import DirectoryPicker
+
+
+def main(argv):
+    start = argv[1] if len(argv) > 1 else None
+    try:
+        picker = DirectoryPicker(start)
+        selected = picker.run()
+    except RuntimeError as exc:
+        print("pickerdemo: %s" % exc, file=sys.stderr)
+        return 2
+    if selected is None:
+        print("Cancelled.")
+        return 1
+    if not selected:
+        print("Nothing selected.")
+        return 0
+    print("Selected (%d):" % len(selected))
+    for path in selected:
+        print("  %s" % path)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
