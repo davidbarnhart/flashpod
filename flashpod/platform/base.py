@@ -232,6 +232,20 @@ class Platform(object):
         nothing to do."""
         return
 
+    def raw_part_start_override(self):
+        """LBA the userspace FAT driver must use as the partition start,
+        overriding the MBR walk in :func:`open_raw_fat`. Windows returns this
+        after :meth:`prepare_raw_write` has temporarily cleared the on-disk
+        MBR (so the walk would find nothing). ``None`` means read the MBR
+        normally."""
+        return None
+
+    def finalize_raw_write(self, dev):
+        """Undo whatever :meth:`prepare_raw_write` changed once the raw write
+        is done. Windows overrides this to restore the partition table it
+        temporarily cleared. Elsewhere: nothing to do."""
+        return
+
     def raw_open_direct(self):
         """True when the userspace FAT driver should let fatfs.BlockDev open
         the raw node itself (path mode: os.open, O_DIRECT on block devices,

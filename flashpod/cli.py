@@ -419,6 +419,12 @@ def open_raw_fat(device, writable=False):
         mode = "r+b" if writable else "rb"
         fobj = plat.open_raw(node, mode)
         dev = fatfs.BlockDev(part_start=0, max_xfer=max_xfer, fileobj=fobj)
+    override = plat.raw_part_start_override()
+    if override:
+        # Windows cleared the MBR to release partmgr's claim (prepare_raw_write),
+        # so the walk below would find nothing — it told us the partition LBA.
+        dev.part_start = override
+        return fatfs.Fat32(dev)
     boot = dev.read(0, 1)
     is_fat = boot[82:85] == b"FAT" and boot[510:512] == b"\x55\xaa"
     if not is_fat and boot[510:512] == b"\x55\xaa":
@@ -1639,16 +1645,21 @@ def run_raw(opts, node):
     target = open_raw_target(node, writable=True)
     if not target:
         return 1
-    if cmd == "init":
-        return cmd_init_raw(target, getattr(opts, "name", None) or "iPod")
-    if cmd == "rebuild":
-        return cmd_rebuild_raw(target, getattr(opts, "name", None))
-    if cmd in ("rm", "remove", "delete", "erase"):
-        return cmd_rm_raw(target, opts.what)
-    if cmd == "add":
-        return cmd_add_raw(target, opts.files or prompt_for_paths())
-    print(f"flashpod: --raw doesn't support `{cmd}`.", file=sys.stderr)
-    return 1
+    try:
+        if cmd == "init":
+            return cmd_init_raw(target, getattr(opts, "name", None) or "iPod")
+        if cmd == "rebuild":
+            return cmd_rebuild_raw(target, getattr(opts, "name", None))
+        if cmd in ("rm", "remove", "delete", "erase"):
+            return cmd_rm_raw(target, opts.what)
+        if cmd == "add":
+            return cmd_add_raw(target, opts.files or prompt_for_paths())
+        print(f"flashpod: --raw doesn't support `{cmd}`.", file=sys.stderr)
+        return 1
+    finally:
+        # Windows may have cleared the partition table to allow raw writes;
+        # put it back so the OS re-discovers the iPod (no-op elsewhere).
+        platform.current().finalize_raw_write(node)
 
 
 def _choose_init_disk(disks):

@@ -30,6 +30,8 @@ class FakePlat:
         return dev
     def raw_open_direct(self):
         return self._direct
+    def raw_part_start_override(self):
+        return None
     def open_raw(self, node, mode):
         self.opened = (node, mode)
         return "FAKE-FILEOBJ"
