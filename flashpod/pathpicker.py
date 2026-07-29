@@ -291,8 +291,10 @@ class DirectoryPicker(object):
         """``count(path) -> int`` (optional): items of interest under a
         selectable path (e.g. audio files in a directory); results are
         cached per path, so each is computed once per session.
-        ``status(total) -> str`` (optional): text for a pinned bar above
-        the columns, given the summed count of the current selection."""
+        ``status(total) -> str | (str, alert)`` (optional): text for a
+        pinned bar above the columns, given the summed count of the
+        current selection; return ``(text, True)`` to render the bar in
+        alert red (e.g. a budget nearly exceeded)."""
         start = os.path.abspath(start_dir or os.path.expanduser("~"))
         self.lister = DirectoryLister(show_hidden)
         self.selection = SelectionSet()
@@ -583,10 +585,15 @@ class DirectoryPicker(object):
         pad = max(1, term_cols - len(header_path) - len(count) - 1)
         lines = []
         if self.status:
-            # pinned status bar: full-width reverse-video top line
+            # pinned status bar: full-width reverse-video top line;
+            # (text, True) from the callback turns it alert red
             bar = self.status(self._selected_total() if self.count else
                               len(self.selection))
-            lines.append("\x1b[7m" + bar[:term_cols].ljust(term_cols)
+            alert = False
+            if isinstance(bar, tuple):
+                bar, alert = bar
+            style = "\x1b[7;31m" if alert else "\x1b[7m"
+            lines.append(style + bar[:term_cols].ljust(term_cols)
                          + "\x1b[0m")
         lines += ["\x1b[1m" + header_path + " " * pad + count + "\x1b[0m", ""]
 

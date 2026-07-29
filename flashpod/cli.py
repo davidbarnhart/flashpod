@@ -1990,10 +1990,12 @@ def _picker_status(existing, db_bytes):
                  "selected: +{:,}".format(selected),
                  "projected: %s" % ("?" if existing is None else
                                     "{:,}".format(existing + selected))]
+        alert = False
         if limit and existing is not None:
-            est = base + selected * avg
-            parts.append("~%d%% of DB budget" % round(est * 100.0 / limit))
-        return "  " + "  |  ".join(parts)
+            pct = (base + selected * avg) * 100.0 / limit
+            parts.append("~%d%% of DB budget" % round(pct))
+            alert = pct > 90.0        # red bar: nearly (or actually) over
+        return "  " + "  |  ".join(parts), alert
     return status
 
 
