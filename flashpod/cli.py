@@ -2343,6 +2343,7 @@ class LineWindow:
     def __init__(self, size=4):
         self.lines = collections.deque(maxlen=size)
         self.drawn = 0
+        self.status = None       # sticky footer under the window (ETA etc.)
         self.tty = sys.stdout.isatty()
 
     def _erase(self):
@@ -2355,8 +2356,21 @@ class LineWindow:
         width = shutil.get_terminal_size().columns
         for line in self.lines:
             sys.stdout.write(line[:max(1, width - 1)] + "\n")
-        self.drawn = len(self.lines)
+        if self.status:
+            sys.stdout.write(self.status[:max(1, width - 1)] + "\n")
+        self.drawn = len(self.lines) + (1 if self.status else 0)
         sys.stdout.flush()
+
+    def set_status(self, line):
+        """Set/replace the sticky footer line below the window (None
+        removes it). It never scrolls into history with the add() lines —
+        for live values like the batch ETA, which would otherwise fossilize
+        on every completed line. Progress-only: suppressed on non-tty."""
+        if not self.tty or line == self.status:
+            return
+        self._erase()
+        self.status = line
+        self._draw()
 
     def add(self, line, transient=False):
         """Roll a new line into the window (oldest scrolls off). ``transient``
@@ -2397,6 +2411,7 @@ class LineWindow:
             return
         self._erase()
         self.lines.clear()
+        self.status = None
 
 
 def track_key(t):
@@ -2817,12 +2832,11 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
                 return
             _last[0] = now
             eta.update(batch_done[0] + min(done, total_bytes))
-            rem = eta.remaining_text()
             mib = 1 << 20
             pct = (done * 100 // total_bytes) if total_bytes else 100
             win.update(f"[{_nr}/{npend}] Adding: {_label}... {pct}% "
-                       f"({done / mib:.1f}/{total_bytes / mib:.1f} MiB)"
-                       + (f" — {rem}" if rem else ""))
+                       f"({done / mib:.1f}/{total_bytes / mib:.1f} MiB)")
+            win.set_status(eta.remaining_text())
 
         try:
             track.location = copy(path, _progress)
@@ -2839,6 +2853,7 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
         lib.tracks.append(track)
         added += 1
         added_bytes += track.size or 0
+    win.set_status(None)          # the ETA must not outlive the batch
     if added:
         save(lib)
     secs = time.monotonic() - start
