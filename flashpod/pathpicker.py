@@ -276,7 +276,7 @@ class DirectoryPicker(object):
     returns the selected paths in pick order, or None on cancel.
     """
 
-    HEADER_ROWS = 2
+    HEADER_ROWS = 2          # +1 when a status bar is configured
     FOOTER_ROWS = 2
     HELP1 = ("Up/Dn move   Right open   Left up   Space select   "
              "Shift+Up/Dn sweep select")
@@ -286,10 +286,20 @@ class DirectoryPicker(object):
     STYLE_DIR = "\x1b[47;30m"    # folders: white background, black text
     STYLE_FILE = "\x1b[40;37m"   # files: black background, white text
 
-    def __init__(self, start_dir=None, show_hidden=False):
+    def __init__(self, start_dir=None, show_hidden=False,
+                 count=None, status=None):
+        """``count(path) -> int`` (optional): items of interest under a
+        selectable path (e.g. audio files in a directory); results are
+        cached per path, so each is computed once per session.
+        ``status(total) -> str`` (optional): text for a pinned bar above
+        the columns, given the summed count of the current selection."""
         start = os.path.abspath(start_dir or os.path.expanduser("~"))
         self.lister = DirectoryLister(show_hidden)
         self.selection = SelectionSet()
+        self.count = count
+        self.status = status
+        self._count_cache = {}
+        self.header_rows = self.HEADER_ROWS + (1 if status else 0)
         self.columns = [self._make_column(start)]
         self.active = 0
         self.sweep = False
@@ -442,6 +452,18 @@ class DirectoryPicker(object):
                 self._fill(c, remember=here)
         return self
 
+    def _selected_total(self):
+        """Summed count() over the current selection (cached per path)."""
+        total = 0
+        for path in self.selection.paths():
+            if path not in self._count_cache:
+                try:
+                    self._count_cache[path] = int(self.count(path))
+                except Exception:                          # noqa: BLE001
+                    self._count_cache[path] = 0
+            total += self._count_cache[path]
+        return total
+
     def _can_go_up(self):
         """True when Left would do something: there's a trail column to
         the left, or the active directory has a parent."""
@@ -543,7 +565,7 @@ class DirectoryPicker(object):
         return first, last_fitting(first)
 
     def _frame(self, term_cols, term_rows):
-        view = max(1, term_rows - self.HEADER_ROWS - self.FOOTER_ROWS)
+        view = max(1, term_rows - self.header_rows - self.FOOTER_ROWS)
         self._page = view
 
         all_rows = [self._column_rows(c) for c in self.columns]
@@ -559,7 +581,14 @@ class DirectoryPicker(object):
         count = "%d selected%s" % (len(self.selection),
                                    " [SWEEP]" if self.sweep else "")
         pad = max(1, term_cols - len(header_path) - len(count) - 1)
-        lines = ["\x1b[1m" + header_path + " " * pad + count + "\x1b[0m", ""]
+        lines = []
+        if self.status:
+            # pinned status bar: full-width reverse-video top line
+            bar = self.status(self._selected_total() if self.count else
+                              len(self.selection))
+            lines.append("\x1b[7m" + bar[:term_cols].ljust(term_cols)
+                         + "\x1b[0m")
+        lines += ["\x1b[1m" + header_path + " " * pad + count + "\x1b[0m", ""]
 
         for i in range(first, last + 1):
             col = self.columns[i]
@@ -596,8 +625,8 @@ class DirectoryPicker(object):
         """The frame with its column area nudged two cells right — shown
         for one beat when a navigation push has nowhere to go."""
         body = ["  " + l for l in
-                lines[self.HEADER_ROWS:-self.FOOTER_ROWS]]
-        return lines[:self.HEADER_ROWS] + body + lines[-self.FOOTER_ROWS:]
+                lines[self.header_rows:-self.FOOTER_ROWS]]
+        return lines[:self.header_rows] + body + lines[-self.FOOTER_ROWS:]
 
     # -- controller -------------------------------------------------------
 

@@ -1653,7 +1653,10 @@ def run_raw(opts, node):
         if cmd in ("rm", "remove", "delete", "erase"):
             return cmd_rm_raw(target, opts.what)
         if cmd == "add":
-            return cmd_add_raw(target, opts.files or prompt_for_paths())
+            files = opts.files
+            if not files:
+                files = prompt_for_paths(*_raw_db_facts(target))
+            return cmd_add_raw(target, files)
         print(f"flashpod: --raw doesn't support `{cmd}`.", file=sys.stderr)
         return 1
     finally:
@@ -1922,6 +1925,27 @@ def expand(paths):
     return out
 
 
+def _mounted_db_facts(mount):
+    """Best-effort (track_count, db_file_bytes) for the picker's status
+    bar; (None, None) when the DB can't be read."""
+    db = os.path.join(mount, "iPod_Control", "iTunes", "iTunesDB")
+    try:
+        return len(itunesdb.parse(db).tracks), os.path.getsize(db)
+    except Exception:                                       # noqa: BLE001
+        return None, None
+
+
+def _raw_db_facts(target):
+    """Best-effort (track_count, db_file_bytes) over the raw FAT driver."""
+    try:
+        raw = target.fs.read_file("iPod_Control/iTunes/iTunesDB")
+        if raw:
+            return len(itunesdb.parse_bytes(raw).tracks), len(raw)
+    except Exception:                                       # noqa: BLE001
+        pass
+    return None, None
+
+
 def _invoking_home():
     """The human's home directory, even when flashpod has sudo-elevated
     itself (HOME is /root there — the picker would open in the wrong
@@ -1936,12 +1960,52 @@ def _invoking_home():
     return os.path.expanduser("~")
 
 
-def prompt_for_paths():
+def _count_audio(path):
+    """Audio files `add` would take under ``path`` (file or directory) —
+    the picker's per-selection counter. AppleDouble junk excluded."""
+    def is_audio(name):
+        return (not name.startswith("._")
+                and os.path.splitext(name)[1].lower() in AUDIO_EXTS)
+    if os.path.isfile(path):
+        return 1 if is_audio(os.path.basename(path)) else 0
+    total = 0
+    for _root, _dirs, files in os.walk(path):
+        total += sum(1 for f in files if is_audio(f))
+    return total
+
+
+def _picker_status(existing, db_bytes):
+    """Status-bar closure for the picker: song counts plus an estimated
+    fraction of the firmware DB budget. The estimate prices each new
+    track at the existing library's average DB cost (or a typical ~700
+    bytes when the iPod is empty) — real tags aren't known until add
+    reads them, so the authoritative check stays in the add pre-flight."""
+    limit = _db_size_limit()
+    avg = (db_bytes / existing) if existing and db_bytes else 700.0
+    base = db_bytes or 0
+
+    def status(selected):
+        parts = ["iPod songs: %s" % ("?" if existing is None else
+                                     "{:,}".format(existing)),
+                 "selected: +{:,}".format(selected),
+                 "projected: %s" % ("?" if existing is None else
+                                    "{:,}".format(existing + selected))]
+        if limit and existing is not None:
+            est = base + selected * avg
+            parts.append("~%d%% of DB budget" % round(est * 100.0 / limit))
+        return "  " + "  |  ".join(parts)
+    return status
+
+
+def prompt_for_paths(existing=None, db_bytes=None):
     """`flashpod add` with no paths: open the interactive directory picker
     (Miller columns, Space selects, Enter confirms) starting at the user's
     home directory. Falls back to the single-path typed prompt when the
     picker can't run. Returns a list of paths, or None (caller exits
-    nonzero) on cancel / nothing usable."""
+    nonzero) on cancel / nothing usable.
+
+    ``existing``/``db_bytes`` (optional): the iPod's current track count
+    and iTunesDB file size, for the picker's pinned status bar."""
     if sys.stdin.isatty() and sys.stdout.isatty():
         # The picker takes over the whole screen; pause first so what was
         # just printed (which device was identified, mount-vs-raw mode)
@@ -1964,7 +2028,9 @@ def prompt_for_paths():
             return [path]
         try:
             from .pathpicker import DirectoryPicker
-            picked = DirectoryPicker(_invoking_home()).run()
+            picked = DirectoryPicker(
+                _invoking_home(), count=_count_audio,
+                status=_picker_status(existing, db_bytes)).run()
         except Exception as exc:
             print(f"flashpod: directory picker failed ({exc}); "
                   "type a path instead.", file=sys.stderr)
@@ -3009,7 +3075,7 @@ def _offer_init_after_flash_win(dev, raw_fobj=None, data_start=None):
     if ask_yes("\nMusic can be loaded onto the card now, or later "
                "when it is in the iPod.\n"
                "Load music onto the card now? [Y/n] "):
-        cmd_add_raw(target, prompt_for_paths())
+        cmd_add_raw(target, prompt_for_paths(0, None))  # freshly inited
 
 
 def _offer_init_after_flash_unix(dev):
@@ -3072,7 +3138,7 @@ def _offer_init_after_flash_unix(dev):
             if ask_yes("\nMusic can be loaded onto the card now, or later "
                        "when it is in the iPod.\n"
                        "Load music onto the card now? [Y/n] "):
-                cmd_add(mnt, prompt_for_paths())
+                cmd_add(mnt, prompt_for_paths(0, None))  # freshly inited
             subprocess.run(["sync"], check=False)
         finally:
             if ours:
@@ -3357,7 +3423,10 @@ def main():
         if opts.command == "rebuild":
             return cmd_rebuild(mount, getattr(opts, "name", None))
 
-        return cmd_add(mount, opts.files or prompt_for_paths())
+        files = opts.files
+        if not files:
+            files = prompt_for_paths(*_mounted_db_facts(mount))
+        return cmd_add(mount, files)
     except OSError as exc:
         _report_io_error(mount, exc)
         return 1

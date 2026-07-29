@@ -107,6 +107,40 @@ def check_arrows_and_bump(root):
     assert all(x == "  " + y for x, y in zip(b[2:-2], f[2:-2]))
 
 
+def check_status_bar(root):
+    calls = []
+
+    def counter(path):
+        calls.append(path)
+        return 3 if os.path.isdir(path) else 1
+
+    def status(total):
+        return "iPod songs: 10  |  selected: +%d" % total
+
+    p = DirectoryPicker(root, count=counter, status=status)
+    assert p.header_rows == 3
+    f = p._frame(80, 24)
+    assert "selected: +0" in strip(f[0])            # bar pinned on top
+    assert "\x1b[7m" in f[0]                        # reverse-video bar
+    p._handle("space")                              # select first dir
+    f = p._frame(80, 24)
+    assert "selected: +3" in strip(f[0])
+    p._frame(80, 24)
+    assert len(calls) == 1                          # count cached per path
+    p._handle("space")                              # deselect
+    f = p._frame(80, 24)
+    assert "selected: +0" in strip(f[0])
+    assert len(calls) == 1                          # cache survives toggles
+    # geometry: bump slices respect the extra header row
+    b = p._bumped(f)
+    assert b[0] == f[0] and b[-2:] == f[-2:]
+    assert all(x == "  " + y for x, y in zip(b[3:-2], f[3:-2]))
+    # no status configured -> no bar, original geometry
+    p2 = DirectoryPicker(root)
+    assert p2.header_rows == 2
+    assert "songs" not in strip(p2._frame(80, 24)[0])
+
+
 def main():
     root = build_tree()
     try:
@@ -114,6 +148,7 @@ def main():
         check_selection()
         check_trail_and_sweep(root)
         check_arrows_and_bump(root)
+        check_status_bar(root)
     finally:
         shutil.rmtree(root, ignore_errors=True)
     print("picker selftest: OK (%s, python %d.%d.%d)"
