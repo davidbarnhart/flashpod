@@ -393,6 +393,15 @@ tracks 1–5 scrolled away above.
 > into a USB reader and `add` over the normal mount — USB bypasses the bridge
 > and is far faster. Keep the raw FireWire path for quick incremental edits.
 
+> **Early iPods can't load an arbitrarily large library.** The firmware has a
+> hard budget for the database file: past it the iPod boots normally but shows
+> **zero songs** — no error. Measured on real 1st-gen hardware: the cliff is at
+> ~3.78 MB of iTunesDB (roughly 5,000–5,500 tracks with typical tags; it's the
+> *bytes* that matter, not the track count, so rich tags cost capacity).
+> `flashpod add` projects the database size before copying and offers to trim
+> the batch to what fits. `FLASHPOD_DB_LIMIT=<bytes>` overrides the ceiling
+> (`0` disables the check — e.g. for later models that may load more).
+
 ### `flashpod rm`
 
 ```

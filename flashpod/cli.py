@@ -2710,6 +2710,48 @@ def _winnow(pending, budget):
     return [item for n in names if n in kept for item in groups[n]]
 
 
+#: Serialized-iTunesDB byte budget the target iPod's firmware can load.
+#: Measured on real 1G hardware (2026-07-29): 3,776,000 bytes loads and
+#: plays; 3,776,684 makes the iPod show an EMPTY library (no error).
+#: Bisected to a one-track edge, then pinned to bytes — not track or
+#: record count — with slim/fat DB experiments (scripts/db_slice.py).
+#: Default keeps a safety margin under the proven-good point.
+#: FLASHPOD_DB_LIMIT overrides; 0 disables the check.
+IPOD_DB_SIZE_LIMIT = 3600000
+
+
+def _db_size_limit():
+    env = os.environ.get("FLASHPOD_DB_LIMIT")
+    if env is not None:
+        try:
+            return int(env)
+        except ValueError:
+            pass
+    return IPOD_DB_SIZE_LIMIT
+
+
+def _projected_db_size(lib, new_tracks):
+    """Serialized iTunesDB size after adding ``new_tracks`` to ``lib``."""
+    tmp = itunesdb.Library(lib.name)
+    tmp.tracks = list(lib.tracks) + list(new_tracks)
+    return len(itunesdb.serialize(tmp))
+
+
+def _fit_count(lib, new_tracks, limit):
+    """How many of ``new_tracks`` (in order) fit under the DB byte limit.
+    0 when the existing library alone is already over it."""
+    if _projected_db_size(lib, []) > limit:
+        return 0
+    lo, hi = 0, len(new_tracks)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _projected_db_size(lib, new_tracks[:mid]) <= limit:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
 def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
     """Batch-add files to the iPod. The backend is callables so this works the
     same over an OS mount (cmd_add) and over the raw device (cmd_add_raw):
@@ -2811,6 +2853,42 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
                     print("flashpod add: nothing selected; nothing added.")
                     return 0
 
+    # Pre-flight 2: will the grown iTunesDB still LOAD on the iPod? Early
+    # firmware has a hard heap budget for the parsed database and shows an
+    # EMPTY library past it — no error, just zero songs. Measured on real
+    # 1G hardware (2026-07-29, scripts/db_slice.py bisection + slim/fat
+    # experiments): 3,776,000 bytes loads, 3,776,684 doesn't; track and
+    # record counts don't matter, only serialized bytes.
+    db_dropped = 0
+    limit = _db_size_limit()
+    if pending and limit:
+        new_tracks = [t for _, t in pending]
+        projected = _projected_db_size(lib, new_tracks)
+        if projected > limit:
+            fit = _fit_count(lib, new_tracks, limit)
+            print(f"flashpod add: this batch would grow the iPod's database "
+                  f"to {projected:,} bytes — past the ~{limit:,}-byte "
+                  "ceiling early iPod firmware can load (the iPod would "
+                  "then show ZERO songs).", file=sys.stderr)
+            if fit <= 0:
+                print("  The library alone already exceeds the ceiling; "
+                      "remove tracks (`flashpod rm`) or set "
+                      "FLASHPOD_DB_LIMIT=0 to override.", file=sys.stderr)
+                return 1
+            if not sys.stdin.isatty():
+                print(f"  {fit} of the {len(pending)} new tracks would fit; "
+                      "trim the batch, or set FLASHPOD_DB_LIMIT=0 to "
+                      "override (can't prompt here).", file=sys.stderr)
+                return 1
+            if ask_yes(f"  {fit} of {len(pending)} new tracks fit under the "
+                       "ceiling. Add just those? [Y/n] "):
+                db_dropped = len(pending) - fit
+                pending = pending[:fit]
+            elif not ask_yes("  Add ALL anyway — the iPod will likely show "
+                             "an empty library? [y/N] ", default_yes=False):
+                print("flashpod add: nothing added.")
+                return 0
+
     # Pass 2: copy what survived.
     start = time.monotonic()
     npend = len(pending)
@@ -2861,6 +2939,8 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
     parts = [f"{added} track{'s' if added != 1 else ''} added"]
     if dropped:
         parts.append(f"{dropped} dropped to fit free space")
+    if db_dropped:
+        parts.append(f"{db_dropped} dropped to fit the database ceiling")
     if skipped:
         parts.append(f"{skipped} skipped (already on iPod)")
     if failures:
