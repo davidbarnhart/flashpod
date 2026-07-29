@@ -32,6 +32,12 @@ on:
           where the release job downloads what this produced.
         type: boolean
         default: false
+      slim:
+        description: >-
+          Build only the Linux target — the cheap, fast per-push signal.
+          Off (the full three-OS matrix) for PRs, dispatch, and releases.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -47,24 +53,18 @@ jobs:
   # the artifact AND prove it, in one job, and nothing depends on them.
   build:
     name: build + flash (${{ matrix.os }})
+    # The include list lives in JSON because `strategy.matrix` can't see
+    # `env` and the slim/full split needs an expression. Targets:
+    #   ubuntu-22.04    older glibc = runs on more Linux systems
+    #   windows-latest  Windows 10/11 x86-64
+    #   macos-latest    MODERN Macs, Intel AND Apple Silicon (universal2 fat
+    #                   binary; the 10.8 build stays manual — BUILD.md)
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-22.04        # older glibc = runs on more Linux systems
-            slug: linux-x86_64
-            bin: flashpod
-            archive: flashpod-linux-x86_64.tar.gz
-          - os: windows-latest
-            slug: windows-x86_64
-            bin: flashpod.exe
-            archive: flashpod-windows-x86_64.zip
-          - os: macos-latest        # for MODERN Macs, Intel AND Apple Silicon
-            slug: macos-universal2  # (universal2 fat binary) — the 10.8 build
-            bin: flashpod           # stays manual (BUILD.md); this one exists
-            archive: flashpod-macos-universal2.tar.gz   # so modern-Mac users
-            target_arch: universal2                     # stop grabbing it
+        include: ${{ fromJSON(inputs.slim && '[{"os":"ubuntu-22.04","slug":"linux-x86_64","bin":"flashpod","archive":"flashpod-linux-x86_64.tar.gz"}]' || '[{"os":"ubuntu-22.04","slug":"linux-x86_64","bin":"flashpod","archive":"flashpod-linux-x86_64.tar.gz"},{"os":"windows-latest","slug":"windows-x86_64","bin":"flashpod.exe","archive":"flashpod-windows-x86_64.zip"},{"os":"macos-latest","slug":"macos-universal2","bin":"flashpod","archive":"flashpod-macos-universal2.tar.gz","target_arch":"universal2"}]') }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v5
 
