@@ -13,6 +13,16 @@ Usage:
   python3 scripts/db_slice.py /media/david/IPOD size N [M ...]
       print the serialized DB size at each track count (no writes) —
       for checking whether a working/failing boundary is a byte limit
+
+Mechanism experiments (write a distorted DB to the card; 'all' undoes):
+  python3 scripts/db_slice.py /media/david/IPOD slim 5500
+      first N tracks, stripped to title+location only — MORE tracks
+      than the known cliff in FEWER bytes. Songs visible on the iPod
+      -> the limit is bytes/heap, not track count.
+  python3 scripts/db_slice.py /media/david/IPOD fat 5000 3800000
+      first N tracks (below the cliff), titles padded until the DB is
+      >= the target bytes. Zero songs -> byte/heap limit confirmed,
+      boundary sits below the target.
 """
 
 import os
@@ -58,6 +68,38 @@ def main(argv):
                      mhit, mhod, mhip, total))
         print("candidate limits: 4 MiB = %d bytes; 2^15 records = 32768; "
               "2^16 = 65536" % (1 << 22))
+        return 0
+
+    if n in ("slim", "fat"):
+        if not os.path.exists(backup):
+            shutil.copyfile(dbpath, backup)
+            print("full database backed up to %s" % backup)
+        lib = itunesdb.parse(backup)
+        count = int(argv[3])
+        sub = _sliced(lib, count)
+        if n == "slim":
+            for tr in sub.tracks:
+                tr.album = tr.artist = tr.genre = tr.composer = None
+        else:
+            target = int(argv[4]) if len(argv) > 4 else 3800000
+            size = len(itunesdb.serialize(sub))
+            if size < target:
+                # spread the padding over every track's title (realistic
+                # record shapes, ~even growth); UTF-16 = 2 bytes/char
+                chars = (target - size) // (2 * count) + 1
+                for tr in sub.tracks:
+                    tr.title = (tr.title or "") + " " + "x" * chars
+        buf = itunesdb.serialize(sub)
+        with open(dbpath, "wb") as f:
+            f.write(buf)
+        print("%s DB written: %d tracks, %d bytes (%.3f MiB), "
+              "%d mhod / %d records"
+              % (n, count, len(buf), len(buf) / 1048576.0,
+                 buf.count(b"mhod"),
+                 buf.count(b"mhit") + buf.count(b"mhod") + buf.count(b"mhip")))
+        if hasattr(os, "sync"):
+            os.sync()
+        print("synced — unmount/eject, then test in the iPod.")
         return 0
 
     if n == "all":
