@@ -2027,6 +2027,122 @@ def fmt_duration(seconds):
     return f"{minutes}m{secs:02d}s" if minutes else f"{secs}s"
 
 
+def _fmt_remaining(sec):
+    """Coarse human phrasing for an ETA — deliberately quantized so tiny
+    estimate changes don't reach the screen."""
+    if sec >= 3600:
+        hours, rest = divmod(int(sec), 3600)
+        minutes = rest // 60
+        return "%d hour%s %d minute%s remaining" % (
+            hours, "s" if hours != 1 else "",
+            minutes, "s" if minutes != 1 else "")
+    if sec >= 120:
+        minutes = int(round(sec / 60.0))
+        if minutes >= 60:                    # 59m30s+ rounds up: say hours
+            return "1 hour 0 minutes remaining"
+        return "%d minutes remaining" % max(2, minutes)
+    if sec >= 45:
+        return "about a minute remaining"
+    return "less than a minute remaining"
+
+
+class EtaEstimator(object):
+    """Stable time-remaining for a batch copy whose total size is known
+    up front (pass 1 gives the whole manifest — the big advantage over a
+    file-manager ETA).
+
+    Three stabilizing layers, each killing a different jump source:
+
+    * The rate is an exponential moving average (memory TAU seconds) of
+      throughput over WALL CLOCK — page-cache bursts, fsync stalls, and
+      per-file gaps all land in the same stream and anything shorter
+      than ~TAU averages out. Real regime changes still flow in.
+    * The DISPLAYED value is a countdown, re-anchored to the model only
+      when the two diverge by >REANCHOR_FRAC or >REANCHOR_ABS seconds
+      AND the divergence has held for PERSIST continuous seconds. Burst/
+      stall cycles breach the band only transiently and never move the
+      display; a genuine correction (early estimate was wrong, the
+      medium slowed for real) lands as ONE step instead of a stair of
+      them — the precise failure mode of the old Windows copy dialog.
+    * No estimate at all during the first WARMUP seconds (better silent
+      than wild), and _fmt_remaining quantizes the phrasing.
+
+    ``clock`` is injectable for tests."""
+
+    WARMUP = 5.0
+    TAU = 60.0
+    REANCHOR_FRAC = 0.15
+    REANCHOR_ABS = 20.0
+    PERSIST = 8.0
+
+    def __init__(self, total_bytes, clock=time.monotonic):
+        self.total = total_bytes
+        self._clock = clock
+        self._start = clock()
+        self._last_t = self._start
+        self._last_done = 0
+        self._done = 0
+        self._rate = None
+        self._anchor_eta = None
+        self._anchor_t = None
+        self._breach_since = None
+        self.reanchors = 0        # observable for tests
+
+    def exclude(self, nbytes):
+        """A file dropped out of the batch (copy failed): shrink the goal."""
+        self.total = max(0, self.total - (nbytes or 0))
+
+    def update(self, done):
+        """Record cumulative batch progress (bytes)."""
+        now = self._clock()
+        dt = now - self._last_t
+        self._done = done
+        if dt <= 0:
+            return
+        inst = max(0.0, (done - self._last_done) / dt)
+        elapsed = now - self._start
+        if elapsed <= self.TAU:
+            # Early on, the cumulative average is the best estimator of the
+            # mean (for burst/stall traffic it's exact after each full
+            # cycle); an EWMA seeded inside a burst starts biased and its
+            # slow correction stair-steps the ETA upward.
+            self._rate = done / elapsed if elapsed > 0 else None
+        else:
+            import math
+            alpha = 1.0 - math.exp(-dt / self.TAU)
+            self._rate += alpha * (inst - self._rate)
+        self._last_t = now
+        self._last_done = done
+
+    def remaining_text(self):
+        """The string to show ('… remaining'), or None (warmup/unknown)."""
+        now = self._clock()
+        if (now - self._start < self.WARMUP or not self._rate
+                or self._rate <= 1e-9 or self.total <= 0):
+            return None
+        raw = max(0.0, (self.total - self._done) / self._rate)
+        if self._anchor_eta is None:
+            self._anchor_eta, self._anchor_t = raw, now
+            self.reanchors += 1
+        shown = max(0.0, self._anchor_eta - (now - self._anchor_t))
+        band = max(self.REANCHOR_FRAC * max(shown, raw), self.REANCHOR_ABS)
+        side = 0 if abs(raw - shown) <= band else (1 if raw > shown else -1)
+        if side == 0:
+            self._breach_since = None
+        elif self._breach_since is None or self._breach_since[0] != side:
+            self._breach_since = (side, now)
+        elif now - self._breach_since[1] >= self.PERSIST:
+            # Upward corrections overshoot slightly, so continued drift in
+            # the same direction settles inside the band instead of
+            # breaching again 30 seconds later (the stair-step effect).
+            self._anchor_eta = raw + 0.4 * band if side > 0 else raw
+            self._anchor_t = now
+            self._breach_since = None
+            self.reanchors += 1
+            shown = self._anchor_eta
+        return _fmt_remaining(shown)
+
+
 def read_audio(path):
     """Open `path` for tag/info reading. MP3s — the common case — skip
     mutagen's format detection, which scores every handler and reads whole
@@ -2685,6 +2801,8 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
     npend = len(pending)
     added = 0
     added_bytes = 0
+    eta = EtaEstimator(sum(t.size or 0 for _, t in pending))
+    batch_done = [0]              # bytes of files already fully copied
     for nr, (path, track) in enumerate(pending, 1):
         label = track.title + (f" — {track.artist}" if track.artist else "")
         win.add(f"[{nr}/{npend}] Adding: {label}...")
@@ -2698,17 +2816,22 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
             if done < total_bytes and now - _last[0] < 0.125:
                 return
             _last[0] = now
+            eta.update(batch_done[0] + min(done, total_bytes))
+            rem = eta.remaining_text()
             mib = 1 << 20
             pct = (done * 100 // total_bytes) if total_bytes else 100
             win.update(f"[{_nr}/{npend}] Adding: {_label}... {pct}% "
-                       f"({done / mib:.1f}/{total_bytes / mib:.1f} MiB)")
+                       f"({done / mib:.1f}/{total_bytes / mib:.1f} MiB)"
+                       + (f" — {rem}" if rem else ""))
 
         try:
             track.location = copy(path, _progress)
         except OSError as exc:
             win.note(f"[{nr}/{npend}] FAILED {path}: {exc}")
             failures += 1
+            eta.exclude(track.size)
             continue
+        batch_done[0] += track.size or 0
         # Assign the id now that the track is actually being committed: each
         # next_track_id() sees the tracks appended earlier in this batch, so
         # the ids are unique. (Failed copies above are skipped and burn no id.)
