@@ -1435,6 +1435,25 @@ def _mounted_devices():
     return devs
 
 
+# A partition suffix on a whole-disk node: Linux "2"/"p2", macOS "s2" (and
+# nested "s5s1" for an APFS volume inside a container). Anything else is a
+# different disk that merely shares the prefix, e.g. sdb vs sdba1.
+_PART_SUFFIX = re.compile(r"^(?:p?\d+|(?:s\d+)+)$")
+
+
+def _block_node(node):
+    """macOS raw char node -> its block node: /dev/rdisk2 -> /dev/disk2.
+
+    Candidates arrive as raw nodes (that's what the FAT driver must open) but
+    the mount table names block nodes, so comparing them directly never
+    matches — which is how a mounted iPod got offered a second time as its own
+    raw device."""
+    base = os.path.basename(node)
+    if base.startswith("rdisk"):
+        return os.path.join(os.path.dirname(node), base[1:])
+    return node
+
+
 def _unmounted_disks(disks):
     """Filter fat_disk_candidates() down to the ones NOT currently mounted —
     i.e. attached FAT disks that could be a second, unmounted iPod (the FireWire
@@ -1445,16 +1464,12 @@ def _unmounted_disks(disks):
     mounted = _mounted_devices()
 
     def is_mounted(node):
-        real = os.path.realpath(node)
+        real = os.path.realpath(_block_node(node))
         if real in mounted:
             return True
         for m in mounted:
-            # /dev/sdb covers /dev/sdb2; /dev/nvme0n1 covers /dev/nvme0n1p2.
-            # (A bare "p" separator or digits only — anything else is a
-            # different disk that merely shares the prefix, e.g. sdba1.)
             tail = m[len(real):] if m.startswith(real) else ""
-            if tail and (tail.isdigit()
-                         or (tail[0] == "p" and tail[1:].isdigit())):
+            if tail and _PART_SUFFIX.match(tail):
                 return True
         return False
 
