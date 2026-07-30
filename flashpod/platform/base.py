@@ -219,6 +219,18 @@ class Platform(object):
         """Flush and power off / eject ``dev``."""
         raise NotImplementedError
 
+    def eject_checked(self, dev):
+        """Eject ``dev`` and report the outcome as ``(ok, detail)``.
+
+        Where :meth:`eject` is fire-and-forget, this one answers "is it safe to
+        unplug yet?", so it must not claim a success it hasn't verified. The
+        default drives :meth:`eject` and judges by whether anything is still
+        mounted off the device; a backend whose eject tool explains its refusal
+        (macOS's diskutil names what is holding the volume) should override and
+        pass that message back as ``detail``."""
+        self.eject(dev, False)
+        return (not self.device_mountpoints(dev)), ""
+
     def open_raw(self, dev, mode):
         """Open ``dev`` for raw binary I/O. Default works for real files and
         POSIX device nodes; Windows overrides for ``\\\\.\\PhysicalDriveN``."""
@@ -273,14 +285,20 @@ class Platform(object):
         the gen-1 FireWire bridge corrupts into zeros)."""
         return dev
 
-    def raw_max_xfer(self):
+    def raw_max_xfer(self, device=None):
         """Safe default transfer size (in 512-byte sectors) for the userspace
         FAT driver, for BOTH reads and writes. 8 = 4 KiB, the Linux-kernel-
-        queue-proven ceiling for the FireWire bridge; macOS overrides this lower
-        (the raw device doesn't honour that queue cap, and only single-sector
-        transfers are proven safe over the bridge). Larger writes don't help
+        queue-proven ceiling for the FireWire bridge; macOS overrides this per
+        transport — lower for FireWire (the raw device doesn't honour that queue
+        cap, and only single-sector transfers are proven safe over the bridge),
+        far higher for USB. Larger writes don't help
         anyway — the bridge is bandwidth-limited. Override via
-        FLASHPOD_RAW_MAX_XFER (e.g. raise it on a USB reader)."""
+        FLASHPOD_RAW_MAX_XFER (e.g. raise it on a USB reader).
+
+        ``device`` lets a backend decide from the transport rather than the OS
+        — the bridge constraint is FireWire's, not the platform's. macOS does
+        this; Linux keeps a flat 8 until the Linux column of the transport
+        matrix is measured on hardware."""
         return 8
 
     # -- sync-path mount detection ----------------------------------------

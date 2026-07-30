@@ -82,8 +82,38 @@ def t_external_disks():
             "%r is not external but was returned anyway" % d
 
 
+def _boot_disks_from_diskutil():
+    """Every whole disk backing the running system, derived straight from the
+    diskutil plists rather than the production helper: the ParentWholeDisk of
+    "/" (on APFS the *synthesized container*) plus the APFS physical stores
+    beneath it (the real drive, e.g. disk0)."""
+    info = macos._diskutil_info("/")
+    disks = set()
+    parent = info.get("ParentWholeDisk") or ""
+    if parent:
+        disks.add(macos._whole_disk(parent))
+
+    def stores(inf):
+        out = set()
+        for st in inf.get("APFSPhysicalStores") or []:
+            node = st.get("APFSPhysicalStore") if isinstance(st, dict) else st
+            if node:
+                out.add(macos._whole_disk(node))
+        return out
+
+    disks |= stores(info)
+    for d in sorted(disks):
+        try:
+            disks |= stores(macos._diskutil_info("/dev/" + d))
+        except OSError:
+            pass
+    return disks
+
+
 def t_fat_candidates():
-    """Must offer every whole disk EXCEPT the boot disk.
+    """Must offer every whole disk EXCEPT the ones backing the running system
+    -- on APFS that is both the synthesized container AND its physical store
+    (matching on ParentWholeDisk alone left /dev/disk0 offered as a target).
 
     fat_disk_candidates swallows OSError and returns [], so it reported
     "success" all through the -plist bug while actually enumerating nothing.
@@ -92,38 +122,45 @@ def t_fat_candidates():
     """
     whole = macos._diskutil_plist(["list"]).get("WholeDisks") or []
     assert whole, "diskutil reports no whole disks at all -- cannot test"
-    boot = macos._whole_disk(macos._diskutil_info("/").get("ParentWholeDisk", ""))
-    assert boot, "could not resolve the boot disk"
+    boot = _boot_disks_from_diskutil()
+    assert boot, "could not resolve the boot disk(s)"
 
-    want = set("/dev/r" + d for d in whole if d != boot)
+    want = set("/dev/r" + d for d in whole if d not in boot)
     got = dict(macos.MacOSPlatform().fat_disk_candidates())
 
     assert set(got) == want, "candidates %r != expected %r" % (sorted(got), sorted(want))
-    assert "/dev/r" + boot not in got, "boot disk %r offered as a flash target" % boot
+    for b in boot:
+        assert "/dev/r" + b not in got, "boot disk %r offered as a flash target" % b
     for node, desc in got.items():
         assert isinstance(desc, str) and desc, "empty description for %r" % node
 
 
 # -- the safety regression that matters ---------------------------------------
 def t_refuses_boot_disk():
-    """validate_target must REFUSE the disk backing the running system.
+    """validate_target must REFUSE every disk backing the running system --
+    the synthesized APFS container AND its physical store (the guard once
+    fired only for the container, so naming /dev/disk0 explicitly slipped
+    past the last line of defence).
 
     It swallows OSError around the diskutil lookup, so a broken _diskutil_info
     turns this guard into a no-op instead of an error -- exactly the failure
     mode that made it worth a test.
     """
-    parent = macos._diskutil_info("/").get("ParentWholeDisk", "")
-    boot = macos._whole_disk(parent)
-    assert boot, "could not resolve the boot disk (ParentWholeDisk=%r)" % parent
-    dev = "/dev/" + boot
-    if not os.path.exists(dev):
-        print("      (boot node %s absent -- skipping)" % dev)
-        return
-    try:
-        macos.MacOSPlatform().validate_target(dev, dry_run=True)
-    except SystemExit:
-        return                                     # refused, as it must be
-    raise AssertionError("validate_target ACCEPTED the boot disk %s" % dev)
+    boot = _boot_disks_from_diskutil()
+    assert boot, "could not resolve the boot disk(s)"
+    tried = 0
+    for b in sorted(boot):
+        dev = "/dev/" + b
+        if not os.path.exists(dev):
+            print("      (boot node %s absent -- skipping)" % dev)
+            continue
+        tried += 1
+        try:
+            macos.MacOSPlatform().validate_target(dev, dry_run=True)
+        except SystemExit:
+            continue                               # refused, as it must be
+        raise AssertionError("validate_target ACCEPTED the boot disk %s" % dev)
+    assert tried, "no boot-disk node present to test"
 
 
 def t_refuses_partition():

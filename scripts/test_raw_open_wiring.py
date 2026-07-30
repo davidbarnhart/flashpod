@@ -24,7 +24,7 @@ class FakePlat:
     def __init__(self, direct):
         self._direct = direct
         self.opened = None
-    def raw_max_xfer(self):
+    def raw_max_xfer(self, device=None):
         return 8
     def raw_read_node(self, dev):
         return dev

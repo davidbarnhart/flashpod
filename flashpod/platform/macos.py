@@ -50,6 +50,48 @@ def _whole_disk(dev):
     return name
 
 
+def _apfs_stores(info):
+    """The physical-store disks named by a diskutil info plist, if any."""
+    out = set()
+    for st in info.get("APFSPhysicalStores") or []:
+        node = st.get("APFSPhysicalStore") if isinstance(st, dict) else st
+        if node:
+            out.add(_whole_disk(node))
+    return out
+
+
+def _system_whole_disks():
+    """Every whole disk backing the running system.
+
+    ``diskutil info /`` reports ``ParentWholeDisk`` as the **synthesized APFS
+    container** (e.g. ``disk1``), not the physical drive underneath it. So on
+    any APFS Mac — which is every Mac since 10.13 — matching on that
+    identifier alone leaves the real boot disk (``disk0``) looking like an
+    ordinary attached disk. That bit us twice: detection offered to raw-probe
+    the system SSD (forcing a pointless sudo prompt on every run), and
+    validate_target's "refusing: backs the running system" guard did not fire
+    for ``/dev/disk0``. Resolve the container's physical stores too, and check
+    membership against the whole set.
+    """
+    out = set()
+    try:
+        info = _diskutil_info("/")
+    except OSError:
+        return out
+    parent = info.get("ParentWholeDisk") or ""
+    if parent:
+        out.add(_whole_disk(parent))
+    out |= _apfs_stores(info)
+    # The volume plist usually names the stores directly; when it doesn't, the
+    # container's own plist does.
+    for disk in list(out):
+        try:
+            out |= _apfs_stores(_diskutil_info("/dev/" + disk))
+        except OSError:
+            continue
+    return out
+
+
 class MacOSPlatform(Platform):
     name = "macos"
 
@@ -146,13 +188,10 @@ class MacOSPlatform(Platform):
         if name.startswith("disk") and "s" in name[4:]:
             sys.exit(color("refusing a partition (%s); pass the whole disk "
                            "(/dev/%s)." % (dev, _whole_disk(dev)), red))
-        # never the boot disk
-        try:
-            root_disk = _whole_disk(_diskutil_info("/").get("ParentWholeDisk", ""))
-            if root_disk and _whole_disk(dev) == root_disk:
-                sys.exit(color("refusing: %s backs the running system." % dev, red))
-        except OSError:
-            pass
+        # never the boot disk — including the physical store under an APFS
+        # container, which ParentWholeDisk alone does not name.
+        if _whole_disk(dev) in _system_whole_disks():
+            sys.exit(color("refusing: %s backs the running system." % dev, red))
 
     # -- mutation around the raw write ------------------------------------
     def unmount_all(self, dev, dry):
@@ -179,6 +218,20 @@ class MacOSPlatform(Platform):
         subprocess.run(["diskutil", "eject", "/dev/" + _whole_disk(dev)],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    def eject_checked(self, dev):
+        """diskutil reports *why* it won't eject — "Disk in use by process ..."
+        or the name of the dissenting process — which is the useful half of the
+        answer, so pass it back rather than discarding it as eject() does."""
+        subprocess.run(["sync"])
+        res = subprocess.run(["diskutil", "eject", "/dev/" + _whole_disk(dev)],
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        detail = res.stdout.decode("utf-8", "replace").strip()
+        if res.returncode != 0:
+            return False, detail
+        # diskutil is synchronous, but confirm rather than trust the exit code:
+        # this answers "is it safe to unplug?", and a stale mount makes that a lie.
+        return (not self.device_mountpoints(dev)), detail
+
     def open_raw(self, dev, mode):
         # plain image file: open directly; real disk: use the raw char device
         if os.path.isfile(dev):
@@ -197,15 +250,36 @@ class MacOSPlatform(Platform):
             return dev
         return "/dev/r" + base
 
-    def raw_max_xfer(self):
-        """Single-sector transfers, reads AND writes. The gen-1 iPod FireWire
-        bridge corrupts raw transfers larger than one sector in BOTH directions
-        (proven the hard way: single-sector round-trips, but 8-sector reads come
-        back zeroed and 8-sector writes corrupt). Unlike Linux there's no
-        per-device queue cap on macOS, so the driver self-limits. Larger writes
-        wouldn't help anyway — the bridge is bandwidth-limited (~270 KiB/s).
-        FLASHPOD_RAW_MAX_XFER can raise it on a USB reader (no bridge)."""
-        return 1
+    def _bus_protocol(self, dev):
+        """diskutil's BusProtocol for a device ('USB', 'FireWire', ...) or ''."""
+        if not dev or os.path.isfile(dev):
+            return ""
+        try:
+            info = _diskutil_info("/dev/" + _whole_disk(dev))
+        except OSError:
+            return ""
+        return str(info.get("BusProtocol") or "").strip()
+
+    def raw_max_xfer(self, device=None):
+        """Safe transfer size in sectors, for reads AND writes — decided by the
+        device's **transport**, not by the OS.
+
+        The gen-1 iPod FireWire bridge corrupts raw transfers larger than one
+        sector in both directions (proven the hard way: single-sector
+        round-trips fine, 8-sector reads come back zeroed, 8-sector writes
+        corrupt), and larger writes wouldn't help anyway since the bridge is
+        bandwidth-limited to ~270 KiB/s. None of that applies to a USB iPod or
+        card reader, which has no bridge in the path — and capping those at one
+        sector costs a factor of ~7 on writes (measured on a 3G over USB:
+        1.3 MiB/s at 1 sector vs 9.5 MiB/s at 128, with 64 KiB reads and writes
+        both verifying byte-for-byte).
+
+        Unknown transport falls back to the fragile value: guessing low is slow,
+        guessing high corrupts. FLASHPOD_RAW_MAX_XFER still overrides."""
+        bus = self._bus_protocol(device).lower()
+        if not bus or "firewire" in bus or "1394" in bus:
+            return 1
+        return 128
 
     def fat_disk_candidates(self):
         """Every whole disk except the one backing the running system, as
@@ -221,13 +295,10 @@ class MacOSPlatform(Platform):
             pl = _diskutil_plist(["list"])
         except OSError:
             return []
-        try:
-            boot = _whole_disk(_diskutil_info("/").get("ParentWholeDisk", ""))
-        except OSError:
-            boot = None
+        boot = _system_whole_disks()
         out = []
         for d in pl.get("WholeDisks") or []:
-            if d and d == boot:
+            if not d or d in boot:
                 continue
             desc = d
             try:

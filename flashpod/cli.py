@@ -385,11 +385,16 @@ def load_library(mount):
     return None
 
 
-def _effective_xfer():
+def _effective_xfer(device=None):
     """The transfer size (in sectors) that will actually be used for reads and
-    writes, after the platform default and the FLASHPOD_RAW_MAX_XFER override."""
+    writes, after the platform default and the FLASHPOD_RAW_MAX_XFER override.
+
+    ``device`` is passed to the backend so it can decide from the transport:
+    the tiny-transfer rule exists for the FireWire bridge, and applying it to a
+    USB iPod costs ~7x on writes for a defect that path doesn't have."""
     plat = platform.current()
-    return max(1, int(os.environ.get("FLASHPOD_RAW_MAX_XFER", plat.raw_max_xfer())))
+    return max(1, int(os.environ.get("FLASHPOD_RAW_MAX_XFER",
+                                     plat.raw_max_xfer(device))))
 
 
 def open_raw_fat(device, writable=False):
@@ -400,25 +405,43 @@ def open_raw_fat(device, writable=False):
     On macOS a /dev/diskN path is mapped to the unbuffered /dev/rdiskN — reading
     the buffered node re-introduces the read-ahead the FireWire bridge corrupts.
     Transfer size (reads and writes) defaults to the platform's safe ceiling
-    (8 sectors on Linux, 1 on macOS where the bridge corrupts anything larger in
-    BOTH directions); FLASHPOD_RAW_MAX_XFER overrides it (raise on a USB reader,
-    which has no bridge)."""
+    (8 sectors on Linux; on macOS by transport — 1 sector over FireWire, where
+    the bridge corrupts anything larger in BOTH directions, 128 over USB, which
+    has no bridge); FLASHPOD_RAW_MAX_XFER overrides it."""
     plat = platform.current()
-    max_xfer = _effective_xfer()
+    max_xfer = _effective_xfer(device)
     node = plat.raw_read_node(device)
-    if plat.raw_open_direct():
-        # Linux: BlockDev opens the node itself so block devices get O_DIRECT
-        # — a buffered file object here re-introduces the page cache, whose
-        # readahead/writeback re-batching only pinned queue settings tame
-        # (that regression shipped in v0.3.0 and preceded a bridge crash).
-        dev = fatfs.BlockDev(node, part_start=0, max_xfer=max_xfer,
-                             writable=writable)
-    else:
+
+    def _open():
+        if plat.raw_open_direct():
+            # Linux: BlockDev opens the node itself so block devices get
+            # O_DIRECT — a buffered file object here re-introduces the page
+            # cache, whose readahead/writeback re-batching only pinned queue
+            # settings tame (that regression shipped in v0.3.0 and preceded a
+            # bridge crash).
+            return fatfs.BlockDev(node, part_start=0, max_xfer=max_xfer,
+                                  writable=writable)
         # macOS (rdisk + AlignedRawIO) and Windows (WinHandleIO) wrap their
         # raw handles in platform-specific file objects instead.
         mode = "r+b" if writable else "rb"
-        fobj = plat.open_raw(node, mode)
-        dev = fatfs.BlockDev(part_start=0, max_xfer=max_xfer, fileobj=fobj)
+        return fatfs.BlockDev(part_start=0, max_xfer=max_xfer,
+                              fileobj=plat.open_raw(node, mode))
+
+    try:
+        dev = _open()
+    except OSError as exc:
+        # macOS re-mounts the volume the instant a raw WRITE handle closes
+        # (DiskArbitration), so the *next* raw command finds the device busy —
+        # `add` then `rm` failed every time, and a manual unmount only survived
+        # one operation. Unmount and retry once; reads are unaffected, so this
+        # never fires for them.
+        if exc.errno != errno.EBUSY or not writable:
+            raise
+        print("flashpod: %s is busy (the OS remounted the volume); "
+              "unmounting it and retrying..." % node, file=sys.stderr)
+        plat.unmount_all(device, False)
+        dev = _open()
+
     override = plat.raw_part_start_override()
     if override:
         # Windows cleared the MBR to release partmgr's claim (prepare_raw_write),
@@ -1412,6 +1435,82 @@ def _mounted_devices():
     return devs
 
 
+# A partition suffix on a whole-disk node: Linux "2"/"p2", macOS "s2" (and
+# nested "s5s1" for an APFS volume inside a container). Anything else is a
+# different disk that merely shares the prefix, e.g. sdb vs sdba1.
+_PART_SUFFIX = re.compile(r"^(?:p?\d+|(?:s\d+)+)$")
+
+
+def _block_node(node):
+    """macOS raw char node -> its block node: /dev/rdisk2 -> /dev/disk2.
+
+    Candidates arrive as raw nodes (that's what the FAT driver must open) but
+    the mount table names block nodes, so comparing them directly never
+    matches — which is how a mounted iPod got offered a second time as its own
+    raw device."""
+    base = os.path.basename(node)
+    if base.startswith("rdisk"):
+        return os.path.join(os.path.dirname(node), base[1:])
+    return node
+
+
+def _device_for_mount(mount):
+    """The device node backing a mountpoint, so the post-command eject offer
+    can act on a mounted iPod the same way it does on a raw one."""
+    if not mount:
+        return None
+    want = os.path.realpath(mount)
+    for dev, mnt, _fstype in platform.current().mounted_filesystems():
+        if os.path.realpath(mnt) == want:
+            return dev
+    return None
+
+
+def offer_eject(dev, rc=0):
+    """After a successful add/rm, offer to eject and don't return until that
+    has actually happened.
+
+    Worth asking because the safe moment to unplug is invisible from the
+    outside. Over a mount the OS may still be writing after we're done (macOS
+    indexes an iPod volume by default, uninvited), and on the raw path it
+    remounts the volume the instant our handle closes. "The command finished"
+    and "the card is quiet" are not the same event.
+
+    Skipped when the command failed, for image files, and with no terminal to
+    ask at."""
+    if rc != 0 or not dev or not sys.stdin.isatty():
+        return
+    try:
+        if os.path.isfile(dev):
+            return
+    except OSError:
+        return
+    plat = platform.current()
+    try:
+        ans = input("\nEject the iPod now? [Y/n] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print(file=sys.stderr)
+        return
+    if ans.startswith("n"):
+        print("Left attached — eject it before you unplug, or the OS may still "
+              "have writes in flight.")
+        return
+    detail = ""
+    for attempt in range(3):
+        ok, detail = plat.eject_checked(dev)
+        if ok:
+            print("Ejected — safe to disconnect.")
+            return
+        if attempt < 2:
+            first = detail.splitlines()[0] if detail else ""
+            print("  still busy%s — retrying..." % (": " + first if first else ""))
+            time.sleep(2)
+    first = detail.splitlines()[0] if detail else ""
+    print("flashpod: couldn't eject %s%s. Close anything using the volume, then "
+          "eject it yourself before unplugging."
+          % (dev, " (%s)" % first if first else ""), file=sys.stderr)
+
+
 def _unmounted_disks(disks):
     """Filter fat_disk_candidates() down to the ones NOT currently mounted —
     i.e. attached FAT disks that could be a second, unmounted iPod (the FireWire
@@ -1422,16 +1521,12 @@ def _unmounted_disks(disks):
     mounted = _mounted_devices()
 
     def is_mounted(node):
-        real = os.path.realpath(node)
+        real = os.path.realpath(_block_node(node))
         if real in mounted:
             return True
         for m in mounted:
-            # /dev/sdb covers /dev/sdb2; /dev/nvme0n1 covers /dev/nvme0n1p2.
-            # (A bare "p" separator or digits only — anything else is a
-            # different disk that merely shares the prefix, e.g. sdba1.)
             tail = m[len(real):] if m.startswith(real) else ""
-            if tail and (tail.isdigit()
-                         or (tail[0] == "p" and tail[1:].isdigit())):
+            if tail and _PART_SUFFIX.match(tail):
                 return True
         return False
 
@@ -1651,18 +1746,23 @@ def run_raw(opts, node):
         if cmd == "rebuild":
             return cmd_rebuild_raw(target, getattr(opts, "name", None))
         if cmd in ("rm", "remove", "delete", "erase"):
-            return cmd_rm_raw(target, opts.what)
-        if cmd == "add":
+            rc = cmd_rm_raw(target, opts.what)
+        elif cmd == "add":
             files = opts.files
             if not files:
                 files = prompt_for_paths(*_raw_db_facts(target))
-            return cmd_add_raw(target, files)
-        print(f"flashpod: --raw doesn't support `{cmd}`.", file=sys.stderr)
-        return 1
+            rc = cmd_add_raw(target, files)
+        else:
+            print(f"flashpod: --raw doesn't support `{cmd}`.", file=sys.stderr)
+            return 1
     finally:
         # Windows may have cleared the partition table to allow raw writes;
         # put it back so the OS re-discovers the iPod (no-op elsewhere).
         platform.current().finalize_raw_write(node)
+    # After the partition table is back, not before — ejecting mid-write would
+    # be the exact hazard this offer exists to prevent.
+    offer_eject(node, rc)
+    return rc
 
 
 def _choose_init_disk(disks):
@@ -3058,7 +3158,7 @@ def _offer_init_after_flash_win(dev, raw_fobj=None, data_start=None):
     if raw_fobj is None or data_start is None:
         target = open_raw_target(dev)
     else:
-        max_xfer = _effective_xfer()
+        max_xfer = _effective_xfer(dev)
         bdev = fatfs.BlockDev(part_start=data_start, max_xfer=max_xfer,
                               fileobj=raw_fobj)
         target = RawTarget(fatfs.Fat32(bdev), dev)
@@ -3415,7 +3515,11 @@ def main():
 
         if opts.command in ("rm", "remove", "delete", "erase"):
             lib = load_library(mount)
-            return cmd_rm(lib, mount, opts.what) if lib else 1
+            if not lib:
+                return 1
+            rc = cmd_rm(lib, mount, opts.what)
+            offer_eject(_device_for_mount(mount), rc)
+            return rc
 
         if opts.command == "init":
             itunesdb.init_ipod(mount, opts.name or "iPod")
@@ -3428,7 +3532,9 @@ def main():
         files = opts.files
         if not files:
             files = prompt_for_paths(*_mounted_db_facts(mount))
-        return cmd_add(mount, files)
+        rc = cmd_add(mount, files)
+        offer_eject(_device_for_mount(mount), rc)
+        return rc
     except OSError as exc:
         _report_io_error(mount, exc)
         return 1
