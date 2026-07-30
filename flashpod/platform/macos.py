@@ -218,6 +218,20 @@ class MacOSPlatform(Platform):
         subprocess.run(["diskutil", "eject", "/dev/" + _whole_disk(dev)],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    def eject_checked(self, dev):
+        """diskutil reports *why* it won't eject — "Disk in use by process ..."
+        or the name of the dissenting process — which is the useful half of the
+        answer, so pass it back rather than discarding it as eject() does."""
+        subprocess.run(["sync"])
+        res = subprocess.run(["diskutil", "eject", "/dev/" + _whole_disk(dev)],
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        detail = res.stdout.decode("utf-8", "replace").strip()
+        if res.returncode != 0:
+            return False, detail
+        # diskutil is synchronous, but confirm rather than trust the exit code:
+        # this answers "is it safe to unplug?", and a stale mount makes that a lie.
+        return (not self.device_mountpoints(dev)), detail
+
     def open_raw(self, dev, mode):
         # plain image file: open directly; real disk: use the raw char device
         if os.path.isfile(dev):

@@ -1454,6 +1454,63 @@ def _block_node(node):
     return node
 
 
+def _device_for_mount(mount):
+    """The device node backing a mountpoint, so the post-command eject offer
+    can act on a mounted iPod the same way it does on a raw one."""
+    if not mount:
+        return None
+    want = os.path.realpath(mount)
+    for dev, mnt, _fstype in platform.current().mounted_filesystems():
+        if os.path.realpath(mnt) == want:
+            return dev
+    return None
+
+
+def offer_eject(dev, rc=0):
+    """After a successful add/rm, offer to eject and don't return until that
+    has actually happened.
+
+    Worth asking because the safe moment to unplug is invisible from the
+    outside. Over a mount the OS may still be writing after we're done (macOS
+    indexes an iPod volume by default, uninvited), and on the raw path it
+    remounts the volume the instant our handle closes. "The command finished"
+    and "the card is quiet" are not the same event.
+
+    Skipped when the command failed, for image files, and with no terminal to
+    ask at."""
+    if rc != 0 or not dev or not sys.stdin.isatty():
+        return
+    try:
+        if os.path.isfile(dev):
+            return
+    except OSError:
+        return
+    plat = platform.current()
+    try:
+        ans = input("\nEject the iPod now? [Y/n] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print(file=sys.stderr)
+        return
+    if ans.startswith("n"):
+        print("Left attached — eject it before you unplug, or the OS may still "
+              "have writes in flight.")
+        return
+    detail = ""
+    for attempt in range(3):
+        ok, detail = plat.eject_checked(dev)
+        if ok:
+            print("Ejected — safe to disconnect.")
+            return
+        if attempt < 2:
+            first = detail.splitlines()[0] if detail else ""
+            print("  still busy%s — retrying..." % (": " + first if first else ""))
+            time.sleep(2)
+    first = detail.splitlines()[0] if detail else ""
+    print("flashpod: couldn't eject %s%s. Close anything using the volume, then "
+          "eject it yourself before unplugging."
+          % (dev, " (%s)" % first if first else ""), file=sys.stderr)
+
+
 def _unmounted_disks(disks):
     """Filter fat_disk_candidates() down to the ones NOT currently mounted —
     i.e. attached FAT disks that could be a second, unmounted iPod (the FireWire
@@ -1689,18 +1746,23 @@ def run_raw(opts, node):
         if cmd == "rebuild":
             return cmd_rebuild_raw(target, getattr(opts, "name", None))
         if cmd in ("rm", "remove", "delete", "erase"):
-            return cmd_rm_raw(target, opts.what)
-        if cmd == "add":
+            rc = cmd_rm_raw(target, opts.what)
+        elif cmd == "add":
             files = opts.files
             if not files:
                 files = prompt_for_paths(*_raw_db_facts(target))
-            return cmd_add_raw(target, files)
-        print(f"flashpod: --raw doesn't support `{cmd}`.", file=sys.stderr)
-        return 1
+            rc = cmd_add_raw(target, files)
+        else:
+            print(f"flashpod: --raw doesn't support `{cmd}`.", file=sys.stderr)
+            return 1
     finally:
         # Windows may have cleared the partition table to allow raw writes;
         # put it back so the OS re-discovers the iPod (no-op elsewhere).
         platform.current().finalize_raw_write(node)
+    # After the partition table is back, not before — ejecting mid-write would
+    # be the exact hazard this offer exists to prevent.
+    offer_eject(node, rc)
+    return rc
 
 
 def _choose_init_disk(disks):
@@ -3453,7 +3515,11 @@ def main():
 
         if opts.command in ("rm", "remove", "delete", "erase"):
             lib = load_library(mount)
-            return cmd_rm(lib, mount, opts.what) if lib else 1
+            if not lib:
+                return 1
+            rc = cmd_rm(lib, mount, opts.what)
+            offer_eject(_device_for_mount(mount), rc)
+            return rc
 
         if opts.command == "init":
             itunesdb.init_ipod(mount, opts.name or "iPod")
@@ -3466,7 +3532,9 @@ def main():
         files = opts.files
         if not files:
             files = prompt_for_paths(*_mounted_db_facts(mount))
-        return cmd_add(mount, files)
+        rc = cmd_add(mount, files)
+        offer_eject(_device_for_mount(mount), rc)
+        return rc
     except OSError as exc:
         _report_io_error(mount, exc)
         return 1

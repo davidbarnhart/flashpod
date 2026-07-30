@@ -219,6 +219,18 @@ class Platform(object):
         """Flush and power off / eject ``dev``."""
         raise NotImplementedError
 
+    def eject_checked(self, dev):
+        """Eject ``dev`` and report the outcome as ``(ok, detail)``.
+
+        Where :meth:`eject` is fire-and-forget, this one answers "is it safe to
+        unplug yet?", so it must not claim a success it hasn't verified. The
+        default drives :meth:`eject` and judges by whether anything is still
+        mounted off the device; a backend whose eject tool explains its refusal
+        (macOS's diskutil names what is holding the volume) should override and
+        pass that message back as ``detail``."""
+        self.eject(dev, False)
+        return (not self.device_mountpoints(dev)), ""
+
     def open_raw(self, dev, mode):
         """Open ``dev`` for raw binary I/O. Default works for real files and
         POSIX device nodes; Windows overrides for ``\\\\.\\PhysicalDriveN``."""
