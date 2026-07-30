@@ -385,11 +385,16 @@ def load_library(mount):
     return None
 
 
-def _effective_xfer():
+def _effective_xfer(device=None):
     """The transfer size (in sectors) that will actually be used for reads and
-    writes, after the platform default and the FLASHPOD_RAW_MAX_XFER override."""
+    writes, after the platform default and the FLASHPOD_RAW_MAX_XFER override.
+
+    ``device`` is passed to the backend so it can decide from the transport:
+    the tiny-transfer rule exists for the FireWire bridge, and applying it to a
+    USB iPod costs ~7x on writes for a defect that path doesn't have."""
     plat = platform.current()
-    return max(1, int(os.environ.get("FLASHPOD_RAW_MAX_XFER", plat.raw_max_xfer())))
+    return max(1, int(os.environ.get("FLASHPOD_RAW_MAX_XFER",
+                                     plat.raw_max_xfer(device))))
 
 
 def open_raw_fat(device, writable=False):
@@ -400,25 +405,43 @@ def open_raw_fat(device, writable=False):
     On macOS a /dev/diskN path is mapped to the unbuffered /dev/rdiskN — reading
     the buffered node re-introduces the read-ahead the FireWire bridge corrupts.
     Transfer size (reads and writes) defaults to the platform's safe ceiling
-    (8 sectors on Linux, 1 on macOS where the bridge corrupts anything larger in
-    BOTH directions); FLASHPOD_RAW_MAX_XFER overrides it (raise on a USB reader,
-    which has no bridge)."""
+    (8 sectors on Linux; on macOS by transport — 1 sector over FireWire, where
+    the bridge corrupts anything larger in BOTH directions, 128 over USB, which
+    has no bridge); FLASHPOD_RAW_MAX_XFER overrides it."""
     plat = platform.current()
-    max_xfer = _effective_xfer()
+    max_xfer = _effective_xfer(device)
     node = plat.raw_read_node(device)
-    if plat.raw_open_direct():
-        # Linux: BlockDev opens the node itself so block devices get O_DIRECT
-        # — a buffered file object here re-introduces the page cache, whose
-        # readahead/writeback re-batching only pinned queue settings tame
-        # (that regression shipped in v0.3.0 and preceded a bridge crash).
-        dev = fatfs.BlockDev(node, part_start=0, max_xfer=max_xfer,
-                             writable=writable)
-    else:
+
+    def _open():
+        if plat.raw_open_direct():
+            # Linux: BlockDev opens the node itself so block devices get
+            # O_DIRECT — a buffered file object here re-introduces the page
+            # cache, whose readahead/writeback re-batching only pinned queue
+            # settings tame (that regression shipped in v0.3.0 and preceded a
+            # bridge crash).
+            return fatfs.BlockDev(node, part_start=0, max_xfer=max_xfer,
+                                  writable=writable)
         # macOS (rdisk + AlignedRawIO) and Windows (WinHandleIO) wrap their
         # raw handles in platform-specific file objects instead.
         mode = "r+b" if writable else "rb"
-        fobj = plat.open_raw(node, mode)
-        dev = fatfs.BlockDev(part_start=0, max_xfer=max_xfer, fileobj=fobj)
+        return fatfs.BlockDev(part_start=0, max_xfer=max_xfer,
+                              fileobj=plat.open_raw(node, mode))
+
+    try:
+        dev = _open()
+    except OSError as exc:
+        # macOS re-mounts the volume the instant a raw WRITE handle closes
+        # (DiskArbitration), so the *next* raw command finds the device busy —
+        # `add` then `rm` failed every time, and a manual unmount only survived
+        # one operation. Unmount and retry once; reads are unaffected, so this
+        # never fires for them.
+        if exc.errno != errno.EBUSY or not writable:
+            raise
+        print("flashpod: %s is busy (the OS remounted the volume); "
+              "unmounting it and retrying..." % node, file=sys.stderr)
+        plat.unmount_all(device, False)
+        dev = _open()
+
     override = plat.raw_part_start_override()
     if override:
         # Windows cleared the MBR to release partmgr's claim (prepare_raw_write),
@@ -3058,7 +3081,7 @@ def _offer_init_after_flash_win(dev, raw_fobj=None, data_start=None):
     if raw_fobj is None or data_start is None:
         target = open_raw_target(dev)
     else:
-        max_xfer = _effective_xfer()
+        max_xfer = _effective_xfer(dev)
         bdev = fatfs.BlockDev(part_start=data_start, max_xfer=max_xfer,
                               fileobj=raw_fobj)
         target = RawTarget(fatfs.Fat32(bdev), dev)

@@ -273,14 +273,20 @@ class Platform(object):
         the gen-1 FireWire bridge corrupts into zeros)."""
         return dev
 
-    def raw_max_xfer(self):
+    def raw_max_xfer(self, device=None):
         """Safe default transfer size (in 512-byte sectors) for the userspace
         FAT driver, for BOTH reads and writes. 8 = 4 KiB, the Linux-kernel-
-        queue-proven ceiling for the FireWire bridge; macOS overrides this lower
-        (the raw device doesn't honour that queue cap, and only single-sector
-        transfers are proven safe over the bridge). Larger writes don't help
+        queue-proven ceiling for the FireWire bridge; macOS overrides this per
+        transport — lower for FireWire (the raw device doesn't honour that queue
+        cap, and only single-sector transfers are proven safe over the bridge),
+        far higher for USB. Larger writes don't help
         anyway — the bridge is bandwidth-limited. Override via
-        FLASHPOD_RAW_MAX_XFER (e.g. raise it on a USB reader)."""
+        FLASHPOD_RAW_MAX_XFER (e.g. raise it on a USB reader).
+
+        ``device`` lets a backend decide from the transport rather than the OS
+        — the bridge constraint is FireWire's, not the platform's. macOS does
+        this; Linux keeps a flat 8 until the Linux column of the transport
+        matrix is measured on hardware."""
         return 8
 
     # -- sync-path mount detection ----------------------------------------
