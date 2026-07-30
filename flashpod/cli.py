@@ -7,7 +7,7 @@ Subcommands:
   flashpod ls artist|album        flat per-artist or per-album track counts
   flashpod add [path1 path2 ...]  add audio files; directories are scanned
                                   recursively (tags read via mutagen);
-                                  with no paths, prompts for one
+                                  with no paths, opens a directory picker
   flashpod rm id [id ...]         remove tracks by id (see `flashpod ls`)
   flashpod rm artist|album <name> remove all tracks by an artist / in an album
   flashpod init [name]            create iPod_Control structure + empty DB
@@ -419,6 +419,12 @@ def open_raw_fat(device, writable=False):
         mode = "r+b" if writable else "rb"
         fobj = plat.open_raw(node, mode)
         dev = fatfs.BlockDev(part_start=0, max_xfer=max_xfer, fileobj=fobj)
+    override = plat.raw_part_start_override()
+    if override:
+        # Windows cleared the MBR to release partmgr's claim (prepare_raw_write),
+        # so the walk below would find nothing — it told us the partition LBA.
+        dev.part_start = override
+        return fatfs.Fat32(dev)
     boot = dev.read(0, 1)
     is_fat = boot[82:85] == b"FAT" and boot[510:512] == b"\x55\xaa"
     if not is_fat and boot[510:512] == b"\x55\xaa":
@@ -442,10 +448,54 @@ def _self_cmd():
     return [sys.argv[0]]                            # ./flashpod / installed script
 
 
+def _windows_sudo_mode():
+    """Sudo for Windows state: None if there's no sudo.exe (pre-24H2),
+    else the HKLM\\...\\CurrentVersion\\Sudo "Enabled" DWORD — 0 disabled,
+    1 "In a new window", 2 "With input disabled", 3 "Inline". Only Inline
+    elevates within the current console. A missing/unreadable key means
+    the feature was never enabled: 0."""
+    if shutil.which("sudo") is None:
+        return None
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                             r"SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo")
+        with key:
+            return int(winreg.QueryValueEx(key, "Enabled")[0])
+    except OSError:
+        return 0
+
+
+_WIN_SUDO_WHY = {
+    None: "this Windows has no `sudo` (it ships with Windows 11 24H2+)",
+    0: "Windows sudo is disabled",
+    1: 'Windows sudo is in "In a new window" mode — the elevated flashpod '
+       "would run in a separate console that closes when it exits",
+    2: 'Windows sudo is in "With input disabled" mode — flashpod\'s '
+       "interactive prompts couldn't read the keyboard",
+}
+
+
+def _windows_elevation_help(extra):
+    why = _WIN_SUDO_WHY.get(_windows_sudo_mode(),
+                            "Windows sudo is in an unrecognized mode")
+    rerun = " ".join(_self_cmd() + extra)
+    print(f"flashpod: can't self-elevate — {why}.\n"
+          "  Either run flashpod from an Administrator console:\n"
+          '    Win+X -> "Terminal (Admin)"  (or right-click PowerShell ->\n'
+          '    "Run as administrator"), then:\n'
+          f"      {rerun}\n"
+          "  or enable inline sudo once (Settings > System > For developers\n"
+          '    > enable "sudo", mode "Inline"; from an Administrator\n'
+          "    console: `sudo config --enable normal`) — after that,\n"
+          "  flashpod elevates itself.", file=sys.stderr)
+
+
 def _sudo_reexec(extra):
     """Re-exec this same flashpod under sudo with ``extra`` args appended
     (prompting for the password on a terminal). REPLACES the process and never
-    returns on success; returns only if it can't elevate (non-tty / no sudo)."""
+    returns on success; returns only if it can't elevate (non-tty / no sudo /
+    Windows sudo absent-disabled-or-not-Inline — with printed guidance)."""
     if not sys.stdin.isatty():
         return
     if os.name == "nt":
@@ -453,11 +503,17 @@ def _sudo_reexec(extra):
         # within the same console, preserving interactive prompts — unlike
         # ShellExecute "runas" which opens a detached window.  The
         # environment is inherited, so no env/PYTHONPATH dance needed.
-        cmd = ["sudo"] + _self_cmd() + extra
-        try:
-            sys.exit(subprocess.call(cmd))
-        except OSError:
-            return                                 # no sudo.exe — caller handles it
+        # Any other mode (or no/disabled sudo): don't run it — a disabled
+        # stub exits with only Microsoft's one-liner, and the window modes
+        # break interactivity. Say what to do instead.
+        if _windows_sudo_mode() == 3:
+            cmd = ["sudo"] + _self_cmd() + extra
+            try:
+                sys.exit(subprocess.call(cmd))
+            except OSError:
+                pass                               # sudo.exe vanished — fall through
+        _windows_elevation_help(extra)
+        return
     # sudo resets the environment, so the FLASHPOD_* tuning knobs the user set
     # would be lost across elevation. Re-assert them in the child via `env`.
     passthru = ["%s=%s" % (k, v) for k, v in sorted(os.environ.items())
@@ -667,14 +723,23 @@ class RawTarget:
             raise OSError("no Music/F## directories (run init first?)")
         fdir = random.choice(fdirs)
         ext = (ext or os.path.splitext(src)[1] or ".mp3").lower()
+        timing = os.environ.get("FLASHPOD_TIMING")
+        t0 = time.monotonic()
         while True:
             name = "fp%06d%s" % (random.randrange(10 ** 6), ext)
             dst = "%s/%s/%s" % (music, fdir, name)
             if not self.fs.exists(dst):
                 break
+        t_setup = time.monotonic()
         with open(src, "rb") as f:
             data = f.read()
+        t_read = time.monotonic()
         self.fs.write_file(dst, data, progress=progress)
+        if timing:
+            print("[timing] %s: setup %.2fs  source-read %.2fs  "
+                  "card-write %.2fs"
+                  % (os.path.basename(src), t_setup - t0, t_read - t_setup,
+                     time.monotonic() - t_read), file=sys.stderr)
         return ":".join(["", "iPod_Control", "Music", fdir, name])
 
     # -- rm ----------------------------------------------------------------
@@ -706,6 +771,11 @@ def open_raw_target(device, writable=True):
         print(f"flashpod: couldn't pin safe FireWire I/O settings for "
               f"{device}; the kernel may probe it unsafely after writes.",
               file=sys.stderr)
+    if writable:
+        # Windows: lock/dismount the disk's volumes BEFORE the writable
+        # handle opens, or every data write inside the partition is denied
+        # (WinError 5) by the volume manager. No-op elsewhere.
+        platform.current().prepare_raw_write(device)
     try:
         fs = open_raw_fat(device, writable=writable)
     except PermissionError:
@@ -1575,16 +1645,24 @@ def run_raw(opts, node):
     target = open_raw_target(node, writable=True)
     if not target:
         return 1
-    if cmd == "init":
-        return cmd_init_raw(target, getattr(opts, "name", None) or "iPod")
-    if cmd == "rebuild":
-        return cmd_rebuild_raw(target, getattr(opts, "name", None))
-    if cmd in ("rm", "remove", "delete", "erase"):
-        return cmd_rm_raw(target, opts.what)
-    if cmd == "add":
-        return cmd_add_raw(target, opts.files or [prompt_for_path()])
-    print(f"flashpod: --raw doesn't support `{cmd}`.", file=sys.stderr)
-    return 1
+    try:
+        if cmd == "init":
+            return cmd_init_raw(target, getattr(opts, "name", None) or "iPod")
+        if cmd == "rebuild":
+            return cmd_rebuild_raw(target, getattr(opts, "name", None))
+        if cmd in ("rm", "remove", "delete", "erase"):
+            return cmd_rm_raw(target, opts.what)
+        if cmd == "add":
+            files = opts.files
+            if not files:
+                files = prompt_for_paths(*_raw_db_facts(target))
+            return cmd_add_raw(target, files)
+        print(f"flashpod: --raw doesn't support `{cmd}`.", file=sys.stderr)
+        return 1
+    finally:
+        # Windows may have cleared the partition table to allow raw writes;
+        # put it back so the OS re-discovers the iPod (no-op elsewhere).
+        platform.current().finalize_raw_write(node)
 
 
 def _choose_init_disk(disks):
@@ -1622,6 +1700,100 @@ def _choose_init_disk(disks):
         return None
     return labelled[int(choice)][0] if choice.isdigit() and \
         int(choice) < len(labelled) else None
+
+
+def _is_firewire_disk(dev):
+    """True when the disk backing `dev` sits on FireWire (lsblk TRAN
+    sbp/ieee1394). False on error or off-Linux (no lsblk)."""
+    disk = _disk_of_dev(dev)
+    try:
+        res = subprocess.run(["lsblk", "-dno", "TRAN", "/dev/" + disk],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             universal_newlines=True)
+    except OSError:
+        return False
+    return res.returncode == 0 and res.stdout.strip() in ("sbp", "ieee1394")
+
+
+def _macos_disk_protocol(node):
+    """The bus a macOS disk sits on, from `diskutil info` ("USB",
+    "FireWire", "SATA", "Secure Digital", ...), or None when it can't be
+    determined — callers must treat None as unsafe-to-mount."""
+    disk = re.sub(r"^/dev/r", "/dev/", node)
+    try:
+        res = subprocess.run(["diskutil", "info", disk],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             universal_newlines=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode != 0:
+        return None
+    m = re.search(r"^\s*Protocol:\s*(.+?)\s*$", res.stdout, re.MULTILINE)
+    return m.group(1) if m else None
+
+
+def _macos_mount_ipod(node):
+    """Mount a scanned (non-FireWire) iPod disk on macOS and return the
+    iPod's mountpoint, or None. diskutil mounts the whole disk's volumes;
+    the iPod volume is then re-found via the normal mounted-iPod scan."""
+    disk = re.sub(r"^/dev/r", "/dev/", node)
+    try:
+        res = subprocess.run(["diskutil", "mountDisk", disk],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             universal_newlines=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode != 0:
+        print(f"flashpod: diskutil mountDisk failed: "
+              f"{(res.stderr or res.stdout).strip()}", file=sys.stderr)
+        return None
+    mounts = candidate_mounts()
+    return mounts[0] if mounts else None
+
+
+_RAW_FALLBACK_MSG = (
+    "iPod partition could not be successfully mounted by the operating "
+    "system. flashpod will use the partition in raw mode via its internal "
+    "FAT driver (slower).")
+
+
+def _raw_or_mounted(node, desc):
+    """A scanned iPod on a non-FireWire disk (USB reader, etc.) is better
+    served by the OS's FAT driver: big transfers and page cache, vs the
+    raw path's bridge-safe transfer ceiling (4 KiB on Linux, 1 sector on
+    macOS). Try to mount it and use the mount; fall back to raw when
+    mounting fails. FireWire keeps the raw path — its bridge is the
+    reason the ceiling exists, and an OS mount is the risky route there
+    (big buffered kernel reads).
+
+    Per platform: Linux discriminates FireWire via lsblk (sbp/ieee1394);
+    macOS via `diskutil info` Protocol, treating UNKNOWN as FireWire
+    (never mount what can't be identified — the FireWire iPod is exactly
+    the disk macOS must not probe with buffered reads). Windows never
+    reaches here usefully: lettered FAT volumes are auto-mounted and
+    detection already prefers them; letterless stays raw."""
+    if sys.platform.startswith("linux"):
+        if _is_firewire_disk(node):
+            return ("raw", node)
+        print(f"flashpod: {node} isn't FireWire — mounting it to use the "
+              "kernel's (much faster) FAT driver...", file=sys.stderr)
+        mnt = mount_device(node)
+    elif sys.platform == "darwin":
+        proto = _macos_disk_protocol(node)
+        if proto is None or "firewire" in proto.lower():
+            return ("raw", node)
+        print(f"flashpod: {node} is on {proto}, not FireWire — mounting it "
+              "to use the OS's (much faster) FAT driver...", file=sys.stderr)
+        mnt = _macos_mount_ipod(node)
+    else:
+        # Windows: the volume isn't OS-mounted (no drive letter — often
+        # policy-denied) and flashpod doesn't attempt one; say why raw.
+        print(_RAW_FALLBACK_MSG, file=sys.stderr)
+        return ("raw", node)
+    if mnt:
+        return ("mount", mnt)
+    print(_RAW_FALLBACK_MSG, file=sys.stderr)
+    return ("raw", node)
 
 
 def resolve_raw_target(opts):
@@ -1670,7 +1842,7 @@ def resolve_raw_target(opts):
         node, desc = found[0]
         print(f"Found iPod on {node}" + (f" ({desc})" if desc else "") + ".",
               file=sys.stderr)
-        return ("raw", node)
+        return _raw_or_mounted(node, desc)
     print("Multiple iPod disks found:")
     for i, (node, desc) in enumerate(found):
         print(f"  [{i}] {node}" + (f"  ({desc})" if desc else ""))
@@ -1680,7 +1852,7 @@ def resolve_raw_target(opts):
         print()
         return None
     idx = int(choice) if choice.isdigit() and int(choice) < len(found) else 0
-    return ("raw", found[idx][0])
+    return _raw_or_mounted(*found[idx])
 
 
 def detect_mount():
@@ -1753,6 +1925,134 @@ def expand(paths):
     return out
 
 
+def _mounted_db_facts(mount):
+    """Best-effort (track_count, db_file_bytes) for the picker's status
+    bar; (None, None) when the DB can't be read."""
+    db = os.path.join(mount, "iPod_Control", "iTunes", "iTunesDB")
+    try:
+        return len(itunesdb.parse(db).tracks), os.path.getsize(db)
+    except Exception:                                       # noqa: BLE001
+        return None, None
+
+
+def _raw_db_facts(target):
+    """Best-effort (track_count, db_file_bytes) over the raw FAT driver."""
+    try:
+        raw = target.fs.read_file("iPod_Control/iTunes/iTunesDB")
+        if raw:
+            return len(itunesdb.parse_bytes(raw).tracks), len(raw)
+    except Exception:                                       # noqa: BLE001
+        pass
+    return None, None
+
+
+def _invoking_home():
+    """The human's home directory, even when flashpod has sudo-elevated
+    itself (HOME is /root there — the picker would open in the wrong
+    place; the post-flash add offer always runs elevated)."""
+    user = os.environ.get("SUDO_USER")
+    if user and os.name != "nt" and os.geteuid() == 0:
+        try:
+            import pwd
+            return pwd.getpwnam(user).pw_dir
+        except (ImportError, KeyError):
+            pass
+    return os.path.expanduser("~")
+
+
+def _count_audio(path):
+    """Audio files `add` would take under ``path`` (file or directory) —
+    the picker's per-selection counter. AppleDouble junk excluded."""
+    def is_audio(name):
+        return (not name.startswith("._")
+                and os.path.splitext(name)[1].lower() in AUDIO_EXTS)
+    if os.path.isfile(path):
+        return 1 if is_audio(os.path.basename(path)) else 0
+    total = 0
+    for _root, _dirs, files in os.walk(path):
+        total += sum(1 for f in files if is_audio(f))
+    return total
+
+
+def _picker_status(existing, db_bytes):
+    """Status-bar closure for the picker: song counts plus an estimated
+    fraction of the firmware DB budget. The estimate prices each new
+    track at the existing library's average DB cost (or a typical ~700
+    bytes when the iPod is empty) — real tags aren't known until add
+    reads them, so the authoritative check stays in the add pre-flight."""
+    limit = _db_size_limit()
+    avg = (db_bytes / existing) if existing and db_bytes else 700.0
+    base = db_bytes or 0
+
+    def status(selected):
+        parts = ["iPod songs: %s" % ("?" if existing is None else
+                                     "{:,}".format(existing)),
+                 "selected: +{:,}".format(selected),
+                 "projected: %s" % ("?" if existing is None else
+                                    "{:,}".format(existing + selected))]
+        alert = False
+        if limit and existing is not None:
+            pct = (base + selected * avg) * 100.0 / limit
+            parts.append("~%d%% of DB budget" % round(pct))
+            alert = pct > 90.0        # red bar: nearly (or actually) over
+        return "  " + "  |  ".join(parts), alert
+    return status
+
+
+def prompt_for_paths(existing=None, db_bytes=None):
+    """`flashpod add` with no paths: open the interactive directory picker
+    (Miller columns, Space selects, Enter confirms) starting at the user's
+    home directory. Falls back to the single-path typed prompt when the
+    picker can't run. Returns a list of paths, or None (caller exits
+    nonzero) on cancel / nothing usable.
+
+    ``existing``/``db_bytes`` (optional): the iPod's current track count
+    and iTunesDB file size, for the picker's pinned status bar."""
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        # The picker takes over the whole screen; pause first so what was
+        # just printed (which device was identified, mount-vs-raw mode)
+        # can actually be read before it disappears. Typing a path here
+        # skips the picker entirely — the old direct workflow, and what
+        # scripted drivers (scripts/simulate_card.py) rely on.
+        try:
+            typed = input("\nPress ENTER to select content to add to the "
+                          "iPod (or type a path): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            print("flashpod add: cancelled", file=sys.stderr)
+            return None
+        if typed:
+            path = os.path.expanduser(typed)
+            if not os.path.exists(path):
+                print(f"flashpod add: no such file or directory: {path}",
+                      file=sys.stderr)
+                return None
+            return [path]
+        try:
+            from .pathpicker import DirectoryPicker
+            picked = DirectoryPicker(
+                _invoking_home(), count=_count_audio,
+                status=_picker_status(existing, db_bytes)).run()
+        except Exception as exc:
+            print(f"flashpod: directory picker failed ({exc}); "
+                  "type a path instead.", file=sys.stderr)
+            path = prompt_for_path()
+            return [path] if path else None
+        if picked is None:
+            print("flashpod add: cancelled", file=sys.stderr)
+            return None
+        if not picked:
+            print("flashpod add: nothing selected", file=sys.stderr)
+            return None
+        print(f"Adding {len(picked)} selected "
+              f"path{'s' if len(picked) != 1 else ''}:")
+        for path in picked:
+            print(f"  {path}")
+        return picked
+    path = prompt_for_path()
+    return [path] if path else None
+
+
 def prompt_for_path():
     """Ask for a file/directory when `flashpod add` is run with no paths.
     Returns None (caller exits nonzero) if we can't get a usable one."""
@@ -1793,6 +2093,122 @@ def prompt_for_path():
 def fmt_duration(seconds):
     minutes, secs = divmod(int(seconds), 60)
     return f"{minutes}m{secs:02d}s" if minutes else f"{secs}s"
+
+
+def _fmt_remaining(sec):
+    """Coarse human phrasing for an ETA — deliberately quantized so tiny
+    estimate changes don't reach the screen."""
+    if sec >= 3600:
+        hours, rest = divmod(int(sec), 3600)
+        minutes = rest // 60
+        return "%d hour%s %d minute%s remaining" % (
+            hours, "s" if hours != 1 else "",
+            minutes, "s" if minutes != 1 else "")
+    if sec >= 120:
+        minutes = int(round(sec / 60.0))
+        if minutes >= 60:                    # 59m30s+ rounds up: say hours
+            return "1 hour 0 minutes remaining"
+        return "%d minutes remaining" % max(2, minutes)
+    if sec >= 45:
+        return "about a minute remaining"
+    return "less than a minute remaining"
+
+
+class EtaEstimator(object):
+    """Stable time-remaining for a batch copy whose total size is known
+    up front (pass 1 gives the whole manifest — the big advantage over a
+    file-manager ETA).
+
+    Three stabilizing layers, each killing a different jump source:
+
+    * The rate is an exponential moving average (memory TAU seconds) of
+      throughput over WALL CLOCK — page-cache bursts, fsync stalls, and
+      per-file gaps all land in the same stream and anything shorter
+      than ~TAU averages out. Real regime changes still flow in.
+    * The DISPLAYED value is a countdown, re-anchored to the model only
+      when the two diverge by >REANCHOR_FRAC or >REANCHOR_ABS seconds
+      AND the divergence has held for PERSIST continuous seconds. Burst/
+      stall cycles breach the band only transiently and never move the
+      display; a genuine correction (early estimate was wrong, the
+      medium slowed for real) lands as ONE step instead of a stair of
+      them — the precise failure mode of the old Windows copy dialog.
+    * No estimate at all during the first WARMUP seconds (better silent
+      than wild), and _fmt_remaining quantizes the phrasing.
+
+    ``clock`` is injectable for tests."""
+
+    WARMUP = 5.0
+    TAU = 60.0
+    REANCHOR_FRAC = 0.15
+    REANCHOR_ABS = 20.0
+    PERSIST = 8.0
+
+    def __init__(self, total_bytes, clock=time.monotonic):
+        self.total = total_bytes
+        self._clock = clock
+        self._start = clock()
+        self._last_t = self._start
+        self._last_done = 0
+        self._done = 0
+        self._rate = None
+        self._anchor_eta = None
+        self._anchor_t = None
+        self._breach_since = None
+        self.reanchors = 0        # observable for tests
+
+    def exclude(self, nbytes):
+        """A file dropped out of the batch (copy failed): shrink the goal."""
+        self.total = max(0, self.total - (nbytes or 0))
+
+    def update(self, done):
+        """Record cumulative batch progress (bytes)."""
+        now = self._clock()
+        dt = now - self._last_t
+        self._done = done
+        if dt <= 0:
+            return
+        inst = max(0.0, (done - self._last_done) / dt)
+        elapsed = now - self._start
+        if elapsed <= self.TAU:
+            # Early on, the cumulative average is the best estimator of the
+            # mean (for burst/stall traffic it's exact after each full
+            # cycle); an EWMA seeded inside a burst starts biased and its
+            # slow correction stair-steps the ETA upward.
+            self._rate = done / elapsed if elapsed > 0 else None
+        else:
+            import math
+            alpha = 1.0 - math.exp(-dt / self.TAU)
+            self._rate += alpha * (inst - self._rate)
+        self._last_t = now
+        self._last_done = done
+
+    def remaining_text(self):
+        """The string to show ('… remaining'), or None (warmup/unknown)."""
+        now = self._clock()
+        if (now - self._start < self.WARMUP or not self._rate
+                or self._rate <= 1e-9 or self.total <= 0):
+            return None
+        raw = max(0.0, (self.total - self._done) / self._rate)
+        if self._anchor_eta is None:
+            self._anchor_eta, self._anchor_t = raw, now
+            self.reanchors += 1
+        shown = max(0.0, self._anchor_eta - (now - self._anchor_t))
+        band = max(self.REANCHOR_FRAC * max(shown, raw), self.REANCHOR_ABS)
+        side = 0 if abs(raw - shown) <= band else (1 if raw > shown else -1)
+        if side == 0:
+            self._breach_since = None
+        elif self._breach_since is None or self._breach_since[0] != side:
+            self._breach_since = (side, now)
+        elif now - self._breach_since[1] >= self.PERSIST:
+            # Upward corrections overshoot slightly, so continued drift in
+            # the same direction settles inside the band instead of
+            # breaching again 30 seconds later (the stair-step effect).
+            self._anchor_eta = raw + 0.4 * band if side > 0 else raw
+            self._anchor_t = now
+            self._breach_since = None
+            self.reanchors += 1
+            shown = self._anchor_eta
+        return _fmt_remaining(shown)
 
 
 def read_audio(path):
@@ -1995,6 +2411,7 @@ class LineWindow:
     def __init__(self, size=4):
         self.lines = collections.deque(maxlen=size)
         self.drawn = 0
+        self.status = None       # sticky footer under the window (ETA etc.)
         self.tty = sys.stdout.isatty()
 
     def _erase(self):
@@ -2007,8 +2424,21 @@ class LineWindow:
         width = shutil.get_terminal_size().columns
         for line in self.lines:
             sys.stdout.write(line[:max(1, width - 1)] + "\n")
-        self.drawn = len(self.lines)
+        if self.status:
+            sys.stdout.write(self.status[:max(1, width - 1)] + "\n")
+        self.drawn = len(self.lines) + (1 if self.status else 0)
         sys.stdout.flush()
+
+    def set_status(self, line):
+        """Set/replace the sticky footer line below the window (None
+        removes it). It never scrolls into history with the add() lines —
+        for live values like the batch ETA, which would otherwise fossilize
+        on every completed line. Progress-only: suppressed on non-tty."""
+        if not self.tty or line == self.status:
+            return
+        self._erase()
+        self.status = line
+        self._draw()
 
     def add(self, line, transient=False):
         """Roll a new line into the window (oldest scrolls off). ``transient``
@@ -2049,6 +2479,7 @@ class LineWindow:
             return
         self._erase()
         self.lines.clear()
+        self.status = None
 
 
 def track_key(t):
@@ -2347,6 +2778,48 @@ def _winnow(pending, budget):
     return [item for n in names if n in kept for item in groups[n]]
 
 
+#: Serialized-iTunesDB byte budget the target iPod's firmware can load.
+#: Measured on real 1G hardware (2026-07-29): 3,776,000 bytes loads and
+#: plays; 3,776,684 makes the iPod show an EMPTY library (no error).
+#: Bisected to a one-track edge, then pinned to bytes — not track or
+#: record count — with slim/fat DB experiments (scripts/db_slice.py).
+#: Default keeps a safety margin under the proven-good point.
+#: FLASHPOD_DB_LIMIT overrides; 0 disables the check.
+IPOD_DB_SIZE_LIMIT = 3600000
+
+
+def _db_size_limit():
+    env = os.environ.get("FLASHPOD_DB_LIMIT")
+    if env is not None:
+        try:
+            return int(env)
+        except ValueError:
+            pass
+    return IPOD_DB_SIZE_LIMIT
+
+
+def _projected_db_size(lib, new_tracks):
+    """Serialized iTunesDB size after adding ``new_tracks`` to ``lib``."""
+    tmp = itunesdb.Library(lib.name)
+    tmp.tracks = list(lib.tracks) + list(new_tracks)
+    return len(itunesdb.serialize(tmp))
+
+
+def _fit_count(lib, new_tracks, limit):
+    """How many of ``new_tracks`` (in order) fit under the DB byte limit.
+    0 when the existing library alone is already over it."""
+    if _projected_db_size(lib, []) > limit:
+        return 0
+    lo, hi = 0, len(new_tracks)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _projected_db_size(lib, new_tracks[:mid]) <= limit:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
 def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
     """Batch-add files to the iPod. The backend is callables so this works the
     same over an OS mount (cmd_add) and over the raw device (cmd_add_raw):
@@ -2448,11 +2921,49 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
                     print("flashpod add: nothing selected; nothing added.")
                     return 0
 
+    # Pre-flight 2: will the grown iTunesDB still LOAD on the iPod? Early
+    # firmware has a hard heap budget for the parsed database and shows an
+    # EMPTY library past it — no error, just zero songs. Measured on real
+    # 1G hardware (2026-07-29, scripts/db_slice.py bisection + slim/fat
+    # experiments): 3,776,000 bytes loads, 3,776,684 doesn't; track and
+    # record counts don't matter, only serialized bytes.
+    db_dropped = 0
+    limit = _db_size_limit()
+    if pending and limit:
+        new_tracks = [t for _, t in pending]
+        projected = _projected_db_size(lib, new_tracks)
+        if projected > limit:
+            fit = _fit_count(lib, new_tracks, limit)
+            print(f"flashpod add: this batch would grow the iPod's database "
+                  f"to {projected:,} bytes — past the ~{limit:,}-byte "
+                  "ceiling early iPod firmware can load (the iPod would "
+                  "then show ZERO songs).", file=sys.stderr)
+            if fit <= 0:
+                print("  The library alone already exceeds the ceiling; "
+                      "remove tracks (`flashpod rm`) or set "
+                      "FLASHPOD_DB_LIMIT=0 to override.", file=sys.stderr)
+                return 1
+            if not sys.stdin.isatty():
+                print(f"  {fit} of the {len(pending)} new tracks would fit; "
+                      "trim the batch, or set FLASHPOD_DB_LIMIT=0 to "
+                      "override (can't prompt here).", file=sys.stderr)
+                return 1
+            if ask_yes(f"  {fit} of {len(pending)} new tracks fit under the "
+                       "ceiling. Add just those? [Y/n] "):
+                db_dropped = len(pending) - fit
+                pending = pending[:fit]
+            elif not ask_yes("  Add ALL anyway — the iPod will likely show "
+                             "an empty library? [y/N] ", default_yes=False):
+                print("flashpod add: nothing added.")
+                return 0
+
     # Pass 2: copy what survived.
     start = time.monotonic()
     npend = len(pending)
     added = 0
     added_bytes = 0
+    eta = EtaEstimator(sum(t.size or 0 for _, t in pending))
+    batch_done = [0]              # bytes of files already fully copied
     for nr, (path, track) in enumerate(pending, 1):
         label = track.title + (f" — {track.artist}" if track.artist else "")
         win.add(f"[{nr}/{npend}] Adding: {label}...")
@@ -2466,17 +2977,21 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
             if done < total_bytes and now - _last[0] < 0.125:
                 return
             _last[0] = now
+            eta.update(batch_done[0] + min(done, total_bytes))
             mib = 1 << 20
             pct = (done * 100 // total_bytes) if total_bytes else 100
             win.update(f"[{_nr}/{npend}] Adding: {_label}... {pct}% "
                        f"({done / mib:.1f}/{total_bytes / mib:.1f} MiB)")
+            win.set_status(eta.remaining_text())
 
         try:
             track.location = copy(path, _progress)
         except OSError as exc:
             win.note(f"[{nr}/{npend}] FAILED {path}: {exc}")
             failures += 1
+            eta.exclude(track.size)
             continue
+        batch_done[0] += track.size or 0
         # Assign the id now that the track is actually being committed: each
         # next_track_id() sees the tracks appended earlier in this batch, so
         # the ids are unique. (Failed copies above are skipped and burn no id.)
@@ -2484,6 +2999,7 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
         lib.tracks.append(track)
         added += 1
         added_bytes += track.size or 0
+    win.set_status(None)          # the ETA must not outlive the batch
     if added:
         save(lib)
     secs = time.monotonic() - start
@@ -2491,6 +3007,8 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
     parts = [f"{added} track{'s' if added != 1 else ''} added"]
     if dropped:
         parts.append(f"{dropped} dropped to fit free space")
+    if db_dropped:
+        parts.append(f"{db_dropped} dropped to fit the database ceiling")
     if skipped:
         parts.append(f"{skipped} skipped (already on iPod)")
     if failures:
@@ -2559,7 +3077,7 @@ def _offer_init_after_flash_win(dev, raw_fobj=None, data_start=None):
     if ask_yes("\nMusic can be loaded onto the card now, or later "
                "when it is in the iPod.\n"
                "Load music onto the card now? [Y/n] "):
-        cmd_add_raw(target, [prompt_for_path()])
+        cmd_add_raw(target, prompt_for_paths(0, None))  # freshly inited
 
 
 def _offer_init_after_flash_unix(dev):
@@ -2622,7 +3140,7 @@ def _offer_init_after_flash_unix(dev):
             if ask_yes("\nMusic can be loaded onto the card now, or later "
                        "when it is in the iPod.\n"
                        "Load music onto the card now? [Y/n] "):
-                cmd_add(mnt, [prompt_for_path()])
+                cmd_add(mnt, prompt_for_paths(0, None))  # freshly inited
             subprocess.run(["sync"], check=False)
         finally:
             if ours:
@@ -2777,7 +3295,8 @@ def main():
                       "elevating via sudo..." % role, file=sys.stderr)
                 _sudo_reexec(_cmd_args(opts))    # re-execs; returns only if sudo is missing
             msg = "flashpod flash: " + plat.privilege_hint()
-            msg += "\n  sudo " + " ".join(_self_cmd() + _cmd_args(opts))
+            if os.name != "nt":   # Windows guidance already printed in full
+                msg += "\n  sudo " + " ".join(_self_cmd() + _cmd_args(opts))
             print(msg, file=sys.stderr)
             return 1
         # Offer init on the fresh card only when it will work: interactive,
@@ -2906,7 +3425,10 @@ def main():
         if opts.command == "rebuild":
             return cmd_rebuild(mount, getattr(opts, "name", None))
 
-        return cmd_add(mount, opts.files or [prompt_for_path()])
+        files = opts.files
+        if not files:
+            files = prompt_for_paths(*_mounted_db_facts(mount))
+        return cmd_add(mount, files)
     except OSError as exc:
         _report_io_error(mount, exc)
         return 1

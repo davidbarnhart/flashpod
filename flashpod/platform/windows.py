@@ -14,6 +14,7 @@ on any OS — Windows-only APIs are touched only inside methods.
 Python 3.6 compatible.
 """
 
+import atexit
 import ctypes
 import os
 import re
@@ -175,11 +176,27 @@ def _drive_number(dev):
     return int(m.group(1))
 
 
+def _mbr_fat_part_start(mbr):
+    """LBA of the first FAT (type 0x0b/0x0c) partition in a 512-byte MBR, or 0
+    if there's no valid table / no FAT slice. Mirrors the walk in
+    cli.open_raw_fat so both agree on where the iPod's data partition sits."""
+    if not mbr or len(mbr) < SECTOR or mbr[510:512] != b"\x55\xaa":
+        return 0
+    for poff in (446, 462, 478, 494):
+        if mbr[poff + 4] in (0x0b, 0x0c):
+            start = int.from_bytes(mbr[poff + 8:poff + 12], "little")
+            if start:
+                return start
+    return 0
+
+
 class WindowsPlatform(Platform):
     name = "windows"
 
     def __init__(self):
         self._held_locks = []   # [(handle_path, win_handle), ...]
+        self._pending_part_start = 0   # FAT partition LBA while MBR is cleared
+        self._saved_mbr = None         # (dev, original_sector0_bytes) to restore
 
     # -- privilege --------------------------------------------------------
     def is_admin(self):
@@ -240,6 +257,24 @@ class WindowsPlatform(Platform):
         cands = [d for d in disks
                  if not d[4] and d[3] in ("USB", "SD", "MMC", "1394")]
         return cands or [d for d in disks if not d[4]]
+
+    def fat_disk_candidates(self):
+        """Removable/USB disks worth probing for an iPod, as raw
+        ``\\\\.\\PhysicalDriveN`` nodes. Windows can't say which hold FAT
+        slices without mounting a volume — and volume mounting may be
+        policy-blocked (the very case this raw path serves) — so every
+        non-empty removable disk is offered; the caller's database probe
+        is the actual test. Empty multi-slot-reader slots (size 0) are
+        skipped, not offered as 0-byte disks."""
+        cands = []
+        for num, size, name, bus, _sys in self._removable_disks():
+            if not size:
+                continue               # empty reader slot ("No Media")
+            desc = " ".join(part for part in
+                            (name.strip(), bus,
+                             "%.1fG" % (size / 1e9)) if part)
+            cands.append(("\\\\.\\PhysicalDrive%d" % num, desc))
+        return cands
 
     def choose_device(self):
         from .. import ipod_flash
@@ -353,6 +388,94 @@ class WindowsPlatform(Platform):
             if d[0] == num and d[4]:
                 sys.exit(color("refusing: PhysicalDrive%d backs the running system." % num, red))
 
+    def prepare_raw_write(self, dev):
+        """Make raw data writes (add/rm/init over the FAT driver) succeed.
+
+        Two cases:
+
+        * The partition is a recognized volume (has a drive letter / volume
+          GUID). Lock + dismount it, exactly like flashing — the volume manager
+          otherwise denies writes to sectors inside it (WinError 5).
+
+        * The partition is claimed by ``partmgr`` from the on-disk MBR but never
+          became a volume (e.g. an iPod FAT slice Windows reports as type
+          Unknown): no drive letter, no volume GUID, nothing to lock, and
+          ``Set-Disk -IsOffline`` is often policy-blocked. Interior writes are
+          still denied. Do what ``flash`` does — clear the partition table so
+          ``partmgr`` drops the claim — but first save the MBR and the FAT
+          partition's start LBA, and restore the MBR when the write is done
+          (see :meth:`finalize_raw_write`). While the table is cleared the FAT
+          driver locates the partition via :meth:`raw_part_start_override`,
+          since the MBR walk would now find nothing."""
+        if not re.match(r"^\\\\\.\\PhysicalDrive\d+$", dev):
+            return
+        vols = self.device_mountpoints(dev)
+        if vols:
+            for vol, err in self._lock_volumes(dev):
+                if err is None:
+                    print("flashpod: locked volume %s for raw writing" % vol,
+                          file=sys.stderr)
+                else:
+                    print("flashpod: could NOT lock volume %s (%s) — raw "
+                          "writes will likely be denied. Something may be "
+                          "holding the volume (AV scan, indexer, an open "
+                          "Explorer window)." % (vol, err), file=sys.stderr)
+            return
+        # No lockable volume: partmgr claims the partition from its MBR.
+        mbr = self._read_sector0(dev)
+        part_start = _mbr_fat_part_start(mbr)
+        if not part_start:
+            print("flashpod: no mountable volume on %s and no FAT partition "
+                  "found in its MBR — cannot enable raw writes." % dev,
+                  file=sys.stderr)
+            return
+        self.invalidate_cached_partitions(dev)   # zero sector 0, drop the claim
+        self._pending_part_start = part_start
+        self._saved_mbr = (dev, bytes(mbr))
+        atexit.register(self._restore_mbr)       # backstop if we exit abnormally
+        print("flashpod: no mountable volume on %s; temporarily cleared its "
+              "partition table so the FAT partition (LBA %d) accepts raw "
+              "writes. The original table is restored when flashpod finishes."
+              % (dev, part_start), file=sys.stderr)
+
+    def raw_part_start_override(self):
+        return self._pending_part_start or None
+
+    def finalize_raw_write(self, dev):
+        self._restore_mbr()
+
+    def _read_sector0(self, dev):
+        """Return the 512-byte MBR of *dev*, or None if it can't be read."""
+        try:
+            with self.open_raw(dev, "rb") as f:
+                f.seek(0)
+                return f.read(SECTOR)
+        except OSError:
+            return None
+
+    def _restore_mbr(self):
+        """Write the saved MBR back to sector 0 and re-read the table, so
+        Windows re-discovers the iPod partition. Sector 0 is outside every
+        partition, so this write is allowed even once the table is claimed
+        again. Idempotent: only the first call after a clear does anything."""
+        if not self._saved_mbr:
+            return
+        dev, mbr = self._saved_mbr
+        self._saved_mbr = None
+        self._pending_part_start = 0
+        try:
+            h = self._open_handle(dev, write=True)
+            try:
+                k = _k32()
+                written = ctypes.c_ulong(0)
+                k.WriteFile(h, mbr, len(mbr), ctypes.byref(written), None)
+                k.FlushFileBuffers(h)
+                self._ioctl(h, IOCTL_DISK_UPDATE_PROPERTIES)
+            finally:
+                _k32().CloseHandle(h)
+        except OSError:
+            pass
+
     # -- mutation around the raw write ------------------------------------
     def _lock_volumes(self, dev):
         """Lock, dismount, and take offline every volume on *dev*.
@@ -360,26 +483,41 @@ class WindowsPlatform(Platform):
         IOCTL_VOLUME_OFFLINE tells the volume manager to release its
         claim on the partition's sectors, so subsequent PhysicalDrive
         writes don't get ACCESS DENIED.  The handle is held open to
-        prevent Windows from re-onlining the volume while we write."""
+        prevent Windows from re-onlining the volume while we write.
+        If the initial LOCK is refused (another handle is open), force a
+        DISMOUNT first — that invalidates the other handles — and retry
+        the lock. Returns [(handle_path, error_or_None)] per volume."""
         already = {v for v, _h in self._held_locks}
+        results = []
         for vol, _mp in self.device_mountpoints(dev):
             handle_path = "\\\\.\\%s" % vol.rstrip("\\")
             if handle_path in already:
+                results.append((handle_path, None))
                 continue
             try:
                 h = self._open_handle(handle_path, write=True)
+            except OSError as exc:
+                results.append((handle_path, "open failed: %s" % exc))
+                continue
+            try:
                 try:
                     self._ioctl(h, FSCTL_LOCK_VOLUME)
-                    self._ioctl(h, FSCTL_DISMOUNT_VOLUME)
-                    try:
-                        self._ioctl(h, IOCTL_VOLUME_OFFLINE)
-                    except OSError:
-                        pass
-                    self._held_locks.append((handle_path, h))
                 except OSError:
-                    _k32().CloseHandle(h)
-            except OSError:
-                pass
+                    # lock refused: force-dismount to invalidate whatever
+                    # holds the volume, then the lock normally succeeds
+                    self._ioctl(h, FSCTL_DISMOUNT_VOLUME)
+                    self._ioctl(h, FSCTL_LOCK_VOLUME)
+                self._ioctl(h, FSCTL_DISMOUNT_VOLUME)
+                try:
+                    self._ioctl(h, IOCTL_VOLUME_OFFLINE)
+                except OSError:
+                    pass
+                self._held_locks.append((handle_path, h))
+                results.append((handle_path, None))
+            except OSError as exc:
+                _k32().CloseHandle(h)
+                results.append((handle_path, str(exc)))
+        return results
 
     def _release_locks(self):
         """Close all held volume-lock handles."""

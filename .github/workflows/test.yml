@@ -17,6 +17,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A new push to the same ref obsoletes the previous run — cancel it. Rapid
+# push trains otherwise stack up full-matrix runs nobody will read.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -42,29 +48,38 @@ jobs:
     # drives the frozen artifact, `source` drives the source tree, and neither
     # consumes the other's output, so they run in parallel and finish in
     # whatever order their own work takes.
+    #
+    # Plain pushes build Linux only (the cheap, fast signal); the full
+    # three-OS matrix runs on pull requests, manual dispatch, and release
+    # tags (release.yml always builds everything).
+    with:
+      slim: ${{ github.event_name == 'push' }}
 
   compat:
     name: py36 compatibility
     runs-on: ubuntu-latest     # source-only grep; one run covers every platform
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - run: sh scripts/check-py36-compat.sh
 
   source:
     name: source (${{ matrix.os }})
+    # Plain pushes run Linux only; PRs, dispatch, and tags get the full
+    # matrix (macOS coverage matters -- the diskutil backend runs against
+    # the real tool -- but it doesn't need to run on every push).
+    # macos-latest is arm64, the only macOS runner we can actually get:
+    # macos-13 (the last Intel runner) was tried and dropped -- the job sat
+    # queued for 7+ hours without ever being allocated, which blocks the
+    # whole run from completing. It was only ever extra confirmation; the
+    # macOS coverage that matters is the diskutil backend, and macos-latest
+    # exercises that. Revisit only if Intel capacity returns.
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest      # arm64; the only macOS runner we can actually get
-          # macos-13 (the last Intel runner) was tried and dropped: the job sat
-          # queued for 7+ hours without ever being allocated, which blocks the
-          # whole run from completing. It was only ever extra confirmation --
-          # the macOS coverage that matters is the diskutil backend, and
-          # macos-latest exercises that. Revisit only if Intel capacity returns.
+        os: ${{ github.event_name == 'push' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v5
 

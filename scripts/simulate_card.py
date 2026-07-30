@@ -281,7 +281,10 @@ def build_answers(dev, music_dir, model="0"):
         # the post-flash init offer -- the whole point of the exercise
         (re.compile(r"Run init on .* now\? \[Y/n\]\s*$"),         "y"),
         (re.compile(r"Load music onto the card now\? \[Y/n\]\s*$"), "y"),
-        (re.compile(r"File or directory to add \(TAB to complete\):\s*$"),
+        # the picker gate: typing a path here skips the full-screen picker
+        # (which a scripted pty can't drive)
+        (re.compile(r"Press ENTER to select content to add to the iPod "
+                    r"\(or type a path\):\s*$"),
          music_dir),
     ]
 
