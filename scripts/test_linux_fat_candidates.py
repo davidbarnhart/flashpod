@@ -186,10 +186,16 @@ print("candidate_mounts (a stale mount is never offered):")
 
 class _StaleMountPlat:
     def mounted_filesystems(self):
-        return [("/dev/gone2", "/media/david/IPOD", "vfat"),   # stale
-                ("/dev/null", "/media/david/IPOD2", "vfat")]   # node exists
+        return [("/dev/gone2", "/media/david/IPOD", "vfat"),      # stale
+                ("/dev/present2", "/media/david/IPOD2", "vfat")]  # alive
 
 
+# The suite runs on every CI OS and no real /dev node exists on Windows, so
+# pin existence for the fixture devices (same spirit as the realpath pin
+# above): /dev/gone2 is gone, /dev/present2 is there.
+_real_exists = cli.os.path.exists
+cli.os.path.exists = (lambda p: p == "/dev/present2" if p.startswith("/dev/")
+                      else _real_exists(p))
 cli.platform.current = lambda: _StaleMountPlat()
 check("device-gone mount dropped, live mount kept",
       [m for _s, m in cli.candidate_mounts()],
