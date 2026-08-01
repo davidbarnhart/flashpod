@@ -14,6 +14,11 @@ venv/
 /flashpod/firmware/*.ipsw
 /flashpod/firmware/*.bin.gz
 
+# Local archive of Apple's original firmware distributions (.ipsw, updater
+# apps). The scripts in scripts/ read from here by convention, but it is
+# hundreds of MB of Apple's copyright and is kept outside the repo.
+/historic/
+
 # Compiled libgpod oracle (build from ipodctl.c when needed)
 /ipodctl
 

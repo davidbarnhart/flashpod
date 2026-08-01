@@ -16,6 +16,10 @@ fields nobody has to type by hand.
     scripts/extract_firmware.py -o out/ "historic/ipsw/3rd gen/Firmware-2.2.3"
     scripts/extract_firmware.py -o out/ historic/ipsw/1st\\ and\\ 2nd\\ gen/*
 
+./historic/ is a local archive of Apple's original distributions, kept out
+of the repo (Apple's copyright, hundreds of MB) and gitignored. Any .ipsw
+works; the paths above are just where they happen to live.
+
 The one field it will NOT invent, because it cannot be recovered from the
 bytes, is `description` -- Apple's release notes. That is emitted as a
 TODO marker rather than guessed at.

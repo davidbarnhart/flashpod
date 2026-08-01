@@ -25,6 +25,9 @@ over, so it is the same firmware in packaging the hardware can boot.
         "historic/ipsw/1st and 2nd gen/Firmware-1.1.0.4.zip"
     scripts/salvage_format0.py -o out.bin "historic/…/Firmware-1.1.0.2.bin.zip"
 
+./historic/ is a local archive of Apple's original distributions, kept out
+of the repo (Apple's copyright, hundreds of MB) and gitignored.
+
 --verify-against is the reason to trust this. flashpod already ships
 repacks of 1.0 and 1.0.4 that were made by hand and confirmed booting on
 real 1G hardware; regenerating one of those byte-for-byte is what proves
