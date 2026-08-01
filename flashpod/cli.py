@@ -907,6 +907,19 @@ def candidate_mounts():
         ft = fstype.lower()
         if not ("fat" in ft or "msdos" in ft or "hfs" in ft):
             continue
+        if dev.startswith("/dev/") and not os.path.exists(dev):
+            # The backing device vanished (iPod unplugged or crashed while
+            # mounted) — the mount is a stale handle that EIOs on touch.
+            # Filtering it HERE keeps it out of every chooser; without this,
+            # a replugged iPod (now on a new sdX) got offered NEXT TO its own
+            # corpse, and picking the corpse failed only at the point of use
+            # (seen live 2026-07-31). Say why, so the missing entry isn't
+            # mysterious. (Non-/dev/ sources — Windows drive letters — are
+            # left alone; the at-use staleness check still covers them.)
+            print(f"flashpod: ignoring {mnt} — stale mount, its device "
+                  f"({dev}) is gone (sudo umount -l {mnt} to clean up).",
+                  file=sys.stderr)
+            continue
         score = 0
         if os.path.isdir(os.path.join(mnt, "iPod_Control")):
             score += 10

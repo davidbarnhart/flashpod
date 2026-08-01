@@ -177,4 +177,22 @@ check("nvme whole-disk candidate with mounted pN partition -> filtered",
       cli._unmounted_disks([("/dev/nvme0n1", "usb 64G")]),
       [])
 
+print("candidate_mounts (a stale mount is never offered):")
+# 2026-07-31: the iPod crashed and was replugged (new sdX name); the old
+# mount survived in the table with its device gone. It was offered in the
+# chooser next to the replugged iPod and failed only at the point of use.
+# A device-backed mount whose node no longer exists must be dropped here.
+
+
+class _StaleMountPlat:
+    def mounted_filesystems(self):
+        return [("/dev/gone2", "/media/david/IPOD", "vfat"),   # stale
+                ("/dev/null", "/media/david/IPOD2", "vfat")]   # node exists
+
+
+cli.platform.current = lambda: _StaleMountPlat()
+check("device-gone mount dropped, live mount kept",
+      [m for _s, m in cli.candidate_mounts()],
+      ["/media/david/IPOD2"])
+
 print("\nALL ASSERTIONS PASSED")
