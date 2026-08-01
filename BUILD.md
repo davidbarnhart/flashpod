@@ -165,23 +165,29 @@ no `--firmware`. See "Self-contained builds" above.
    (TLS now works):
    ```sh
    python3.6 - <<'EOF'
-   import urllib.request as u, os
-   u.urlretrieve("https://github.com/davidbarnhart/flashpod/archive/refs/tags/v0.3.2.tar.gz","src.tgz")
-   base="https://github.com/davidbarnhart/flashpod/releases/download/firmware/"
-   os.makedirs("fw",exist_ok=True)
-   for f in ["iPod_1.1.5_2005_02_18.bin.gz","iPod_1.1.4_2004_04_23.bin.gz",
-             "iPod_1.0.4_2001_12_23.bin.gz","iPod_1.0.0_2001_11_01.bin.gz",
-             "iPod_2.2.3.bin.gz","iPod_4.3.1.1.bin.gz","iPod_5.1.2.1.bin.gz"]:
-       u.urlretrieve(base+f,"fw/"+f)
+   import urllib.request as u
+   u.urlretrieve("https://github.com/davidbarnhart/flashpod/archive/refs/tags/v0.4.0.tar.gz","src.tgz")
    EOF
-   tar xf src.tgz && cp fw/*.bin.gz flashpod-*/flashpod/firmware/
+   tar xf src.tgz
+   python3.6 - <<'EOF'
+   import urllib.request as u, glob, json, os
+   src = glob.glob("flashpod-*/flashpod/firmware/firmware.json")[0]
+   m = json.load(open(src))
+   base = m["base_url"].rstrip("/") + "/"
+   for e in m["firmwares"]:
+       print("fetching " + e["file"])
+       u.urlretrieve(base + e["file"], os.path.join(os.path.dirname(src), e["file"]))
+   EOF
    ```
    …or copy a prepared tree over a network share (SSH works fine into 10.8 —
    `scp` the source archive and images from a modern machine; see the
    legacy-algorithm note in your `~/.ssh/config` if it refuses to connect).
-   Either way, every image `firmware.json` references (currently the seven
-   `.bin.gz` — see the stale-bundle trap above) must be in
-   `flashpod/firmware/` for a heavy build.
+   Either way, every image `firmware.json` references must be in
+   `flashpod/firmware/` for a heavy build (~54 MiB across 25 images since the
+   catalog was completed — which is why the list above is driven from the
+   manifest rather than typed out; a hand-kept list went stale the moment the
+   catalog grew, and a heavy build missing images fails offline exactly where
+   "no-internet" matters — see the stale-bundle trap above).
 
 5. **Build and smoke-test:**
    ```sh
@@ -205,7 +211,7 @@ no `--firmware`. See "Self-contained builds" above.
 7. **Attach it to the release** from any machine with `gh` (gh won't run on
    10.8 — copy the tarball off via a share/USB):
    ```sh
-   gh release upload v0.3.2 flashpod-macos-vintage-no-internet.tar.gz
+   gh release upload v0.4.0 flashpod-macos-vintage-no-internet.tar.gz
    ```
 
 > If you're forced onto a newer PyInstaller, you'd need a `codesign` no-op

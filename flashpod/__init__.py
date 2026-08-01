@@ -8,4 +8,4 @@ Pure Python, no libgpod. See the README for usage.
 # dynamic attr), release.yml refuses to build a tag that doesn't match it.
 # v0.3.1 shipped self-reporting 0.3.0 because pyproject and this line were
 # bumped independently -- never again.
-__version__ = "0.3.2"
+__version__ = "0.4.0"
