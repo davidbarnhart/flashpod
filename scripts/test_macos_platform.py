@@ -125,7 +125,18 @@ def t_fat_candidates():
     boot = _boot_disks_from_diskutil()
     assert boot, "could not resolve the boot disk(s)"
 
-    want = set("/dev/r" + d for d in whole if d not in boot)
+    def size_of(d):
+        # Mirror of the production rule, derived independently: a disk
+        # diskutil positively reports as 0 bytes (empty reader slot) is
+        # skipped; a failed lookup keeps it (positive trust only).
+        try:
+            info = macos._diskutil_info("/dev/" + d)
+        except OSError:
+            return None
+        return int(info.get("TotalSize") or info.get("Size") or 0)
+
+    want = set("/dev/r" + d for d in whole
+               if d not in boot and size_of(d) != 0)
     got = dict(macos.MacOSPlatform().fat_disk_candidates())
 
     assert set(got) == want, "candidates %r != expected %r" % (sorted(got), sorted(want))

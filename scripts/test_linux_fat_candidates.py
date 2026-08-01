@@ -123,6 +123,20 @@ check("udev-blind rbc iPod -> whole disk offered",
                  children=[part("sdb1"), part("sdb2")])),
       ["/dev/sdb"])
 
+# THE GHOST (2026-07-30): with both leads of a dual-plug cable attached, the
+# iPod routes data over USB but still logs in over FireWire as a 0-byte SBP-2
+# target — verbatim lsblk shape captured live. Raw-probing it hangs in
+# uninterruptible I/O, so a 0-byte disk is never a candidate (matching the
+# Windows backend, which has always skipped empty 0-byte reader slots).
+check("0-byte FireWire ghost login -> skipped",
+      nodes(disk("sdc", tran="sbp", rm=1, dtype="rbc", size="0B")),
+      [])
+check("0-byte ghost beside the USB-attached iPod -> iPod only",
+      nodes(disk("sdb", tran="usb", rm=1,
+                 children=[part("sdb1"), part("sdb2", "vfat", "IPOD")]),
+            disk("sdc", tran="sbp", rm=1, dtype="rbc", size="0B")),
+      ["/dev/sdb2"])
+
 # Several externals at once: each judged independently.
 check("iPod + ext4 stick + blind disk -> iPod part + blind whole disk",
       nodes(disk("sdb", tran="sbp",

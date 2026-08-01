@@ -199,6 +199,14 @@ class LinuxPlatform(Platform):
             # made the iPod invisible; found live 2026-07-26.)
             if disk.get("type") not in ("disk", "rbc"):
                 continue                     # rom/loop can't be an iPod
+            if (disk.get("size") or "").strip() in ("0", "0B"):
+                # 0 bytes: an empty multi-slot-reader slot, a collapsed
+                # FireWire bridge, or this iPod's ghost SBP-2 login while its
+                # data runs over the USB lead of a dual-plug cable (seen live
+                # 2026-07-30) — nothing to read, and raw-probing a dead
+                # FireWire target hangs in uninterruptible I/O. Windows'
+                # backend has always skipped these; same rule here.
+                continue
             tran = disk.get("tran") or ""
             removable = bool(disk.get("rm")) or bool(disk.get("hotplug"))
             if not (removable or tran in ("usb", "sbp", "ieee1394")):
