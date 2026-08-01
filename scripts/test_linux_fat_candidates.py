@@ -123,6 +123,20 @@ check("udev-blind rbc iPod -> whole disk offered",
                  children=[part("sdb1"), part("sdb2")])),
       ["/dev/sdb"])
 
+# THE GHOST (2026-07-30): with both leads of a dual-plug cable attached, the
+# iPod routes data over USB but still logs in over FireWire as a 0-byte SBP-2
+# target — verbatim lsblk shape captured live. Raw-probing it hangs in
+# uninterruptible I/O, so a 0-byte disk is never a candidate (matching the
+# Windows backend, which has always skipped empty 0-byte reader slots).
+check("0-byte FireWire ghost login -> skipped",
+      nodes(disk("sdc", tran="sbp", rm=1, dtype="rbc", size="0B")),
+      [])
+check("0-byte ghost beside the USB-attached iPod -> iPod only",
+      nodes(disk("sdb", tran="usb", rm=1,
+                 children=[part("sdb1"), part("sdb2", "vfat", "IPOD")]),
+            disk("sdc", tran="sbp", rm=1, dtype="rbc", size="0B")),
+      ["/dev/sdb2"])
+
 # Several externals at once: each judged independently.
 check("iPod + ext4 stick + blind disk -> iPod part + blind whole disk",
       nodes(disk("sdb", tran="sbp",
@@ -162,5 +176,29 @@ cli._mounted_devices = lambda: {"/dev/nvme0n1p2"}
 check("nvme whole-disk candidate with mounted pN partition -> filtered",
       cli._unmounted_disks([("/dev/nvme0n1", "usb 64G")]),
       [])
+
+print("candidate_mounts (a stale mount is never offered):")
+# 2026-07-31: the iPod crashed and was replugged (new sdX name); the old
+# mount survived in the table with its device gone. It was offered in the
+# chooser next to the replugged iPod and failed only at the point of use.
+# A device-backed mount whose node no longer exists must be dropped here.
+
+
+class _StaleMountPlat:
+    def mounted_filesystems(self):
+        return [("/dev/gone2", "/media/david/IPOD", "vfat"),      # stale
+                ("/dev/present2", "/media/david/IPOD2", "vfat")]  # alive
+
+
+# The suite runs on every CI OS and no real /dev node exists on Windows, so
+# pin existence for the fixture devices (same spirit as the realpath pin
+# above): /dev/gone2 is gone, /dev/present2 is there.
+_real_exists = cli.os.path.exists
+cli.os.path.exists = (lambda p: p == "/dev/present2" if p.startswith("/dev/")
+                      else _real_exists(p))
+cli.platform.current = lambda: _StaleMountPlat()
+check("device-gone mount dropped, live mount kept",
+      [m for _s, m in cli.candidate_mounts()],
+      ["/media/david/IPOD2"])
 
 print("\nALL ASSERTIONS PASSED")

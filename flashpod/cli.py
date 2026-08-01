@@ -907,6 +907,19 @@ def candidate_mounts():
         ft = fstype.lower()
         if not ("fat" in ft or "msdos" in ft or "hfs" in ft):
             continue
+        if dev.startswith("/dev/") and not os.path.exists(dev):
+            # The backing device vanished (iPod unplugged or crashed while
+            # mounted) — the mount is a stale handle that EIOs on touch.
+            # Filtering it HERE keeps it out of every chooser; without this,
+            # a replugged iPod (now on a new sdX) got offered NEXT TO its own
+            # corpse, and picking the corpse failed only at the point of use
+            # (seen live 2026-07-31). Say why, so the missing entry isn't
+            # mysterious. (Non-/dev/ sources — Windows drive letters — are
+            # left alone; the at-use staleness check still covers them.)
+            print(f"flashpod: ignoring {mnt} — stale mount, its device "
+                  f"({dev}) is gone (sudo umount -l {mnt} to clean up).",
+                  file=sys.stderr)
+            continue
         score = 0
         if os.path.isdir(os.path.join(mnt, "iPod_Control")):
             score += 10
@@ -1363,27 +1376,32 @@ def load_firewire_sbp2():
     return os.path.isdir("/sys/module/firewire_sbp2")
 
 
-def _hint_if_bridge_collapsed(disks):
+def _hint_if_bridge_collapsed():
     """After a failed scan: a FireWire disk reporting 0 sectors is the
     bridge-collapse signature (large/queued buffered I/O wedged it — the
     device stays on the bus but its capacity reads as zero). Say so, because
     'none held an iPod database' points at the card when the cure is a
-    replug. Whole-disk nodes only; partitions vanish in a collapse anyway."""
-    for node, _desc in disks:
-        name = os.path.basename(node)
+    replug. Sweeps /sys/block itself rather than the candidate list: 0-byte
+    disks are excluded from candidates precisely because probing them can
+    hang, so the collapsed disk never appears there."""
+    try:
+        names = os.listdir("/sys/block")
+    except OSError:
+        return                               # not Linux
+    for name in names:
         try:
             if int(open("/sys/block/%s/size" % name).read()) != 0:
                 continue
-            res = subprocess.run(["lsblk", "-dno", "TRAN", node],
+            res = subprocess.run(["lsblk", "-dno", "TRAN", "/dev/" + name],
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                  universal_newlines=True)
         except (OSError, ValueError):
             continue
         if res.returncode == 0 and res.stdout.strip() in ("sbp", "ieee1394"):
-            print(f"flashpod: {node} is a FireWire device reporting 0 bytes — "
-                  "its bridge has collapsed (this iPod's bridge does that "
-                  "after large/queued I/O). Unplug the iPod, plug it back "
-                  "in, and retry.", file=sys.stderr)
+            print(f"flashpod: /dev/{name} is a FireWire device reporting 0 "
+                  "bytes — its bridge has collapsed (this iPod's bridge does "
+                  "that after large/queued I/O). Unplug the iPod, plug it "
+                  "back in, and retry.", file=sys.stderr)
 
 
 def scan_for_ipod(cands):
@@ -1667,7 +1685,7 @@ def detect_ls_source(opts):
         for node, desc in disks:
             print(f"  checked {node}" + (f"  ({desc})" if desc else ""),
                   file=sys.stderr)
-        _hint_if_bridge_collapsed(disks)
+        _hint_if_bridge_collapsed()
         return None
     if len(found) == 1:
         node, desc = found[0]
@@ -1936,7 +1954,7 @@ def resolve_raw_target(opts):
         print(f"flashpod: scanned {len(disks)} disk(s); none held an iPod "
               "database. For a fresh card, run `flashpod init` first.",
               file=sys.stderr)
-        _hint_if_bridge_collapsed(disks)
+        _hint_if_bridge_collapsed()
         return None
     if len(found) == 1:
         node, desc = found[0]

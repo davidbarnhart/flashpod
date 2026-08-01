@@ -303,6 +303,12 @@ class MacOSPlatform(Platform):
             desc = d
             try:
                 info = _diskutil_info("/dev/" + d)
+                if not int(info.get("TotalSize") or info.get("Size") or 0):
+                    # size 0 = an empty multi-slot-reader slot or a collapsed
+                    # FireWire bridge — nothing to probe, and reads can hang.
+                    # (Positive skip only: if diskutil errored we keep the
+                    # disk, same trust rule as everywhere else.)
+                    continue
                 media = str(info.get("MediaName")
                             or info.get("IORegistryEntryName") or "").strip()
                 bus = str(info.get("BusProtocol") or info.get("Bus") or "").strip()
