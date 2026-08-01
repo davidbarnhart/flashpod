@@ -169,7 +169,59 @@
         "3G"
       ],
       "version": "2.3",
-      "description": "Last stock Apple-released firmware for 3G"
+      "build_date": "2005-02-16",
+      "description": "Adds Shuffle Songs and Music to the main menu; supports iTunes 4.7 and later. Last stock Apple-released firmware for 3G",
+      "_note": "The asset keeps its original undated name. scripts/extract_firmware.py regenerates it as iPod_2.2.3_2005_02_16.bin.gz with an identical sha256, so the bytes are confirmed reproducible; renaming a shipped asset for cosmetics was not worth breaking a live URL over. build_date was recovered from the image's compiled-in __DATE__ after the entry already existed."
+    },
+    {
+      "file": "iPod_2.2.2_2004_04_23.bin.gz",
+      "sha256": "1671753301681b9c7954cafbb7605b05c151c450592351552778111d604649bd",
+      "size": 1938226,
+      "generation": "3rd generation (dock connector)",
+      "models": [
+        "3G"
+      ],
+      "version": "2.2",
+      "build_date": "2004-04-23",
+      "description": "Adds the Apple Lossless Encoder, for compressed encoding at high quality; compatibility with iTunes 4.5 and the iTunes Music Store; improved playback performance",
+      "_note": "Apple shipped this as 'iPod Update 2004-04-28', one updater for every model, with its notes split by hardware; this is the 'iPod with a Dock connector and iPod mini' list. Apple Lossless belongs HERE and deliberately not on 1.4, which is the same release for 1G/2G and did not get it. The binaries agree: 1.4 was built 2004-04-23 16:15:52 and this 84 minutes later at 17:39:59."
+    },
+    {
+      "file": "iPod_2.2.1_2003_10_12.bin.gz",
+      "sha256": "a0968ff426b5d60fa90e15613959aba84f82d0bd21c0775eabdc1c90308ef971",
+      "size": 1921701,
+      "generation": "3rd generation (dock connector)",
+      "models": [
+        "3G"
+      ],
+      "version": "2.1",
+      "build_date": "2003-10-12",
+      "description": "Adds Voice Memos (needs a third-party microphone) and digital photo storage (needs a third-party card reader); adds the Music Quiz game; enhanced On-The-Go playlists; improved backlight, battery meter and playback performance"
+    },
+    {
+      "file": "iPod_2.2.0.1_2003_06_15.bin.gz",
+      "sha256": "63c7cd10118070af6c0cda0212e5a032db5e0337e80c71d1c0a279c8b70867e7",
+      "size": 1847081,
+      "generation": "3rd generation (dock connector)",
+      "models": [
+        "3G"
+      ],
+      "version": "2.0.1",
+      "build_date": "2003-06-15",
+      "description": "Fixes left/right channel swapping and artist sorting; better Asian language support; improved mp3 VBR handling, backlight, alarm clock and playback performance; enhanced On-The-Go playlists"
+    },
+    {
+      "file": "iPod_2.2.0_2003_04_19.bin.gz",
+      "sha256": "aadbd8abbe75698c9385f37703b6103ef7a61667174863c1ea92d09c54d5fd62",
+      "size": 1829611,
+      "generation": "3rd generation (dock connector)",
+      "models": [
+        "3G"
+      ],
+      "version": "2.0",
+      "build_date": "2003-04-19",
+      "description": "Initial 3rd generation firmware. 2.0.1 fixed eight issues in it including left/right channel swapping, so prefer 2.0.1 unless you specifically want the launch image",
+      "_note": "The 'prefer 2.0.1' steer is not in Apple's notes for 2.0 -- it is read off 2.0.1's own notes, which list eight fixes including swapped stereo channels. Flagged for the same reason 1.2.2 is: someone hunting 'the original 3G firmware' would otherwise pick this and get swapped channels. Its zip stamp is a 2023 repack; build_date is the image's compiled-in __DATE__, nine days before the 3G shipped."
     },
     {
       "file": "iPod_4.3.1.1.bin.gz",

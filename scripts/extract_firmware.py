@@ -193,6 +193,18 @@ def family_of(path):
         raise Rejected("cannot read a family from %r" % stem)
 
 
+# Apple's Firmware-* filenames are not quite the versions Apple shipped
+# under. Keyed by (family, filename-derived version) so each case is
+# explicit and auditable rather than a heuristic that might misfire on a
+# generation not yet extracted.
+VERSION_OVERRIDES = {
+    # Firmware-2.2.0.0 is the 3G launch software, which Apple called 2.0.
+    # Every other family-2 image is already two-part (2.0.1, 2.1, 2.2, 2.3),
+    # so this is the one trailing-zero case.
+    (2, "2.0.0"): "2.0",
+}
+
+
 def flashpod_version(family, version):
     """Apple's version string -> the one the picker shows.
 
@@ -205,7 +217,7 @@ def flashpod_version(family, version):
     """
     if family == 1 and (version == "1.0" or version.startswith("1.0.")):
         return "0." + version[len("1.0."):] if version != "1.0" else "0.0"
-    return version
+    return VERSION_OVERRIDES.get((family, version), version)
 
 
 def models_for(family, version):
