@@ -699,9 +699,30 @@ def eject(dev, dry):
     if dry:
         return
     run(["sync"], check=False)
+    # udisks refuses to power off a drive while anything on it is mounted,
+    # and the add/rm mount path (mount preference, 2026-07-28) leaves the
+    # automount in place — so an eject that skips the unmount can NEVER
+    # succeed there, no matter how often it retries (seen live 2026-07-31).
+    # udisksctl unmount is the unprivileged tool for a udisks automount
+    # (plain umount needs root for those); umount covers the rest.
+    for part, mp in device_mountpoints(dev):
+        print(color("  unmounting %s (%s)" % (part, mp), C_DIM),
+              file=sys.stderr)
+        if have("udisksctl"):
+            if run(["udisksctl", "unmount", "-b", part],
+                   check=False).returncode == 0:
+                continue
+        run(["umount", part], check=False)
+    # power-off is the unprivileged path, but a 2003-era iPod can ignore the
+    # USB power-off (drive stays enumerated, screen may say "Do not
+    # disconnect"); a SCSI stop via eject(1) is what such devices understand.
+    # eject needs write access to the node, so the fallback only bites in
+    # the sudo flows — best-effort everywhere else.
     if have("udisksctl"):
-        run(["udisksctl", "power-off", "-b", dev], check=False)
-    elif have("eject"):
+        if run(["udisksctl", "power-off", "-b", dev],
+               check=False).returncode == 0:
+            return
+    if have("eject"):
         run(["eject", dev], check=False)
 
 # ----------------------------------------------------------------------------
