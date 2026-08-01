@@ -67,7 +67,7 @@
       ],
       "version": "1.2.6",
       "build_date": "2003-03-13",
-      "description": "Longer playback time on 1G (scroll-wheel) iPods; longer stand-by time on both. The successor to 1.2.1 -- skip 1.2.2 unless you want its European volume cap"
+      "description": "Longer playback time on 1G (scroll-wheel) iPods; longer stand-by time on both"
     },
     {
       "file": "iPod_1.1.2.2_2002_09_26.bin.gz",
@@ -80,8 +80,8 @@
       ],
       "version": "1.2.2",
       "build_date": "2002-09-26",
-      "description": "EUROPE ONLY -- permanently reduces the iPod's maximum sound output to meet European limits. Not the successor to 1.2.1; 1.2.6 is. Choose this only if you specifically want the volume cap",
-      "_note": "The one entry here where a higher version number is NOT a better choice. Apple shipped this as a regional variant, so anyone scanning for the newest 1.2.x lands on a quietly volume-limited iPod. The description leads with EUROPE ONLY for that reason -- do not soften it."
+      "description": "Europe-only release: permanently reduces the iPod's maximum sound output to meet European limits. Otherwise the same as 1.2.1",
+      "_note": "A regional variant rather than a step forward: 1.2.6 is what follows 1.2.1 functionally. The volume cap is stated plainly in the description because it is a real functional difference someone would want to know about, but it is stated as a fact, not a recommendation -- these are historic images and choosing one is the user's call."
     },
     {
       "file": "iPod_1.1.2.1_2002_09_06.bin.gz",
@@ -220,8 +220,8 @@
       ],
       "version": "2.0",
       "build_date": "2003-04-19",
-      "description": "Initial 3rd generation firmware. 2.0.1 fixed eight issues in it including left/right channel swapping, so prefer 2.0.1 unless you specifically want the launch image",
-      "_note": "The 'prefer 2.0.1' steer is not in Apple's notes for 2.0 -- it is read off 2.0.1's own notes, which list eight fixes including swapped stereo channels. Flagged for the same reason 1.2.2 is: someone hunting 'the original 3G firmware' would otherwise pick this and get swapped channels. Its zip stamp is a 2023 repack; build_date is the image's compiled-in __DATE__, nine days before the 3G shipped."
+      "description": "Initial 3rd generation firmware. 2.0.1 went on to fix eight issues in it, including left/right channel swapping",
+      "_note": "The eight-fixes remark is not in Apple's notes for 2.0 -- it is read off 2.0.1's own notes, which list them, swapped stereo channels among them. Recorded because it is useful context for what the launch build was like, not as a steer away from it. Its zip stamp is a 2023 repack; build_date is the image's compiled-in __DATE__, nine days before the 3G shipped."
     },
     {
       "file": "iPod_4.3.1.1.bin.gz",
@@ -284,8 +284,8 @@
       ],
       "version": "3.0",
       "build_date": "2004-07-03",
-      "description": "FACTORY IMAGE, not the build users received -- it predates the 4G's announcement and 3.0.1 is what shipped. Apple's notes for 'iPod Software 3.0' cover both: Shuffle Songs from the main menu; multiple On-The-Go playlists, with song deletion; selectable audiobook playback speed; audible click through the headphones; charging over USB; improved playback performance",
-      "_note": "Date is from a secondary source and UNVERIFIED (no build stamp in 4G images), but it is what makes this the factory image: 2004-07-03 is 16 days before the 4G was announced on 2004-07-19, so it cannot have been a public release, and no updater is known to have carried it. The 'factory image' framing is ours, not Apple's -- flagged the way 1.2.2 and 2.0 are, so nobody picks the lowest 3.0.x expecting the shipping build."
+      "description": "Factory image, built before the 4G was announced; 3.0.1 is the revision that shipped. Apple's notes for 'iPod Software 3.0' cover both: Shuffle Songs from the main menu; multiple On-The-Go playlists, with song deletion; selectable audiobook playback speed; audible click through the headphones; charging over USB; improved playback performance",
+      "_note": "Date is from a secondary source and UNVERIFIED (no build stamp in 4G images), but it is what makes this the factory image: 2004-07-03 is 16 days before the 4G was announced on 2004-07-19, so it cannot have been a public release, and no updater is known to have carried it. The 'factory image' framing is ours, not Apple's. It is there so the difference between this and 3.0.1 is legible -- Apple gave both the same name and the same notes -- not to discourage installing it."
     },
     {
       "file": "iPod_5.1.2.1.bin.gz",
