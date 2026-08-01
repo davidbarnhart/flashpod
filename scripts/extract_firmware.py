@@ -202,6 +202,20 @@ VERSION_OVERRIDES = {
     # Every other family-2 image is already two-part (2.0.1, 2.1, 2.2, 2.3),
     # so this is the one trailing-zero case.
     (2, "2.0.0"): "2.0",
+
+    # iPod photo ran two numbers for the same release: the Firmware-* files
+    # count 4.0, 4.1, 4.2, 4.2.1 while Apple's user-facing version is 1.0,
+    # 1.1, 1.2, 1.2.1. Catalogues label the launch firmware "1.0 and 4.0",
+    # which is the direct evidence for the pairing; the shipped asset
+    # iPod_5.1.2.1.bin.gz is the other half, since it is byte-identical to
+    # Firmware-5.4.2.1. Families 5 and 11 are the two board revisions and
+    # ship identical images, so both need the mapping.
+    (5, "4.0"): "1.0",
+    (5, "4.1"): "1.1",
+    (5, "4.2"): "1.2",
+    (5, "4.2.1"): "1.2.1",
+    (11, "4.1"): "1.1",
+    (11, "4.2"): "1.2",
 }
 
 
