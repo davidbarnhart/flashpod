@@ -34,6 +34,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import struct
 import sys
 import zipfile
@@ -72,12 +73,36 @@ UNSUPPORTED = {
         "has been hardware-tested; validating clean is not support",
 }
 
-# Inner-zip timestamps are the one place a build date survives (git and
-# release downloads both reset mtimes). Most of the archive's zips carry
-# period-correct dates, but some are modern repacks whose timestamp is the
-# repack -- 2.2.0.0 says 2023, 1.1.0.2 says 2025. Anything outside the era
-# is reported and dropped rather than written into the manifest as fact.
+# Anything claiming to be a build date outside this window is not one.
 ERA = (datetime.datetime(2001, 1, 1), datetime.datetime(2008, 1, 1))
+
+# The real build date is compiled INTO the image: these binaries carry a C
+# __DATE__ string ("Nov 01 2001", day space-padded). That is the primary
+# source, and it is verifiable -- it reproduces the dates the manifest
+# already recorded for 0.0, 0.4, 1.4 and 1.5, two of which were established
+# long before this script existed and had no zip timestamp to come from.
+#
+# An inner-zip timestamp is the fallback, and it is the PACKAGING date, not
+# the build: where the two disagree the zip always runs a few days late
+# (1.2 was built 2002-07-24 and packaged 2002-07-31). Some copies are also
+# modern repacks whose stamp is the repack -- the 1.0.2 zip says 2025, the
+# 2.2.0.0 zip says 2023 -- which is what ERA screens out.
+BUILD_DATE = re.compile(
+    rb"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ?([ 0-3]?\d) (200\d)")
+
+
+def embedded_build_date(raw):
+    """The compiled-in __DATE__ stamp, or None."""
+    m = BUILD_DATE.search(raw)
+    if not m:
+        return None
+    try:
+        stamp = datetime.datetime.strptime(
+            "%s %s %s" % (m.group(1).decode(), m.group(2).decode().strip(),
+                          m.group(3).decode()), "%b %d %Y")
+    except ValueError:
+        return None
+    return stamp if ERA[0] <= stamp < ERA[1] else None
 
 
 class Rejected(Exception):
@@ -212,12 +237,25 @@ def gz(raw):
 
 def process(path, outdir):
     family, version = family_of(path)
-    raw, build_date, note = unwrap(path)
+    raw, zip_date, note = unwrap(path)
     fmtver, types = inspect(raw)
     generation, models = models_for(family, version)
 
+    # Prefer the compiled-in date; keep the zip stamp only as a fallback and
+    # say so when they disagree, since the difference is build vs packaging.
+    build_date = embedded_build_date(raw)
+    if build_date and zip_date and build_date != zip_date:
+        note = ("built %s, packaged %s -- using the compiled-in build date"
+                % (build_date.strftime("%Y-%m-%d"),
+                   zip_date.strftime("%Y-%m-%d")))
+    elif not build_date and zip_date:
+        build_date = zip_date
+        note = "no compiled-in date found; falling back to the zip timestamp"
+
     label = flashpod_version(family, version)
-    stem = "iPod_%d.%s" % (family, version)
+    # Assets are named for the version the picker shows, not Apple's -- the
+    # shipped iPod_1.0.4_2001_12_23.bin.gz is family 1 at flashpod's 0.4.
+    stem = "iPod_%d.%s" % (family, label)
     if build_date:
         stem += build_date.strftime("_%Y_%m_%d")
     name = stem + ".bin.gz"
