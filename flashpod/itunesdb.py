@@ -28,6 +28,17 @@ STR_MHODS = {MHOD_TITLE, MHOD_LOCATION, MHOD_ALBUM, MHOD_ARTIST,
              MHOD_GENRE, MHOD_FILETYPE, 7, 8, MHOD_COMPOSER}
 
 
+# The mhit header carries a four-byte type marker at offset 24. Everything
+# flashpod has ever written says "\0MP3" regardless of the actual format, and
+# that is left alone on purpose: AAC and WAV libraries in the field were built
+# with it, and this is not the change to find out what depends on it. FLAC is
+# new, so it gets its own -- NUL + a three-character code, the same shape, which
+# is also the shape the 1G firmware's own codec tags use ('mp3', 'wav', 'aif',
+# 'va', 'mp4' -- three characters and a NUL).
+MARKER_MP3 = b"\x00MP3"
+MARKER_FLAC = b"\x00FLA"
+
+
 class Track:
     FIELDS = ("title", "location", "album", "artist", "genre", "filetype",
               "composer")
@@ -42,6 +53,7 @@ class Track:
         self.samplerate = 0
         self.time_added = int(time.time()) + MAC_EPOCH_OFFSET
         self.dbid = random.getrandbits(64)
+        self.marker = MARKER_MP3        # mhit+24; see the note above
         for f in self.FIELDS:
             setattr(self, f, None)
 
@@ -204,7 +216,7 @@ def _mk_mhit(track):
     hdr[0:4] = b"mhit"
     struct.pack_into("<III", hdr, 4, HLEN, HLEN + len(mhods), nmhod)
     struct.pack_into("<II", hdr, 16, track.id, 1)            # id, visible
-    hdr[24:28] = b"\x00" + "3PM"[::-1].encode()              # 'MP3 ' marker
+    hdr[24:28] = getattr(track, "marker", MARKER_MP3)         # type marker
     struct.pack_into("<I", hdr, 32, track.time_added)        # time modified
     struct.pack_into("<III", hdr, 36, track.size, track.tracklen,
                      track.track_nr)
