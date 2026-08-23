@@ -891,7 +891,8 @@ def first(tags, key):
     return str(val) if val else None
 
 
-AUDIO_EXTS = {".mp3", ".m4a", ".m4b", ".aac", ".wav", ".aif", ".aiff", ".flac"}
+AUDIO_EXTS = {".mp3", ".m4a", ".m4b", ".aac", ".wav", ".aif", ".aiff", ".flac",
+              ".fla"}
 
 # Formats that need something other than flashpod's historical defaults. Only
 # FLAC is listed: every other extension keeps the filetype string and mhit
@@ -901,7 +902,8 @@ AUDIO_EXTS = {".mp3", ".m4a", ".m4b", ".aac", ".wav", ".aif", ".aiff", ".flac"}
 # `.flac` presents to the 1G firmware as "fla": its extension lookup is
 # strrchr('.') then strncpy(..., 3), so the type is exactly three characters and
 # `.fla` and `.flac` are the same file to it (openpod wiki 20.8.0).
-FORMATS = {".flac": ("FLAC audio file", itunesdb.MARKER_FLAC)}
+FORMATS = {".flac": ("FLAC audio file", itunesdb.MARKER_FLAC),
+           ".fla": ("FLAC audio file", itunesdb.MARKER_FLAC)}
 
 # Test hook: point at a fake mounts table.
 MOUNTS_FILE = os.environ.get("FLASHPOD_MOUNTS_FILE", "/proc/mounts")
