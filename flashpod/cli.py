@@ -687,7 +687,8 @@ class RawTarget:
         if audio is None:
             return None
         return _track_from_audio(
-            audio, os.path.splitext(os.path.basename(relpath))[0], fh.size)
+            audio, os.path.splitext(os.path.basename(relpath))[0], fh.size,
+            os.path.splitext(relpath)[1])
 
     def rebuild_library(self, name="iPod", progress=None, report=None):
         """Reconstruct the library from the track files already on the card:
@@ -890,7 +891,17 @@ def first(tags, key):
     return str(val) if val else None
 
 
-AUDIO_EXTS = {".mp3", ".m4a", ".m4b", ".aac", ".wav", ".aif", ".aiff"}
+AUDIO_EXTS = {".mp3", ".m4a", ".m4b", ".aac", ".wav", ".aif", ".aiff", ".flac"}
+
+# Formats that need something other than flashpod's historical defaults. Only
+# FLAC is listed: every other extension keeps the filetype string and mhit
+# marker it has always been given, because existing libraries were built with
+# them. See itunesdb.MARKER_MP3.
+#
+# `.flac` presents to the 1G firmware as "fla": its extension lookup is
+# strrchr('.') then strncpy(..., 3), so the type is exactly three characters and
+# `.fla` and `.flac` are the same file to it (openpod wiki 20.8.0).
+FORMATS = {".flac": ("FLAC audio file", itunesdb.MARKER_FLAC)}
 
 # Test hook: point at a fake mounts table.
 MOUNTS_FILE = os.environ.get("FLASHPOD_MOUNTS_FILE", "/proc/mounts")
@@ -2359,7 +2370,7 @@ def read_audio_stream(fileobj, ext):
     return mutagen.File(fileobj, easy=True)
 
 
-def _track_from_audio(audio, fallback_title, size):
+def _track_from_audio(audio, fallback_title, size, ext=None):
     """Build an itunesdb.Track from an already-loaded mutagen audio object, a
     fallback title (used when untagged), and the file's byte size. Shared by
     make_track (tags from a path) and the rebuild path (tags from bytes). The
@@ -2371,7 +2382,10 @@ def _track_from_audio(audio, fallback_title, size):
     t.album = first(tags, "album")
     t.genre = first(tags, "genre")
     t.composer = first(tags, "composer")
-    t.filetype = "MPEG audio file"
+    filetype, marker = FORMATS.get((ext or "").lower(),
+                                   ("MPEG audio file", itunesdb.MARKER_MP3))
+    t.filetype = filetype
+    t.marker = marker
     tracknr = first(tags, "tracknumber")
     if tracknr and tracknr.split("/")[0].isdigit():
         t.track_nr = int(tracknr.split("/")[0])
@@ -2380,7 +2394,13 @@ def _track_from_audio(audio, fallback_title, size):
         t.year = int(date[:4])
     info = audio.info
     t.tracklen = int(info.length * 1000)
-    t.bitrate = getattr(info, "bitrate", 0) // 1000
+    # FLAC's StreamInfo carries no bitrate -- it is not a constant of the format
+    # -- so derive the average one rather than report 0, which the iPod shows as
+    # a blank in the track info.
+    bitrate = getattr(info, "bitrate", 0)
+    if not bitrate and info.length:
+        bitrate = int(size * 8 / info.length)
+    t.bitrate = bitrate // 1000
     t.samplerate = getattr(info, "sample_rate", 0)
     t.size = size
     return t
@@ -2418,7 +2438,7 @@ def make_track(lib, path, nr, total, report=None):
     # name). _track_from_audio leaves t.id at its default until committed.
     return _track_from_audio(
         audio, os.path.splitext(os.path.basename(path))[0],
-        os.path.getsize(path))
+        os.path.getsize(path), os.path.splitext(path)[1])
 
 
 def orunknown(s):
