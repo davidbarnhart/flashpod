@@ -35,4 +35,17 @@ def _detect():
     return LinuxPlatform()
 
 
-__all__ = ["Platform", "Unsupported", "current"]
+def use_image(path):
+    """If ``path`` is a regular file, make :func:`current` return the image
+    backend for the rest of the run (see :mod:`.image`) and return True.
+    Otherwise change nothing and return False."""
+    global _cached
+    from .image import ImagePlatform, is_image
+    if not is_image(path):
+        return False
+    if not getattr(current(), "is_image", False):
+        _cached = ImagePlatform(current())
+    return True
+
+
+__all__ = ["Platform", "Unsupported", "current", "use_image"]

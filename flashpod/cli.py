@@ -3183,7 +3183,7 @@ def offer_init_after_flash(dev, raw_fobj=None, data_start=None):
     the freshly flashed card right away, so it leaves the flash step fully
     usable. Must run before eject — eject powers the reader off and the
     /dev node disappears until replug."""
-    if sys.platform == "win32":
+    if sys.platform == "win32" or getattr(platform.current(), "is_image", False):
         _offer_init_after_flash_win(dev, raw_fobj, data_start)
     else:
         _offer_init_after_flash_unix(dev)
@@ -3378,6 +3378,11 @@ def main():
                       help="validate layout logic and exit (no hardware)")
 
     opts = parser.parse_args()
+
+    # A regular file as the target -- `flash ipod.img`, `--raw ipod.img` -- is a
+    # disk image: no root, and none of the device-only steps (platform/image.py).
+    platform.use_image(opts.device if opts.command == "flash"
+                       else getattr(opts, "raw", None))
 
     if opts.command == "flash":
         if opts.self_test:

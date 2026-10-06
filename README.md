@@ -521,6 +521,28 @@ card right away, and after that to load music onto it too — answer Y (the
 default) to both and the card comes out of the flash step ready to play. The
 offers are skipped for `--dry-run`, `--no-format`, and non-interactive runs.
 
+### A disk image instead of a card
+
+Every command that takes a device also takes a **regular file**, and treats it
+as a whole card: the same partition table, firmware placement, FAT32 and
+iTunesDB. No root is needed, and the steps that exist only because a card is a
+device — unmounting, wiping signatures, re-reading the partition table,
+flushing caches, ejecting, the FireWire bridge's small transfers — are skipped.
+The file's size is the card's size, so give it one first:
+
+```
+$ truncate -s 1G ipod.img
+$ flashpod flash ipod.img --firmware iPod_1.1.5.ipsw --yes
+$ flashpod init --raw ipod.img
+$ flashpod add  --raw ipod.img ~/Music/*.mp3
+$ flashpod ls   --raw ipod.img
+```
+
+An interactive `flash` of an image offers init and music afterwards, as it does
+for a card. The image is what an iPod emulator boots — openpod's
+`tools/ipod_emu_ui.py` reads one with `OPENPOD_DISK=ipod.img` — and it can be
+written to a real card byte for byte (`dd`), though `flashpod flash` on the
+card itself is the tested way to make one.
 
 ## Notes
 
