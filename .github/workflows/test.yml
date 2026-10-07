@@ -128,6 +128,10 @@ jobs:
         shell: bash
         run: PYTHONPATH=. python scripts/test_firewire_pin_order.py
 
+      - name: Eject elevates via sudo, not a polkit dialog
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_eject_elevation.py
+
       - name: Firmware is resolved before sudo elevation
         shell: bash
         run: PYTHONPATH=. python scripts/test_flash_preelevation.py

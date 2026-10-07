@@ -709,21 +709,39 @@ def eject(dev, dry):
         print(color("  unmounting %s (%s)" % (part, mp), C_DIM),
               file=sys.stderr)
         if have("udisksctl"):
-            if run(["udisksctl", "unmount", "-b", part],
-                   check=False).returncode == 0:
+            if run(["udisksctl", "unmount", "--no-user-interaction",
+                    "-b", part], check=False).returncode == 0:
                 continue
-        run(["umount", part], check=False)
+        _run_privileged(["umount", part])
     # power-off is the unprivileged path, but a 2003-era iPod can ignore the
     # USB power-off (drive stays enumerated, screen may say "Do not
     # disconnect"); a SCSI stop via eject(1) is what such devices understand.
-    # eject needs write access to the node, so the fallback only bites in
-    # the sudo flows — best-effort everywhere else.
+    # eject needs write access to the node, hence the elevation.
     if have("udisksctl"):
-        if run(["udisksctl", "power-off", "-b", dev],
-               check=False).returncode == 0:
+        if run(["udisksctl", "power-off", "--no-user-interaction",
+                "-b", dev], check=False).returncode == 0:
             return
     if have("eject"):
-        run(["eject", dev], check=False)
+        _run_privileged(["eject", dev])
+
+def _run_privileged(cmd):
+    """Run ``cmd`` as root, elevating through sudo IN THE TERMINAL.
+
+    The udisksctl calls in eject() pass --no-user-interaction so that when
+    polkit wants an admin (a mount udisks didn't make — our own `sudo mount`
+    fallback, or one left by an earlier sudo run — or a drive it deems
+    non-removable) they fail fast instead of raising the desktop's graphical
+    password dialog. This is where that authorization is asked for instead:
+    a sudo prompt on the terminal flashpod is already running in. With no
+    terminal to prompt at, sudo -n keeps it best-effort rather than hanging."""
+    if getattr(os, "geteuid", lambda: 0)() != 0 and have("sudo"):
+        if sys.stdin.isatty():
+            print(color("  %s needs root — elevating via sudo..." % cmd[0],
+                        C_DIM), file=sys.stderr)
+            cmd = ["sudo"] + cmd
+        else:
+            cmd = ["sudo", "-n"] + cmd
+    return run(cmd, check=False, capture=not sys.stdin.isatty())
 
 # ----------------------------------------------------------------------------
 # Self-test (no root / hardware): round-trip the layout and check fields
