@@ -225,6 +225,8 @@ def _mk_mhit(track):
     struct.pack_into("<I", hdr, 88, track.time_added)        # time added
     struct.pack_into("<Q", hdr, 96, track.dbid)
     hdr[104] = 1                                             # checked
+    # where this track stands in the album view and in Songs (see sort_order)
+    struct.pack_into("<HH", hdr, 108, *getattr(track, "sort_pos", (0, 0)))
     return bytes(hdr) + mhods
 
 
@@ -254,12 +256,88 @@ def _mk_mhsd(sd_type, payload):
         bytes(96 - 16) + payload
 
 
+# ----------------------------------------------------------------------------
+# The order the iPod will want the tracks in
+# ----------------------------------------------------------------------------
+# The 1st-generation firmware sorts EVERY track the first time Artists, an
+# artist's albums, or Songs is opened after a boot, and with a few thousand
+# tracks each of those is a pause of seconds (openpod, docs/wiki/24). The three
+# orders, read out of the firmware's key tables:
+#
+#     Artists          artist, album, disc, track number, title
+#     an artist/album  album, disc, track number, artist, title
+#     Songs            title
+#
+# We know all of that when the database is written, so we do the work here:
+#
+#   * the tracks are WRITTEN in the Artists order -- every list the firmware
+#     sorts starts as a copy of the order they are in the file;
+#     (and their ids are dealt out again in that order: see serialize)
+#   * each track carries where it stands in the other two, as two 16-bit
+#     numbers (1-based; 0 = not given) at mhit+108 and mhit+110 -- four bytes
+#     the stock firmware loads and never looks at.
+#
+# Stock firmware ignores all of it and sorts as it always did. An openpod
+# firmware with the `fastsort` part places the tracks by the numbers and then
+# CHECKS the order with the firmware's own comparison, repairing whatever is
+# out of place -- so a mistake here costs time on the iPod, never a wrong list.
+#
+# The string order below is the firmware's for names made of letters, digits,
+# space, '!' and '.': leading blanks ignored, a-z compared as A-Z, an empty
+# name after every other. Other characters send the firmware to a fuller
+# Unicode comparison we do not reproduce; those names may land a little out of
+# place and are put right on the iPod.
+SORT_POS_MAX = 0xFFFF
+
+
+def _collate(s):
+    s = (s or "").lstrip("".join(map(chr, range(0x21))))
+    return (not s, "".join(chr(ord(c) - 32) if "a" <= c <= "z" else c for c in s))
+
+
+def _no_article(s):
+    """The firmware files an ARTIST without a leading "The": The Sines comes
+    before Square One."""
+    s = (s or "").lstrip("".join(map(chr, range(0x21))))
+    return s[4:] if s[:4].lower() == "the " else s
+
+
+def sort_order(tracks):
+    """`tracks` in the order to write them (the Artists order), with each
+    track's `sort_pos` set to its 1-based place in (the album view, Songs)."""
+    artist = lambda t: _collate(_no_article(t.artist))
+    album = lambda t: (_collate(t.album), getattr(t, "disc_nr", 0), t.track_nr)
+    title = lambda t: _collate(t.title)
+    ordered = sorted(tracks, key=lambda t: (artist(t), album(t), title(t)))
+    for t in ordered:
+        t.sort_pos = (0, 0)
+    if len(ordered) <= SORT_POS_MAX:
+        # Ties are broken by the order just chosen, not by the order we were
+        # handed, so saving a library twice gives every track the same place
+        # and the same numbers both times (the timestamps and the playlist's
+        # random ids, stamped on every save as before, still differ).
+        by_album = sorted(ordered, key=lambda t: (album(t), artist(t), title(t)))
+        by_title = sorted(ordered, key=title)
+        place = {id(t): i for i, t in enumerate(by_album, 1)}
+        for i, t in enumerate(by_title, 1):
+            t.sort_pos = (place[id(t)], i)
+    return ordered
+
+
 def serialize(lib):
-    tracks = b"".join(_mk_mhit(t) for t in lib.tracks)
+    ordered = sort_order(lib.tracks)
+    # THE FIRMWARE FINDS A TRACK BY ITS ID WITH A BINARY SEARCH over the tracks
+    # in file order: written out of id order, a 300-track library loads as one
+    # song (measured in openpod's emulator). So the ids follow the order. The
+    # same ids are handed round among the same tracks -- none is new, none is
+    # lost -- but a track's id is no longer the same from one save to the next.
+    for t, i in zip(ordered, sorted(t.id for t in ordered)):
+        t.id = i
+    tracks = b"".join(_mk_mhit(t) for t in ordered)
     mhlt = b"mhlt" + struct.pack("<II", 92, len(lib.tracks)) + bytes(92 - 12)
     sd1 = _mk_mhsd(1, mhlt + tracks)
 
-    mpl = _mk_mhyp(lib.name, [t.id for t in lib.tracks], master=True)
+    mpl = _mk_mhyp(lib.name, [t.id for t in ordered], master=True)
     mhlp = b"mhlp" + struct.pack("<II", 92, 1) + bytes(92 - 12)
     sd2 = _mk_mhsd(2, mhlp + mpl)
 
