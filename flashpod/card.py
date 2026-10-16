@@ -1,9 +1,16 @@
-"""flashpod as a library: every operation on a card IMAGE FILE.
+"""flashpod as a library: every operation on a card.
 
-This is the module other programs import (the emulator's web app is the
-first). The CLI is another frontend over the same code: it shares the
-modules this one is built on (layout, firmware, target, library, tracks), so
-a fix there reaches both.
+This is the ONE place the card logic lives. Other programs import it (the
+emulator's web app is the first), and the CLI is a frontend over it too:
+`flashpod add/rm/init/rebuild` call card.plan_add / apply_add / remove /
+init / rebuild, keeping only their prompts, progress lines and the
+real-device handling (scripts/test_one_place.py checks that).
+
+A ``card`` argument is an IMAGE PATH (opened and locked here) or a TARGET
+object the caller opened: target.RawTarget over a raw device or an image
+(the CLI's open_raw_target, or open_target() below), or target.MountTarget
+over an OS-mounted iPod. The rules below about regular files and locking
+apply to paths; a caller handing in a target owns its device.
 
     from flashpod import card
     card.create_blank("/cards/a.img", 8 * 10**9)
@@ -35,6 +42,13 @@ RULES THIS MODULE KEEPS
   firewire_sbp2, sudo, mounting, ejecting, the small transfer cap, the LBA28
   hidden-tail check (a file shows its whole size), the multi-iPod refusal.
 
+ADD, IN TWO STEPS OR ONE
+
+plan_add reads the tags and dedups (writes nothing); apply_add copies a
+chosen subset and saves the database once. add() does both, deciding by a
+policy where the CLI asks its questions; the CLI asks them about the same
+plan (which artists fit the free space; add past the DB ceiling?).
+
 PROGRESS AND CANCEL
 
 Long calls take ``progress(stage, done, total, item)`` and ``cancelled()``.
@@ -58,7 +72,7 @@ from . import fat32
 from . import firmware as _firmware
 from . import itunesdb
 from . import layout
-from . import library
+from . import library as library_mod
 from . import target as _target
 # Every error a caller may catch is importable from here (card.CardBusy, ...).
 from .errors import (  # noqa: F401
@@ -407,12 +421,11 @@ def _inspect_library(info, tgt):
         info.itunesdb = {"state": "corrupt", "error": str(exc),
                          "db_bytes": len(raw)}
         return
-    limit = library._db_size_limit() or None
+    limit = library_mod._db_size_limit() or None
+    ntracks, nartists, nalbums = library_mod.counts(lib)
     info.itunesdb = {
-        "state": "ok", "name": lib.name, "tracks": len(lib.tracks),
-        "artists": len({orunknown(t.artist).casefold() for t in lib.tracks}),
-        "albums": len({(orunknown(t.artist).casefold(),
-                        orunknown(t.album).casefold()) for t in lib.tracks}),
+        "state": "ok", "name": lib.name, "tracks": ntracks,
+        "artists": nartists, "albums": nalbums,
         "db_bytes": len(raw),
         "ceiling": {"limit": limit,
                     "headroom": (limit - len(raw)) if limit else None}}
@@ -465,14 +478,15 @@ def flash(path, firmware, lba48=False, max_data_gb=None, format=True):
         if format:
             _check_formattable(data_blocks)
         f = img.f
-        layout.write_layout_body(f, fw, total, data_start)
-        geo = spc = None
-        if format:
-            geo, spc = layout.format_partition(f, data_start, data_blocks)
+        # the same sequence `flashpod flash` runs (ipod_flash.write_layout)
+        done = layout.write_card(f, fw, total, lba48, max_data_sectors,
+                                 format)
+        if isinstance(done["format"], Exception):
+            raise done["format"]        # _check_formattable makes this rare
+        geo, spc = done["format"] if format else (None, None)
         f.flush()
         layout.verify_region(f, fw)
-        f.seek(0)
-        f.write(header)
+        layout.write_mbr(f, header)
     return Result(firmware_bytes=len(fw), data_start=data_start,
                   data_sectors=data_blocks,
                   clusters=geo["clusters"] if geo else None,
@@ -549,6 +563,43 @@ def fetch_firmware(entry, progress=None):
 
 
 # ----------------------------------------------------------------------------
+# Targets: an image path, or a target object the caller opened
+# ----------------------------------------------------------------------------
+class _Given(object):
+    """Context wrapper for a target the caller opened (a raw device or a
+    mount, from the CLI): no locking, no closing -- the caller owns it."""
+
+    def __init__(self, tgt):
+        self.tgt = tgt
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def target(self):
+        return self.tgt
+
+
+def _open(card, write=False):
+    """``card`` is an image path (opened and locked here) or a target object
+    with RawTarget's interface (target.RawTarget over a raw device, or
+    target.MountTarget over an OS mount), which the caller opened and owns."""
+    if hasattr(card, "load_library"):
+        return _Given(card)
+    return _Image(card, write=write)
+
+
+def open_target(path, write=False):
+    """Open an image file as a target for several calls in a row, locked
+    (shared to read, exclusive to write) until the returned context exits:
+    ``with card.open_target(p, write=True) as img: card.add(img.target(), ...)``.
+    """
+    return _Image(path, write=write)
+
+
+# ----------------------------------------------------------------------------
 # The iTunesDB
 # ----------------------------------------------------------------------------
 def _load(tgt):
@@ -559,67 +610,98 @@ def _load(tgt):
     return lib
 
 
-def init(path, name="iPod", overwrite=False):
+def library(card):
+    """The card's parsed iTunesDB (an itunesdb.Library). NotInitialized /
+    CorruptLibrary when there is none / it won't parse."""
+    with _open(card) as c:
+        return _load(c.target())
+
+
+def init(card, name="iPod", overwrite=False):
     """Create iPod_Control and an empty iTunesDB. Refuses a card that already
     has an iTunesDB (AlreadyInitialized) unless ``overwrite`` -- which, as
     `flashpod init` does, replaces the database but not the music files."""
-    with _Image(path, write=True) as img:
-        tgt = img.target()
-        if not overwrite and tgt.fs.read_file(DB_PATH) is not None:
-            raise AlreadyInitialized("the card already has an iTunesDB")
+    with _open(card, write=True) as c:
+        tgt = c.target()
+        if not overwrite:
+            try:
+                existing = tgt.load_library()
+            except CorruptLibrary:
+                existing = True
+            if existing is not None:
+                raise AlreadyInitialized("the card already has an iTunesDB")
         tgt.init_structure(name)
     return Result(name=name)
 
 
-def tracks(path):
+def tracks(card):
     """``{"name": library name, "tracks": [track_dict, ...]}``."""
-    with _Image(path) as img:
-        lib = _load(img.target())
-        return {"name": lib.name, "tracks": [track_dict(t) for t in lib.tracks]}
+    lib = library(card)
+    return {"name": lib.name, "tracks": [track_dict(t) for t in lib.tracks]}
 
 
-def rebuild(path, name="iPod", progress=None):
-    """Rebuild the iTunesDB from the music files on the card (their tags),
-    as `flashpod rebuild` does. Returns a Result with ``tracks`` and
-    ``skipped`` (unreadable files, with reasons)."""
+def rebuild(card, name="iPod", progress=None, report=None, save=True):
+    """Rebuild the iTunesDB from the music files on the card (their tags), as
+    `flashpod rebuild` does, and save it (``save=False``: just return it, for
+    a caller that adds to it first). ``progress(stage, done, total, item)``
+    with stage "rebuild"; ``report(msg)`` for each unreadable file. Returns a
+    Result with ``tracks``, ``skipped`` and the Library as ``_library``."""
     skipped = []
-    with _Image(path, write=True) as img:
-        tgt = img.target()
+
+    def say(msg):
+        skipped.append(msg)
+        if report:
+            report(msg)
+    with _open(card, write=True) as c:
+        tgt = c.target()
         lib = tgt.rebuild_library(
             name,
             progress=(lambda nr, total, rp: progress("rebuild", nr, total, rp))
             if progress else None,
-            report=skipped.append)
-        tgt.save_library(lib)
-    return Result(tracks=len(lib.tracks), skipped=skipped)
+            report=say)
+        if save:
+            tgt.save_library(lib)
+    return Result(tracks=len(lib.tracks), skipped=skipped, _library=lib)
 
 
-def remove(path, ids=None, artist=None, album=None):
+def remove(card, ids=None, artist=None, album=None, what=None,
+           on_removed=None, on_error=None):
     """Delete tracks (their files and their entries) and save the database
     once. Give ``ids`` (a list), or ``artist`` / ``album`` (case-insensitive
-    exact name). NoSuchTrack (nothing removed) if any id isn't on the card.
-    Returns the removed tracks as dicts."""
-    if ids is not None:
-        what = list(ids)
-    elif artist is not None:
-        what = ["artist", artist]
-    elif album is not None:
-        what = ["album", album]
-    else:
-        raise ValueError("remove needs ids, artist or album")
-    with _Image(path, write=True) as img:
-        tgt = img.target()
+    exact name), or ``what`` in the CLI's form (ids, or ["artist"|"album",
+    word, ...]). NoSuchTrack (nothing removed) if the selection doesn't match.
+    ``on_removed(track)`` after each; ``on_error(track, exc)`` when its file
+    can't be deleted (the entry is still dropped) -- without it the OSError
+    propagates. Returns the removed tracks as dicts."""
+    if what is None:
+        if ids is not None:
+            what = list(ids)
+        elif artist is not None:
+            what = ["artist", artist]
+        elif album is not None:
+            what = ["album", album]
+        else:
+            raise ValueError("remove needs ids, artist, album or what")
+    with _open(card, write=True) as c:
+        tgt = c.target()
         lib = _load(tgt)
-        victims = library.select_for_removal(lib, what)
+        victims = library_mod.select_for_removal(lib, what)
         for t in victims:
-            tgt.remove_location(t.location)
+            try:
+                tgt.remove_location(t.location)
+            except OSError as exc:
+                if on_error is None:
+                    raise
+                on_error(t, exc)
             lib.tracks.remove(t)
+            if on_removed:
+                on_removed(t)
         tgt.save_library(lib)
     return [track_dict(t) for t in victims]
 
 
 # ----------------------------------------------------------------------------
-# Add: plan, then do
+# Add: plan, decide, apply
 # ----------------------------------------------------------------------------
 def _prefix_fit(pending, budget):
     n, used = 0, 0
@@ -631,49 +713,14 @@ def _prefix_fit(pending, budget):
     return n
 
 
-def _plan(tgt, files, progress, cancelled):
-    lib = _load(tgt)
-    warnings = []
-    paths = expand(files, report=warnings.append)
-    if not paths:
-        raise NothingToAdd("no audio files in that selection",
-                           warnings=warnings)
-    unreadable = []
-    pending, failed, dups = library.read_batch(
-        lib, paths,
-        on_reading=(lambda nr, n, p: progress("tags", nr, n, p))
-        if progress else None,
-        report=unreadable.append, cancelled=cancelled)
-    try:
-        free = tgt.free_bytes()
-    except OSError:
-        free = None
-    budget = free - library._ADD_HEADROOM if free is not None else None
-    batch = library.batch_bytes(pending)
-    space_fit = len(pending) if budget is None or batch <= budget \
-        else _prefix_fit(pending, budget)
-    limit = library._db_size_limit()
-    new_tracks = [t for _, t in pending]
-    projected = library._projected_db_size(lib, new_tracks)
-    if limit and projected > limit:
-        db_fit = library._fit_count(lib, new_tracks, limit)
-    else:
-        db_fit = len(pending)
-    fingerprint = hashlib.sha256(repr(
+def _fingerprint(lib, new_tracks):
+    return hashlib.sha256(repr(
         (len(lib.tracks), sorted(track_key(t) for t in lib.tracks),
          [track_key(t) for t in new_tracks])).encode()).hexdigest()
-    plan = AddPlan(
-        files=len(paths), new=[dict(track_dict(t), path=p) for p, t in pending],
-        duplicates=dups, unreadable=unreadable, failed=failed,
-        warnings=warnings, batch_bytes=batch, free_bytes=free, budget=budget,
-        space_fit=space_fit,
-        db={"limit": limit or None, "projected": projected, "fit": db_fit},
-        fits=min(space_fit, db_fit), fits_all=min(space_fit, db_fit) == len(pending),
-        fingerprint=fingerprint, cancelled=bool(cancelled and cancelled()))
-    return lib, pending, plan
 
 
-def plan_add(path, files, progress=None, cancelled=None):
+def plan_add(card, files, progress=None, cancelled=None, report=None,
+             on_duplicate=None, lib=None, expand_dirs=True, assess=True):
     """What :func:`add` would do with ``files`` (paths and/or directories),
     without writing anything. AddPlan fields:
 
@@ -681,23 +728,125 @@ def plan_add(path, files, progress=None, cancelled=None):
       (track dicts + ``path``), in order; ``duplicates``: paths already on
       the card; ``unreadable``: messages for files that aren't usable audio
       (``failed`` has their paths); ``warnings``
-    * ``batch_bytes``, ``free_bytes``, ``budget`` (free minus headroom)
+    * ``batch_bytes``, ``free_bytes`` (None if unknown; ``free_error`` says
+      why), ``budget`` (free minus headroom)
     * ``space_fit``: how many of ``new`` (in order) fit the free space
     * ``db``: ``limit`` (bytes, None if disabled), ``projected`` size,
       ``fit`` (how many fit under the limit)
     * ``fits`` = min(space_fit, db fit); ``fits_all``
     * ``fingerprint``: pass the plan to add(plan=...) and it refuses
       (PlanStale) if the card or the selection changed in between.
-    """
-    with _Image(path) as img:
-        return _plan(img.target(), files, progress, cancelled)[2]
+
+    For a frontend that asks its own questions (the CLI): ``report(msg)`` and
+    ``on_duplicate(nr, total, path)`` see each file as it is read (progress
+    stage "tags" announces it); ``lib`` supplies an already-loaded (e.g.
+    just rebuilt) library; ``expand_dirs=False`` takes ``files`` as already
+    expanded; ``assess=False`` leaves out the space/DB arithmetic (the
+    caller decides after trimming). The (path, Track) pairs are kept on the
+    plan for :func:`apply_add` (not in to_dict)."""
+    warnings = []
+    if expand_dirs:
+        paths = expand(files, report=lambda m: (warnings.append(m),
+                                                report and report(m)))
+    else:
+        paths = list(files)
+    if not paths:
+        raise NothingToAdd("no audio files in that selection",
+                           warnings=warnings)
+    unreadable = []
+
+    def unusable(msg):
+        unreadable.append(msg)
+        if report:
+            report(msg)
+    with _open(card) as c:
+        tgt = c.target()
+        if lib is None:
+            lib = _load(tgt)
+        pending, failed, dups = library_mod.read_batch(
+            lib, paths,
+            on_reading=(lambda nr, n, p: progress("tags", nr, n, p))
+            if progress else None,
+            report=unusable, on_duplicate=on_duplicate, cancelled=cancelled)
+        free = free_error = None
+        if pending:
+            try:
+                free = tgt.free_bytes()
+            except OSError as exc:
+                free_error = str(exc)
+    budget = free - library_mod._ADD_HEADROOM if free is not None else None
+    batch = library_mod.batch_bytes(pending)
+    new_tracks = [t for _, t in pending]
+    plan = AddPlan(
+        files=len(paths), new=[dict(track_dict(t), path=p) for p, t in pending],
+        duplicates=dups, unreadable=unreadable, failed=failed,
+        warnings=warnings, batch_bytes=batch, free_bytes=free,
+        free_error=free_error, budget=budget,
+        cancelled=bool(cancelled and cancelled()),
+        _items=pending, _lib=lib)
+    if assess:
+        space_fit = len(pending) if budget is None or batch <= budget \
+            else _prefix_fit(pending, budget)
+        limit, projected, db_fit = library_mod.ceiling(lib, new_tracks) \
+            if pending else (library_mod._db_size_limit(), None, 0)
+        plan.space_fit = space_fit
+        plan.db = {"limit": limit or None, "projected": projected,
+                   "fit": db_fit}
+        plan.fits = min(space_fit, db_fit)
+        plan.fits_all = plan.fits == len(pending)
+        plan.fingerprint = _fingerprint(lib, new_tracks)
+    return plan
+
+
+def apply_add(card, plan, keep=None, save_anyway=False, on_start=None,
+              on_progress=None, on_copied=None, on_failed=None,
+              progress=None, cancelled=None):
+    """Copy ``keep`` (a list of the plan's (path, Track) pairs; default all
+    of them) onto the card and save the database ONCE -- or not at all when
+    nothing was copied, unless ``save_anyway`` (a just-rebuilt library the
+    user accepted). Callbacks as in library.copy_batch; ``progress`` gets
+    stages "copy" (files) and "write" (bytes). Returns an AddReport."""
+    items = plan._items if keep is None else keep
+    lib = plan._lib
+    start = time.monotonic()
+
+    def _start(nr, n, t):
+        if progress:
+            progress("copy", nr, n, t.title)
+        if on_start:
+            on_start(nr, n, t)
+
+    def _progress_for(nr, n, t):
+        if on_progress:
+            return on_progress(nr, n, t)
+        if progress:
+            return lambda done, total: progress("write", done, total, t.title)
+        return None
+    with _open(card, write=True) as c:
+        tgt = c.target()
+        copied, failed = library_mod.copy_batch(
+            lib, items, tgt.copy, on_start=_start, on_progress=_progress_for,
+            on_copied=on_copied, on_failed=on_failed, cancelled=cancelled)
+        if copied or save_anyway:
+            tgt.save_library(lib)
+    return AddReport(
+        added=[track_dict(t) for t in copied], duplicates=plan.duplicates,
+        unreadable=plan.unreadable,
+        failed=[{"path": p, "error": str(e)} for p, e in failed],
+        dropped_space=0, dropped_ceiling=0,
+        cancelled=bool(cancelled and cancelled())
+        and len(copied) + len(failed) < len(items),
+        bytes=sum(t.size or 0 for t in copied),
+        seconds=round(time.monotonic() - start, 3), _copied=copied,
+        _failed=failed)
 
 
 DEFAULT_POLICY = {"full": "stop", "ceiling": "refuse"}
 
 
-def add(path, files, policy=None, plan=None, progress=None, cancelled=None):
-    """Add ``files`` to the card in one database write. ``policy``:
+def add(card, files, policy=None, plan=None, progress=None, cancelled=None):
+    """Add ``files`` to the card in one database write, deciding by
+    ``policy`` where the CLI would ask:
 
     * ``full``: "stop" (default: raise NoSpace if the batch doesn't fit the
       free space) or "fit" (add the leading tracks that fit);
@@ -705,17 +854,18 @@ def add(path, files, policy=None, plan=None, progress=None, cancelled=None):
       limit), "fit" (add the leading tracks under it) or "force" (add all;
       the firmware may then show NO songs).
 
-    With ``plan`` (from plan_add), the batch must still be that plan
-    (PlanStale otherwise). Raises NotInitialized / CorruptLibrary for a card
-    without a usable database. Returns an AddReport: ``added`` (track
-    dicts), ``duplicates``, ``unreadable``, ``failed`` (copy errors),
-    ``dropped_space``, ``dropped_ceiling``, ``cancelled``, ``bytes``,
-    ``seconds``."""
+    The order is the CLI's: trim for space first, then check the database
+    size of what is left. With ``plan`` (from plan_add), the batch must still
+    be that plan (PlanStale otherwise). Raises NotInitialized /
+    CorruptLibrary for a card without a usable database. Returns an
+    AddReport: ``added`` (track dicts), ``duplicates``, ``unreadable``,
+    ``failed`` (copy errors), ``dropped_space``, ``dropped_ceiling``,
+    ``cancelled``, ``bytes``, ``seconds``."""
     pol = dict(DEFAULT_POLICY, **(policy or {}))
     start = time.monotonic()
-    with _Image(path, write=True) as img:
-        tgt = img.target()
-        lib, pending, now = _plan(tgt, files, progress, cancelled)
+    with _open(card, write=True) as c:
+        tgt = c.target()
+        now = plan_add(tgt, files, progress=progress, cancelled=cancelled)
         if now.cancelled:               # during tag reading: nothing written
             return AddReport(added=[], duplicates=now.duplicates,
                              unreadable=now.unreadable, failed=[],
@@ -724,48 +874,31 @@ def add(path, files, policy=None, plan=None, progress=None, cancelled=None):
                              seconds=round(time.monotonic() - start, 3))
         if plan is not None and plan.fingerprint != now.fingerprint:
             raise PlanStale("the card or the selection changed since the plan")
+        items = list(now._items)
         dropped_space = dropped_ceiling = 0
-        take = len(pending)
-        if now.space_fit < take:
+        if now.space_fit < len(items):
             if pol["full"] != "fit":
                 raise NoSpace("the batch needs %d bytes; %d free"
                               % (now.batch_bytes, now.budget or 0),
                               batch_bytes=now.batch_bytes, budget=now.budget,
                               fit=now.space_fit)
-            dropped_space = take - now.space_fit
-            take = now.space_fit
-        if now.db["fit"] < take:
-            if pol["ceiling"] == "refuse" or (pol["ceiling"] == "fit"
-                                              and now.db["fit"] <= 0):
-                raise DbCeiling("the iTunesDB would be %d bytes, past the "
-                                "%d-byte limit" % (now.db["projected"],
-                                                   now.db["limit"]),
-                                **now.db)
-            if pol["ceiling"] == "fit":
-                dropped_ceiling = take - now.db["fit"]
-                take = now.db["fit"]
-        pending = pending[:take]
-
-        def on_start(nr, n, t):
-            if progress:
-                progress("copy", nr, n, t.title)
-
-        def on_progress(nr, n, t):
-            if not progress:
-                return None
-            return lambda done, total: progress("write", done, total, t.title)
-
-        copied, failed = library.copy_batch(
-            lib, pending, lambda p, prog: tgt.copy(p, prog),
-            on_start=on_start, on_progress=on_progress, cancelled=cancelled)
-        if copied:
-            tgt.save_library(lib)
-    return AddReport(
-        added=[track_dict(t) for t in copied], duplicates=now.duplicates,
-        unreadable=now.unreadable,
-        failed=[{"path": p, "error": str(e)} for p, e in failed],
-        dropped_space=dropped_space, dropped_ceiling=dropped_ceiling,
-        cancelled=bool(cancelled and cancelled()) and
-        len(copied) + len(failed) < len(pending),
-        bytes=sum(t.size or 0 for t in copied),
-        seconds=round(time.monotonic() - start, 3))
+            dropped_space = len(items) - now.space_fit
+            items = items[:now.space_fit]
+        if items:
+            limit, projected, fit = library_mod.ceiling(
+                now._lib, [t for _, t in items])
+            if fit < len(items):
+                if pol["ceiling"] == "refuse" or (pol["ceiling"] == "fit"
+                                                  and fit <= 0):
+                    raise DbCeiling("the iTunesDB would be %d bytes, past the "
+                                    "%d-byte limit" % (projected, limit),
+                                    limit=limit, projected=projected, fit=fit)
+                if pol["ceiling"] == "fit":
+                    dropped_ceiling = len(items) - fit
+                    items = items[:fit]
+        rep = apply_add(tgt, now, keep=items, progress=progress,
+                        cancelled=cancelled)
+    rep.dropped_space = dropped_space
+    rep.dropped_ceiling = dropped_ceiling
+    rep.seconds = round(time.monotonic() - start, 3)
+    return rep

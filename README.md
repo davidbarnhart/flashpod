@@ -561,10 +561,11 @@ read-back. Linux only for now.
 
 ## Using flashpod as a library
 
-`flashpod.card` is the same engine as the CLI, for programs that manage card
-**image files** (an iPod emulator's web front end, for one). It never prints,
-prompts, mounts, asks for root or touches a device: every call refuses
-anything but a regular file.
+`flashpod.card` is the engine the CLI itself runs (every `add`, `rm`,
+`init` and `rebuild` goes through it), for programs that manage card **image
+files** (an iPod emulator's web front end, for one). It never prints,
+prompts, mounts, asks for root or touches a device: given a path, every call
+refuses anything but a regular file.
 
 ```python
 from flashpod import card
@@ -580,7 +581,9 @@ card.remove("a.img", ids=[52, 53])
 card.flash_firmware("a.img", "other.ipsw")      # replace the firmware, keep the music
 ```
 
-Also `format_data`, `tracks`, `rebuild`, `firmware_catalog`,
+Also `format_data`, `tracks`, `library`, `rebuild`, `apply_add` (copy a
+chosen subset of a plan), `open_target` (hold an image's lock across several
+calls), `firmware_catalog`,
 `fetch_firmware`, `version()` and `API_VERSION` (major.minor; a major bump
 breaks callers). Results have `to_dict()`; errors are
 `flashpod.errors.FlashpodError` subclasses with a stable `code`. Long calls

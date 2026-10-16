@@ -169,6 +169,11 @@ jobs:
         shell: bash
         run: PYTHONPATH=. python scripts/test_rebuild_dedup.py
 
+      - name: One place for the logic (the CLI runs flashpod.card)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_one_place.py
+
       - name: flashpod burn checks (a file stands in for the card)
         if: runner.os == 'Linux'
         shell: bash

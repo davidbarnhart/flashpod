@@ -186,3 +186,30 @@ def select_for_removal(lib, what):
         raise NoSuchTrack("no track with id %s" % ", ".join(map(str, missing)),
                           reason="missing", missing=missing)
     return [by_id[i] for i in ids]
+
+
+def ceiling(lib, new_tracks):
+    """The iTunesDB size check for adding ``new_tracks`` to ``lib``:
+    ``(limit, projected, fit)``. ``limit`` is 0/None when disabled
+    (FLASHPOD_DB_LIMIT=0); ``fit`` is how many of ``new_tracks`` (in order)
+    stay under it -- all of them when the projection is within the limit."""
+    limit = _db_size_limit()
+    if not limit:
+        # disabled: don't even serialize (it draws random ids, and the CLI's
+        # output has always been reproducible without that draw)
+        return limit, None, len(new_tracks)
+    projected = _projected_db_size(lib, new_tracks)
+    if projected > limit:
+        return limit, projected, _fit_count(lib, new_tracks, limit)
+    return limit, projected, len(new_tracks)
+
+
+def counts(lib):
+    """``(tracks, artists, albums)`` the way `flashpod ls` and card.inspect
+    count them: names case-insensitive, missing ones as "(unknown)", an album
+    being an (artist, album) pair."""
+    from .tracks import orunknown
+    artists = {orunknown(t.artist).casefold() for t in lib.tracks}
+    albums = {(orunknown(t.artist).casefold(), orunknown(t.album).casefold())
+              for t in lib.tracks}
+    return len(lib.tracks), len(artists), len(albums)

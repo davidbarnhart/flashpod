@@ -441,13 +441,15 @@ def write_layout(dev, fw_bytes, total_sectors, dry, do_format, lba48=False,
     plat.wipe_signatures(dev, False)
     plat.invalidate_cached_partitions(dev)
     f = plat.open_raw(dev, "r+b")
-    # zero the leading area (old GPT/MBR region) and the tail (GPT backup),
-    # 2. then the firmware image at the firmware partition's start (sector 63)
-    layout.write_layout_body(f, fw_bytes, total_sectors, data_start)
-    # 3. data filesystem — written BEFORE the MBR so Windows can't see a
-    #    valid partition table and auto-mount the data region mid-write
+    # 2-3. layout.write_card: zero the lead-in (old GPT/MBR region) and the
+    #    tail (GPT backup), the firmware at sector 63, then the data
+    #    filesystem -- all BEFORE the MBR, so Windows can't see a valid
+    #    partition table and auto-mount the data region mid-write. The same
+    #    sequence card.flash runs on an image.
+    done = layout.write_card(f, fw_bytes, total_sectors, lba48,
+                             max_data_sectors, do_format)
     if do_format:
-        format_data(f, dev, data_start, data_blocks)
+        report_format(dev, done["format"])
     # 4. MBR is deferred: written by flash() AFTER the before_eject callback
     #    so the post-flash init can write to the FAT32 without the volume
     #    manager blocking access (no valid MBR = no volume discovery).
@@ -456,20 +458,19 @@ def write_layout(dev, fw_bytes, total_sectors, dry, do_format, lba48=False,
     return f, header, data_start
 
 
-def format_data(f, dev, data_start, data_blocks):
-    """Format the data partition FAT32 in pure Python — no mkfs, no losetup.
-    Writes the filesystem structures straight onto the device at the partition
-    offset, so this is identical on Linux, macOS, and Windows."""
-    try:
-        geo, spc = layout.format_partition(f, data_start, data_blocks)
-    except ValueError as e:
+def report_format(dev, fmt):
+    """Print how layout.write_card's FAT32 format went: ``fmt`` is
+    ``(geometry, sectors_per_cluster)`` or the exception it raised (then the
+    partition was left unformatted, and the flash carries on)."""
+    if isinstance(fmt, ValueError):
         print(color("  %s - skipping data format; the iPod will likely reject "
-                    "the card." % e, C_YEL), file=sys.stderr)
+                    "the card." % fmt, C_YEL), file=sys.stderr)
         return
-    except (OSError, IOError) as e:
+    if isinstance(fmt, (OSError, IOError)):
         print(color("  could not write FAT32 to %s: %s - skipping data format."
-                    % (dev, e), C_YEL), file=sys.stderr)
+                    % (dev, fmt), C_YEL), file=sys.stderr)
         return
+    geo, spc = fmt
     cb = spc * SECTOR                 # small cards get 512-byte clusters,
     size = ("%d KiB" % (cb // 1024)) if cb >= 1024 else ("%d bytes" % cb)
     print(color("  formatted data partition (FAT32, %d clusters @ %s, "   # which read "0 KiB"
@@ -691,8 +692,7 @@ def flash(device=None, firmware=None,
     def commit_mbr():
         """Write the deferred partition table and release the raw handle."""
         if raw_fobj:
-            raw_fobj.seek(0); raw_fobj.write(mbr_header)
-            raw_fobj.flush()
+            layout.write_mbr(raw_fobj, mbr_header)
             raw_fobj.close()
 
     # Where the init hook sits relative to the MBR is per-platform; see

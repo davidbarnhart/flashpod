@@ -124,3 +124,36 @@ def verify_region(f, fw_bytes, start_sector=FW_START):
                                    sector=start_sector + bad // SECTOR,
                                    card=b, image=fw_bytes[bad])
         off += len(chunk)
+
+
+def write_card(f, fw_bytes, total_sectors, lba48=False, max_data_sectors=None,
+               do_format=True):
+    """Write a card's layout into ``f`` -- everything but the MBR: the zeroed
+    lead-in and tail, the firmware, then (``do_format``) the FAT32 data
+    partition. The one sequence both `flashpod flash` (ipod_flash, around its
+    device steps) and card.flash run. The MBR is returned, not written, so
+    the caller commits it last (write_mbr) once the firmware has verified.
+
+    Returns a dict: ``header`` (the MBR sector), ``data_start``,
+    ``data_blocks``, and ``format``: None (not asked), ``(geometry,
+    sectors_per_cluster)``, or the ValueError/OSError the formatter raised
+    (the partition is then left unformatted). Raises ValueError from
+    build_mbr_layout when the card is too small for any data partition."""
+    header, data_start, data_blocks = build_mbr_layout(
+        total_sectors, lba48, max_data_sectors)
+    write_layout_body(f, fw_bytes, total_sectors, data_start)
+    fmt = None
+    if do_format:
+        try:
+            fmt = format_partition(f, data_start, data_blocks)
+        except (ValueError, OSError, IOError) as exc:
+            fmt = exc
+    return {"header": header, "data_start": data_start,
+            "data_blocks": data_blocks, "format": fmt}
+
+
+def write_mbr(f, header):
+    """Commit the partition table: the last write of a flash."""
+    f.seek(0)
+    f.write(header)
+    f.flush()

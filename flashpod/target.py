@@ -49,14 +49,15 @@ def open_image_fat(fileobj):
     the MBR is walked to the FAT partition). Raises NotACard."""
     dev = fatfs.BlockDev(part_start=0, max_xfer=IMAGE_MAX_XFER, fileobj=fileobj)
     start = find_fat_partition(dev.read(0, 1))
-    if start is None:
-        raise NotACard("no FAT32 data partition", reason="no_fat_partition")
-    dev.part_start = start
+    # no FAT partition: try sector 0 anyway, as cli.open_raw_fat does, so the
+    # error is the FAT driver's own ("not a 512-byte-sector FAT volume")
+    dev.part_start = start or 0
     try:
         return fatfs.Fat32(dev)
     except (OSError, ValueError) as exc:
         raise NotACard("couldn't read a FAT filesystem: %s" % exc,
-                       reason="bad_fat")
+                       reason="no_fat_partition" if start is None
+                       else "bad_fat", error=str(exc))
 
 
 class RawTarget:
@@ -205,3 +206,84 @@ class RawTarget:
         OSError if it can't be determined, which the add core treats as 'skip
         the pre-flight, proceed anyway'."""
         return self.fs.free_bytes()
+
+
+class MountTarget(object):
+    """An iPod reached through an OS MOUNT (the kernel's FAT driver): the same
+    operations as :class:`RawTarget`, on a directory. Moved here from the
+    CLI's mount-path commands (cmd_add / cmd_rm / cmd_rebuild / init) so the
+    library drives both backends with one set of operations."""
+
+    def __init__(self, mount):
+        self.mount = mount
+        self.node = mount
+        self.desc = ""
+
+    def _path(self, location):
+        return os.path.join(self.mount, *location.lstrip(":").split(":"))
+
+    # -- library -----------------------------------------------------------
+    def load_library(self):
+        """Parse the iTunesDB. None if there is none (or no such directory);
+        CorruptLibrary if it won't parse; OSError (e.g. EIO) propagates."""
+        try:
+            return itunesdb.load(self.mount)
+        except FileNotFoundError:
+            return None
+        except (ValueError, IndexError, struct.error) as exc:
+            raise CorruptLibrary(str(exc))
+
+    def save_library(self, lib):
+        itunesdb.save(lib, self.mount)
+        # SYNC LESSON (CLAUDE.md): the kernel keeps FAT directory entries and
+        # tables in page cache; without a system-wide sync the iPod can read a
+        # stale filesystem. `add` and `rebuild` always synced; `rm` didn't.
+        if hasattr(os, "sync"):
+            os.sync()
+
+    def music_dir_exists(self):
+        return os.path.isdir(os.path.join(self.mount, "iPod_Control", "Music"))
+
+    def rebuild_library(self, name="iPod", progress=None, report=None):
+        """Rebuild from the track files under Music/F## (their tags), as
+        `flashpod rebuild` over a mount always did. The caller saves."""
+        from .tracks import make_track
+        music = os.path.join(self.mount, "iPod_Control", "Music")
+        files = []
+        for d in sorted(os.listdir(music)):
+            ddir = os.path.join(music, d)
+            if not (d.upper().startswith("F") and os.path.isdir(ddir)):
+                continue
+            for fn in sorted(os.listdir(ddir)):
+                fp = os.path.join(ddir, fn)
+                if os.path.isfile(fp):
+                    files.append((fp, ":".join(["", "iPod_Control", "Music",
+                                                d, fn])))
+        located = []
+        total = len(files)
+        for nr, (fp, location) in enumerate(files, 1):
+            if progress:
+                progress(nr, total, fp)
+            t = make_track(None, fp, nr, total, report=report)
+            if t is not None:
+                located.append((location, t))
+        return _library_from_located(name, located)
+
+    # -- init / add / rm ---------------------------------------------------
+    def init_structure(self, name):
+        itunesdb.init_ipod(self.mount, name)
+
+    def copy(self, src, progress=None, ext=None):
+        return itunesdb.copy_to_ipod(self.mount, src, ext=ext,
+                                     progress=progress)
+
+    def remove_location(self, location):
+        if not location:
+            return
+        path = self._path(location)
+        if os.path.exists(path):
+            os.unlink(path)
+
+    def free_bytes(self):
+        import shutil
+        return shutil.disk_usage(self.mount).free
