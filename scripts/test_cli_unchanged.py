@@ -58,12 +58,18 @@ sys.path.insert(0, os.environ["FP_TREE"])
 random.seed(1234)
 time.time = lambda: 1760000000.0
 time.monotonic = lambda: 1000.0
+# --mount scenarios run on a plain directory: pin its "free space" so the
+# add pre-flight prints the same numbers whatever the host disk holds.
+import shutil
+_free = int(os.environ.get("FP_DISK_FREE", str(10 << 30)))
+shutil.disk_usage = lambda p: shutil._ntuple_diskusage(_free * 2, _free, _free)
 sys.argv = ["flashpod"] + sys.argv[1:]
 from flashpod import cli
 sys.exit(cli.main())
 '''
 
 IMG = "ipod.img"
+MNT = "ipod-mount"
 
 
 # -- scenarios ----------------------------------------------------------------
@@ -225,6 +231,57 @@ SCENARIOS = {
         S("add --raw {img} {big} {music}", write=True,
           pty=[(r"enter add", "\r")], expect="dropped to fit free space"),
     ],
+    # The --mount path (an OS-mounted iPod) on a plain directory: same
+    # commands, the kernel's FAT replaced by the host filesystem.
+    "mount": [
+        {"py": "mkdir"},
+        S("add --mount {mnt} {music}", expect="no iTunesDB"),
+        S("init --mount {mnt} MountPod", write=True, expect="Initialized"),
+        S("ls --mount {mnt}", expect='"MountPod": 0 tracks'),
+        S("add --mount {mnt} {music}", write=True,
+          expect="5 tracks added, 1 failed"),
+        S('add --mount {mnt} "{music}/Alpha Band/First Album/01 Opening.mp3"',
+          expect="already on iPod"),
+        S("ls --mount {mnt} all", expect="Second Song"),
+        S("ls --mount {mnt} artists", expect="3 artists"),
+        S("ls --mount {mnt} albums", expect="4 albums"),
+        S("rm --mount {mnt} 53", write=True, expect="Removed: Alpha Band"),
+        S("rm --mount {mnt} 9999", expect="no track with id"),
+        S("rm --mount {mnt} album later album", write=True),
+        S("rm --mount {mnt} artist beta group", write=True),
+        S("rebuild --mount {mnt}", write=True, expect="Rebuilt the iTunesDB"),
+        S("ls --mount {mnt} all", expect="2 tracks"),
+        S('add --mount {mnt} "{music}/Alpha Band" '
+          '"{music}/Beta Group/Only Album/03 Third.mp3"', write=True,
+          expect="tracks added"),
+        S("rm --mount {mnt} 55 56", write=True, expect="Removed 2 tracks"),
+        S("ls --mount {mnt} all"),
+        S("add --mount {mnt} {big}", env={"FP_DISK_FREE": "20000000"},
+          expect="free"),
+        S('add --mount {mnt} "{music}/Alpha Band" '
+          '"{music}/Beta Group/Only Album/03 Third.mp3"',
+          env={"FLASHPOD_DB_LIMIT": "100"}, expect="already exceeds"),
+        {"py": "corrupt_db"},
+        S("ls --mount {mnt}", expect="failed to read"),
+        S("add --mount {mnt} {music}", expect="failed to read"),
+        S("rm --mount {mnt} 52", expect="failed to read"),
+        S("init --mount {mnt} Again", write=True, expect="Initialized"),
+        S("ls --mount {mnt}", expect='"Again": 0 tracks'),
+    ],
+    "mount_terminal_db": [
+        {"py": "mkdir"},
+        S("init --mount {mnt}", write=True),
+        S("add --mount {mnt} {music}", env={"FLASHPOD_DB_LIMIT": "3000"},
+          write=True, pty=[(r"Add just those\? \[Y/n\] ", "\r")],
+          expect="dropped to fit the database ceiling"),
+    ],
+    "mount_terminal_space": [
+        {"py": "mkdir"},
+        S("init --mount {mnt}", write=True),
+        S("add --mount {mnt} {big} {music}", env={"FP_DISK_FREE": "40000000"},
+          write=True, pty=[(r"enter add", "\r")],
+          expect="dropped to fit free space"),
+    ],
     "wrong_confirm": [
         {"py": "image", "size": 64 << 20},
         S("flash {img} --firmware {fw}",
@@ -236,9 +293,24 @@ SCENARIOS = {
 
 # -- running ------------------------------------------------------------------
 def sha(path):
+    """sha256 of an image file, or of a directory tree (each file's relative
+    path and bytes, in sorted order) for the --mount scenarios."""
     if not os.path.exists(path):
         return "-"
     h = hashlib.sha256()
+    if os.path.isdir(path):
+        for root, dirs, files in os.walk(path):
+            dirs.sort()
+            for fn in sorted(files):
+                full = os.path.join(root, fn)
+                h.update(os.path.relpath(full, path).encode() + b"\0")
+                with open(full, "rb") as f:
+                    h.update(f.read())
+                h.update(b"\0")
+            for d in dirs:
+                h.update(b"D" + os.path.relpath(os.path.join(root, d),
+                                                path).encode() + b"\0")
+        return h.hexdigest()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
@@ -329,6 +401,13 @@ def run_pty(cmd, env, cwd, answers, timeout=120):
     return rc, out.decode("utf-8", "replace") + note, ""
 
 
+def corrupt_db_dir(mnt):
+    """The --mount twin of corrupt_db: break the magic of the DB file."""
+    db = os.path.join(mnt, "iPod_Control", "iTunes", "iTunesDB")
+    with open(db, "r+b") as f:
+        f.write(b"XXXX")
+
+
 def corrupt_db(img):
     """Break the iTunesDB in place so it no longer parses: every "mhbd" magic
     in the data partition (the live DB and any stale freed copy) becomes
@@ -356,9 +435,12 @@ def run_scenario(name, steps, tree, work, fixtures, runner):
         shutil.rmtree(work)
     os.makedirs(os.path.join(work, "home"))
     shutil.copytree(fixtures["music"], os.path.join(work, "music"))
-    ctx = {"img": IMG, "fw": fixtures["fw"], "badfw": fixtures["badfw"],
-           "music": os.path.join(work, "music"), "big": fixtures["big"]}
-    img = os.path.join(work, IMG)
+    ctx = {"img": IMG, "mnt": MNT, "fw": fixtures["fw"],
+           "badfw": fixtures["badfw"], "music": os.path.join(work, "music"),
+           "big": fixtures["big"]}
+    # the target whose bytes each step is judged by: the image, or for the
+    # --mount scenarios the directory standing in for a mounted iPod
+    img = os.path.join(work, MNT if name.startswith("mount") else IMG)
     records = []
     for i, step in enumerate(steps):
         if "py" in step:
@@ -368,7 +450,9 @@ def run_scenario(name, steps, tree, work, fixtures, runner):
                 with open(img, "wb") as f:
                     f.truncate(step["size"])
             elif step["py"] == "corrupt_db":
-                corrupt_db(img)
+                (corrupt_db_dir if os.path.isdir(img) else corrupt_db)(img)
+            elif step["py"] == "mkdir":
+                os.makedirs(img)
             records.append({"step": i, "py": step["py"], "sha": sha(img)})
             continue
         argv = [expand_arg(a, ctx) for a in step["argv"]]
@@ -573,6 +657,12 @@ def main():
             print("BASELINE RUN IS NOT MEANINGFUL:")
             print("\n".join("  " + p for p in problems))
             return 1
+        if opts.self:
+            # the baseline against itself: no named change applies
+            NAMED_REWRITES[:] = []
+            for steps in SCENARIOS.values():
+                for st in steps:
+                    st.pop("intended", None)
         used = set()
         for recs in base.values():
             used |= rewrite_baseline(recs)
