@@ -88,7 +88,7 @@ except ImportError:                     # Windows
     fcntl = None
 
 #: major.minor. A major bump breaks callers; a minor one only adds.
-API_VERSION = "1.0"
+API_VERSION = "1.1"
 
 SECTOR = layout.SECTOR
 DB_PATH = _target.RawTarget.DB
