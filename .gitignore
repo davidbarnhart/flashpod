@@ -12,12 +12,22 @@ venv/
 # Firmware images dropped in for a "heavy" (self-contained) build — they live
 # on the firmware release, not in the repo
 /flashpod/firmware/*.ipsw
+/flashpod/firmware/*.bin.gz
+
+# Local archive of Apple's original firmware distributions (.ipsw, updater
+# apps). The scripts in scripts/ read from here by convention, but it is
+# hundreds of MB of Apple's copyright and is kept outside the repo.
+/historic/
 
 # Compiled libgpod oracle (build from ipodctl.c when needed)
 /ipodctl
 
 # Local Claude Code project instructions (not for the public repo)
 /CLAUDE.md
+
+# Hand-built release tarballs passing through (the 10.8 build gets scp'd
+# here on its way to `gh release upload`)
+/flashpod-macos-*.tar.gz
 
 # Editor / OS junk
 *.swp

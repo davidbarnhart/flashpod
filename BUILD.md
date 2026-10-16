@@ -5,11 +5,12 @@ flashpod ships as a single self-contained executable per OS, built with
 images and the udev rule are bundled inside the binary, so the download is the
 only file a user needs.
 
-## Linux & Windows — automated
+## Linux, Windows & modern macOS — automated
 
 Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the
-Linux and Windows binaries (attached to a GitHub Release) **and publishes the
-pure-Python package to PyPI** (see [Releasing to PyPI](#releasing-to-pypi)):
+Linux, Windows, and modern-macOS (Apple Silicon) binaries (attached to a
+GitHub Release) **and publishes the pure-Python package to PyPI** (see
+[Releasing to PyPI](#releasing-to-pypi)):
 
 ```sh
 git tag v0.1.0
@@ -26,6 +27,11 @@ Artifacts:
 |------|----------|
 | `flashpod-linux-x86_64` | Linux (built on glibc 2.35 / Ubuntu 22.04, runs on that and newer) |
 | `flashpod-windows-x86_64.exe` | Windows 10/11 x86-64 |
+| `flashpod-macos-universal2` | Modern macOS, Intel + Apple Silicon (one fat binary; built with python.org's universal2 Python, both slices smoke-tested in CI) |
+
+The tag must match `__version__` in `flashpod/__init__.py` — **the single
+place the version lives** (pyproject.toml reads it dynamically; the workflow
+refuses a mismatched tag). To cut a release, bump that one line, commit, tag.
 
 ## Releasing to PyPI
 
@@ -53,10 +59,12 @@ the project on PyPI automatically.
 bump the version first):
 
 ```sh
-# 1. bump `version` in pyproject.toml (e.g. 0.1.5 -> 0.1.6) and commit
+# 1. bump `__version__` in flashpod/__init__.py (the ONLY version string;
+#    pyproject.toml reads it dynamically) and commit
 # 2. optionally verify the package builds:
 pip install build twine && python -m build && twine check dist/*
-# 3. tag — this triggers the binaries + the PyPI publish together:
+# 3. tag — this triggers the binaries + the PyPI publish together; the
+#    workflow refuses the tag if it doesn't match __version__:
 git tag v0.1.6 && git push origin v0.1.6
 ```
 
@@ -69,23 +77,40 @@ pyinstaller --clean --noconfirm flashpod.spec
 ```
 
 The result is `dist/flashpod` (`dist/flashpod.exe` on Windows). By default this
-is a **light** build: the firmware `.ipsw` images are *not* inside it; at flash
-time flashpod downloads the chosen one from the firmware release (or you pass
+is a **light** build: the firmware images are *not* inside it; at flash time
+flashpod downloads the chosen one from the firmware release (or you pass
 `--firmware`).
 
 ### Self-contained ("heavy") builds
 
-To bake the firmware into the binary so it never needs the network, just place
-the `.ipsw` files next to the manifest before building — the spec bundles the
-whole `flashpod/firmware/` directory, and at runtime flashpod prefers a bundled
-copy (verified against its SHA-256) over downloading:
+To bake the firmware into the binary so it never needs the network, place the
+image files **the manifest actually references** next to it before building —
+the spec bundles the whole `flashpod/firmware/` directory, and at runtime
+flashpod prefers a bundled copy (verified against its SHA-256) over
+downloading. The manifest references the **`.bin.gz`** assets:
 
 ```sh
-gh release download firmware --dir flashpod/firmware    # the six .ipsw images
+gh release download firmware --pattern '*.bin.gz' --dir flashpod/firmware
 pyinstaller --clean --noconfirm flashpod.spec           # now a heavy build
 ```
 
-(The `.ipsw` files are gitignored, so this doesn't dirty the repo.)
+> **THE STALE-BUNDLE TRAP.** The bundle only works if the filenames match
+> `firmware.json`'s `file` entries exactly — a bundled image the manifest
+> doesn't reference is dead weight, and flashpod falls back to downloading
+> with no error (it can't tell a wrongly-heavy build from a light one). This
+> actually shipped: the manifest moved from `.ipsw` to `.bin.gz` names in
+> 0.2.0, this recipe kept saying `.ipsw`, and every "heavy" build up to
+> v0.3.1 silently bundled six unreferenced files — surfacing as an SSL error
+> on 10.8 Macs when the supposedly-offline binary tried to download. The
+> **dry-run smoke test below is the guard**: it must not print "downloading".
+> When in doubt, list what the manifest wants:
+>
+> ```sh
+> python3 -c "import json; m=json.load(open('flashpod/firmware/firmware.json')); \
+> [print(e['file']) for v in m.values() if isinstance(v,list) for e in v if isinstance(e,dict) and 'file' in e]"
+> ```
+
+(The firmware images are gitignored, so this doesn't dirty the repo.)
 
 ### Lite builds (sync only, no card imaging)
 
@@ -117,7 +142,7 @@ The macOS target is **OS X 10.8 Mountain Lion** — a FireWire-equipped Mac is
 the native environment for these iPods. No GitHub runner or modern Python can
 produce a 10.8-compatible binary, so this one is built **by hand on 10.8
 hardware** and uploaded to the release afterwards. The recipe below is
-battle-tested (it's how `flashpod-macos-10.8` is built).
+battle-tested (it's how `flashpod-macos-vintage-no-internet` is built).
 
 **Build it lite** (`FLASHPOD_FLAVOR=lite`) — see "Lite builds" above. This
 artifact syncs music over FireWire and nothing else; `flash` refuses to run.
@@ -168,12 +193,14 @@ no firmware ships, no network is needed, and the binary is smaller.
    ```sh
    python3.6 - <<'EOF'
    import urllib.request as u
-   u.urlretrieve("https://github.com/davidbarnhart/flashpod/archive/refs/tags/v0.1.4.tar.gz","src.tgz")
+   u.urlretrieve("https://github.com/davidbarnhart/flashpod/archive/refs/tags/v0.4.0.tar.gz","src.tgz")
    EOF
    tar xf src.tgz
    ```
-   …or copy a prepared tree over a network share. A lite build bundles no
-   firmware, so there is nothing else to fetch.
+   …or copy a prepared tree over a network share (SSH works fine into 10.8 —
+   `scp` the source archive from a modern machine; see the legacy-algorithm
+   note in your `~/.ssh/config` if it refuses to connect). A lite build
+   bundles no firmware, so there is nothing else to fetch.
 
 5. **Build and smoke-test.** Note `FLASHPOD_FLAVOR=lite` — without it you get a
    full build that offers a `flash` command this machine shouldn't be used for:
@@ -187,17 +214,17 @@ no firmware ships, no network is needed, and the binary is smaller.
 6. **Package it like the CI builds** — a tarball with the binary, README, and
    license (so it isn't a lone mystery executable on the releases page):
    ```sh
-   stage=flashpod-macos-10.8
+   stage=flashpod-macos-vintage-no-internet
    mkdir -p "$stage"
    cp dist/flashpod "$stage/flashpod" && chmod +x "$stage/flashpod"
    cp packaging/macos/README.txt LICENSE "$stage/"
-   tar czf flashpod-macos-10.8.tar.gz "$stage"
+   tar czf flashpod-macos-vintage-no-internet.tar.gz "$stage"
    ```
 
 7. **Attach it to the release** from any machine with `gh` (gh won't run on
    10.8 — copy the tarball off via a share/USB):
    ```sh
-   gh release upload v0.1.4 flashpod-macos-10.8.tar.gz
+   gh release upload v0.4.0 flashpod-macos-vintage-no-internet.tar.gz
    ```
 
 > If you're forced onto a newer PyInstaller, you'd need a `codesign` no-op

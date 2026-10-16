@@ -19,8 +19,10 @@ the library on the device too — adding and removing songs right on the iPod.
 - **Flash cards:** CompactFlash card, or SD card with a CompactFlash adapter.
 - **Card reader:** USB CompactFlash reader (to flash the card and load the bulk
   of your music).
-- **Operating system:** Linux and macOS (tested). Windows has a backend but
-  isn't tested yet.
+- **Operating system:** Linux, macOS (Intel, Apple Silicon, and vintage
+  OS X 10.8), and Windows — card flashing is hardware-tested on all three.
+  Managing music on the iPod itself is Linux and macOS; on Windows, load the
+  card in the reader.
 
 flashpod was originally written to run from a modern Linux desktop. The
 one-time flashing operation only needs a working USB card reader. For a 3rd- or
@@ -37,9 +39,17 @@ machine with a FireWire card lets flashpod manage a 1st- or 2nd-gen iPod.
 That's not the only option, though. Older Macs shipped with FireWire built in,
 and flashpod was deliberately written with as few external dependencies as
 possible — and against a relatively old Python — to stay runnable on vintage
-Mac hardware. It's been tested on a MacBook running OS X 10.8 so far. Since old
-Macs often can't get online, the macOS release can be copied to a USB drive on
-a modern machine and installed on the MacBook from there.
+Mac hardware. It's been tested on a MacBook running OS X 10.8, listing and
+adding music over FireWire. Since old Macs often can't get online, the
+`flashpod-macos-vintage-no-internet` release is built for exactly that: the
+firmware images are baked in, so you can copy it to a USB drive on a modern
+machine and run it on the vintage Mac with no network at all.
+
+One caveat on the Mac: these iPods' FireWire bridge corrupts the large reads
+macOS uses to mount a volume, so macOS **cannot mount the iPod** and offers to
+initialize it on every attach — always choose **Ignore** ("Initialize" opens
+Disk Utility aimed at your iPod). flashpod is unaffected: it reads the raw
+device directly, so `ls`, `add`, and `rm` all work with the volume unmounted.
 
 ## Loading music
 
@@ -78,20 +88,31 @@ flashpod --help
 **Windows** (`flashpod-windows-x86_64.zip`): unzip it and run `flashpod.exe`
 from a terminal (an Administrator terminal for `flash`).
 
-The **Linux and Windows** builds don't bundle firmware — `flashpod flash`
-downloads the image you pick (verified by checksum), or you supply your own with
-`--firmware`. (The **macOS 10.8** build is different — see below.) Building the
-binaries yourself is documented in [BUILD.md](BUILD.md).
-
-**Vintage Macs (OS X 10.8):** use `flashpod-macos-10.8.tar.gz`. Extract it,
-then make the binary runnable and clear the Gatekeeper quarantine (it's unsigned):
+**Modern Macs — Intel and Apple Silicon** (`flashpod-macos-universal2.tar.gz`):
+one universal binary, macOS picks the right architecture. Needs **macOS 10.13
+or newer**.
 
 ```sh
-tar xzf flashpod-macos-10.8.tar.gz && cd flashpod-macos-10.8
-chmod +x flashpod
-xattr -d com.apple.quarantine flashpod   # or right-click → Open once
+tar xzf flashpod-macos-universal2.tar.gz && cd flashpod-macos-universal2
 ./flashpod --help
 ```
+
+**Vintage Macs (OS X 10.8)** (`flashpod-macos-vintage-no-internet.tar.gz`):
+this is the build for FireWire-era Macs — firmware baked in, no network
+needed — **not** the one for a modern Mac. Extract and run it the same way
+(including the quarantine note above, if macOS refuses):
+
+```sh
+tar xzf flashpod-macos-vintage-no-internet.tar.gz
+cd flashpod-macos-vintage-no-internet
+./flashpod --help
+```
+
+The **Linux, Windows, and modern-macOS** builds don't bundle firmware —
+`flashpod flash` downloads the image you pick (verified by checksum), or you
+supply your own with `--firmware`. (The **Vintage Mac OS 10.8** build is the exception) 
+Building the binaries yourself is documented in [BUILD.md](BUILD.md).
+
 
 ## Typical workflow
 
@@ -100,8 +121,9 @@ over FireWire.** Flash it, then let flashpod initialize the database and load
 your music, all in one sitting:
 
 ```sh
-flashpod flash    # flash firmware + format the card; then answer Y to
-                  # init the database, and Y to load your music onto it
+flashpod flash    # full workflow to partition and format a card,
+                  # write the firmware, init the database, and
+                  # add music all at once
 ```
 
 <details>
@@ -176,7 +198,9 @@ Initialized iPod directory structure on /dev/sdb2
 
 Music can be loaded onto the card now, or later when it is in the iPod.
 Load music onto the card now? [Y/n] Y
-File or directory to add (TAB to complete): /mnt/homestore/sound/mp3/New Order/Technique/
+  (the directory picker opens — Space to select, Enter to confirm)
+Adding 1 selected path:
+  /mnt/homestore/sound/mp3/New Order/Technique/
 flashpod add: this batch is 54.8 MiB. You've got 118.94 GiB more than you need, Dude. That's gnarly!
 [6/9] Adding: Run — New Order... 100% (6.2/6.2 MiB)
 [7/9] Adding: Mr. Disco — New Order... 100% (6.0/6.0 MiB)
@@ -353,7 +377,9 @@ window, are counted in the summary, and don't stop the batch:
 $ flashpod add
 flashpod: add over the iPod's raw device needs root — elevating via sudo...
 Found iPod on /dev/sdb2 (IPOD FireWire 119.1G).
-File or directory to add (TAB to complete): /mnt/homestore/sound/mp3/New Order/Brotherhood/
+  (the directory picker opens — Space to select, Enter to confirm)
+Adding 1 selected path:
+  /mnt/homestore/sound/mp3/New Order/Brotherhood/
 flashpod add: this batch is 51.0 MiB. You've got 118.89 GiB more than you need, Dude. That's gnarly!
 [6/9] Adding: Bizarre Love Triangle — New Order... 100% (6.0/6.0 MiB)
 [7/9] Adding: All Day Long — New Order... 100% (7.2/7.2 MiB)
@@ -362,9 +388,12 @@ flashpod add: this batch is 51.0 MiB. You've got 118.89 GiB more than you need, 
 9 tracks added in 2m38s (51.0 MiB at 330 KiB/s)
 ```
 
-Run with no arguments, `add` finds the iPod itself and prompts for a path (with
-tab completion). Only the last four progress lines stay on screen — tracks 1–5
-scrolled away above.
+Run with no arguments, `add` finds the iPod itself and opens a full-screen
+directory picker starting at your home directory: arrows navigate (Left/Right
+move between directory columns), Space selects files or whole directories,
+Shift+Up/Down sweep-selects (on Windows use `v`, the sweep lock), Enter
+confirms, Esc cancels. Only the last four progress lines stay on screen —
+tracks 1–5 scrolled away above.
 
 </details>
 
@@ -372,6 +401,15 @@ scrolled away above.
 > bridges, not something a setting can fix). For **bulk** loads, pull the card
 > into a USB reader and `add` over the normal mount — USB bypasses the bridge
 > and is far faster. Keep the raw FireWire path for quick incremental edits.
+
+> **Early iPods can't load an arbitrarily large library.** The firmware has a
+> hard budget for the database file: past it the iPod boots normally but shows
+> **zero songs** — no error. Measured on real 1st-gen hardware: the cliff is at
+> ~3.78 MB of iTunesDB (roughly 5,000–5,500 tracks with typical tags; it's the
+> *bytes* that matter, not the track count, so rich tags cost capacity).
+> `flashpod add` projects the database size before copying and offers to trim
+> the batch to what fits. `FLASHPOD_DB_LIMIT=<bytes>` overrides the ceiling
+> (`0` disables the check — e.g. for later models that may load more).
 
 ### `flashpod rm`
 
@@ -483,6 +521,28 @@ card right away, and after that to load music onto it too — answer Y (the
 default) to both and the card comes out of the flash step ready to play. The
 offers are skipped for `--dry-run`, `--no-format`, and non-interactive runs.
 
+### A disk image instead of a card
+
+Every command that takes a device also takes a **regular file**, and treats it
+as a whole card: the same partition table, firmware placement, FAT32 and
+iTunesDB. No root is needed, and the steps that exist only because a card is a
+device — unmounting, wiping signatures, re-reading the partition table,
+flushing caches, ejecting, the FireWire bridge's small transfers — are skipped.
+The file's size is the card's size, so give it one first:
+
+```
+$ truncate -s 1G ipod.img
+$ flashpod flash ipod.img --firmware iPod_1.1.5.ipsw --yes
+$ flashpod init --raw ipod.img
+$ flashpod add  --raw ipod.img ~/Music/*.mp3
+$ flashpod ls   --raw ipod.img
+```
+
+An interactive `flash` of an image offers init and music afterwards, as it does
+for a card. The image is what an iPod emulator boots — openpod's
+`tools/ipod_emu_ui.py` reads one with `OPENPOD_DISK=ipod.img` — and it can be
+written to a real card byte for byte (`dd`), though `flashpod flash` on the
+card itself is the tested way to make one.
 
 ## Notes
 

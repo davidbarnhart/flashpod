@@ -56,8 +56,20 @@ TAIL_RESERVE  = 2048             # sectors left unallocated at the disk end
 C_RED, C_YEL, C_GRN, C_CYN, C_DIM, C_RST = (
     "\033[31m", "\033[33m", "\033[32m", "\033[36m", "\033[2m", "\033[0m")
 
+_ANSI_OK = True
+if sys.platform == "win32":
+    try:
+        import ctypes as _ct
+        _h = _ct.windll.kernel32.GetStdHandle(-12)  # STD_ERROR_HANDLE
+        _m = _ct.c_ulong()
+        _ct.windll.kernel32.GetConsoleMode(_h, _ct.byref(_m))
+        if not _ct.windll.kernel32.SetConsoleMode(_h, _m.value | 0x0004):
+            _ANSI_OK = False
+    except Exception:
+        _ANSI_OK = False
+
 def color(s, c):
-    return c + s + C_RST if sys.stderr.isatty() else s
+    return c + s + C_RST if _ANSI_OK and sys.stderr.isatty() else s
 
 def implausible_capacity(total_sectors):
     """True if the device is larger than an early iPod can address (LBA28 /
@@ -397,10 +409,53 @@ def device_mountpoints(dev):
 # ----------------------------------------------------------------------------
 # Interactive selection + confirmation
 # ----------------------------------------------------------------------------
-def choose_device():
-    cands = list_candidates()
-    if not cands:
-        sys.exit(color("No removable/USB disks found. Plug in the card and retry.", C_RED))
+def pick_device(scan, render, path_of, empty_msg):
+    """Interactive device chooser shared by every platform backend.
+
+    ``scan()`` returns the candidate list (called again on each refresh),
+    ``render(items)`` prints the table, ``path_of(item)`` yields the device path
+    to return — or ``None`` for an entry that exists but can't be written, such
+    as the empty slot of a multi-slot card reader. Rejecting it here is much
+    kinder than letting it through: with no media, every downstream call fails
+    obscurely ("could not determine size", access denied) and reads as a bug.
+
+    The loop accepts 'r' to re-scan. Without it, a reader plugged in — or a card
+    inserted — after the list was drawn stays invisible until you quit and start
+    the whole command over, which is a long way back when you've already picked
+    a model and firmware.
+    """
+    items = scan()
+    if not items:
+        sys.exit(color(empty_msg, C_RED))
+    render(items)
+    while True:
+        try:
+            sel = input(color("Select device number "
+                              "('r' to rescan, 'q' to quit): ", C_CYN)).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print(file=sys.stderr)
+            sys.exit("Aborted.")
+        if sel in ("q", "quit", ""):
+            sys.exit("Aborted.")
+        if sel in ("r", "refresh", "rescan"):
+            items = scan()
+            if not items:
+                print(color("  " + empty_msg, C_YEL), file=sys.stderr)
+            else:
+                render(items)
+            continue
+        if sel.isdigit() and int(sel) < len(items):
+            path = path_of(items[int(sel)])
+            if path:
+                return path
+            print(color("  that slot is empty — insert a card and press 'r' "
+                        "to rescan, or pick another device", C_YEL),
+                  file=sys.stderr)
+            continue
+        print(color("  invalid selection", C_RED), file=sys.stderr)
+
+
+def _render_candidates(cands):
     print(color("\nAttached removable storage:\n", C_CYN), file=sys.stderr)
     # Multi-slot readers expose one /dev/sdX per slot, all with the same
     # identity strings; number the slots so they can be told apart.
@@ -442,13 +497,25 @@ def choose_device():
         if r["warn"]:
             print(color(" " * sub + "⚠ " + r["warn"], C_YEL), file=sys.stderr)
     print(file=sys.stderr)
-    while True:
-        sel = input(color("Select device number (or 'q' to quit): ", C_CYN)).strip()
-        if sel.lower() in ("q", "quit", ""):
-            sys.exit("Aborted.")
-        if sel.isdigit() and int(sel) < len(cands):
-            return "/dev/" + cands[int(sel)]["name"]
-        print(color("  invalid selection", C_RED), file=sys.stderr)
+
+
+def choose_device():
+    return pick_device(
+        list_candidates, _render_candidates,
+        lambda d: ("/dev/" + d["name"]) if int(d.get("size") or 0) else None,
+        "No removable/USB disks found. Plug in the card and retry.")
+
+def device_label(dev):
+    """Short, typeable name for a device, used in the ERASE confirmation.
+
+    Not os.path.basename: on Windows a physical disk is ``\\\\.\\PhysicalDrive2``,
+    which ntpath reads as a UNC drive root with an empty tail, so basename()
+    returns "" and the prompt degrades to a bare `Type "ERASE " to proceed`.
+    Splitting on both separators gives PhysicalDrive2 there and sdb on Linux.
+    """
+    name = dev.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    return name or dev
+
 
 def confirm(dev, total_sectors, assume_yes, lba48=False, max_data_sectors=None):
     _, data_start, data_blocks = build_mbr_layout(total_sectors, lba48, max_data_sectors)
@@ -489,7 +556,7 @@ def confirm(dev, total_sectors, assume_yes, lba48=False, max_data_sectors=None):
     if assume_yes:
         return
     print(file=sys.stderr)
-    want = "ERASE %s" % os.path.basename(dev)
+    want = "ERASE %s" % device_label(dev)
     got = input(color('  Type "%s" to proceed: ' % want, C_RED)).strip()
     if got != want:
         sys.exit("Confirmation did not match. Aborted.")
@@ -543,21 +610,23 @@ def write_layout(dev, fw_bytes, total_sectors, dry, do_format, lba48=False,
     plat = _plat.current()
     # 1. kill any existing partition signatures (MBR/GPT/FAT)
     plat.wipe_signatures(dev, False)
-    with plat.open_raw(dev, "r+b") as f:
-        # zero the leading area (old GPT/MBR region) and the tail (GPT backup)
-        f.seek(0); f.write(b"\x00" * (data_start * SECTOR))
-        f.seek(max(0, total_sectors - 34) * SECTOR); f.write(b"\x00" * (34 * SECTOR))
-        # 2. partition table (MBR)
-        f.seek(0); f.write(header)
-        # 3. firmware image at the firmware partition's start (sector 63)
-        f.seek(FW_START * SECTOR); f.write(fw_bytes)
-        f.flush(); os.fsync(f.fileno())
-    print(color("  wrote MBR partition table + firmware", C_GRN), file=sys.stderr)
-    # 4. data filesystem written straight into the data region
+    plat.invalidate_cached_partitions(dev)
+    f = plat.open_raw(dev, "r+b")
+    # zero the leading area (old GPT/MBR region) and the tail (GPT backup)
+    f.seek(0); f.write(b"\x00" * (data_start * SECTOR))
+    f.seek(max(0, total_sectors - 34) * SECTOR); f.write(b"\x00" * (34 * SECTOR))
+    # 2. firmware image at the firmware partition's start (sector 63)
+    f.seek(FW_START * SECTOR); f.write(fw_bytes)
+    # 3. data filesystem — written BEFORE the MBR so Windows can't see a
+    #    valid partition table and auto-mount the data region mid-write
     if do_format:
-        format_data(dev, data_start, data_blocks)
-    # 5. re-read the partition table so the OS sees the new map.
-    plat.reread_partition_table(dev)
+        format_data(f, dev, data_start, data_blocks)
+    # 4. MBR is deferred: written by flash() AFTER the before_eject callback
+    #    so the post-flash init can write to the FAT32 without the volume
+    #    manager blocking access (no valid MBR = no volume discovery).
+    f.flush()
+    print(color("  wrote MBR partition table + firmware", C_GRN), file=sys.stderr)
+    return f, header, data_start
 
 def fat_sectors_per_cluster(data_blocks):
     """Largest Apple-style cluster size that still yields a VALID FAT32.
@@ -572,14 +641,13 @@ def fat_sectors_per_cluster(data_blocks):
         spc //= 2
     return spc
 
-def format_data(dev, data_start, data_blocks):
+def format_data(f, dev, data_start, data_blocks):
     """Format the data partition FAT32 in pure Python — no mkfs, no losetup.
     Writes the filesystem structures straight onto the device at the partition
     offset, so this is identical on Linux, macOS, and Windows."""
     spc = fat_sectors_per_cluster(data_blocks)
     try:
-        with _plat.current().open_raw(dev, "r+b") as f:
-            geo = fat32.format_fat32(f, data_start, data_blocks, spc, label="IPOD")
+        geo = fat32.format_fat32(f, data_start, data_blocks, spc, label="IPOD")
     except ValueError as e:
         print(color("  %s - skipping data format; the iPod will likely reject "
                     "the card." % e, C_YEL), file=sys.stderr)
@@ -631,10 +699,49 @@ def eject(dev, dry):
     if dry:
         return
     run(["sync"], check=False)
+    # udisks refuses to power off a drive while anything on it is mounted,
+    # and the add/rm mount path (mount preference, 2026-07-28) leaves the
+    # automount in place — so an eject that skips the unmount can NEVER
+    # succeed there, no matter how often it retries (seen live 2026-07-31).
+    # udisksctl unmount is the unprivileged tool for a udisks automount
+    # (plain umount needs root for those); umount covers the rest.
+    for part, mp in device_mountpoints(dev):
+        print(color("  unmounting %s (%s)" % (part, mp), C_DIM),
+              file=sys.stderr)
+        if have("udisksctl"):
+            if run(["udisksctl", "unmount", "--no-user-interaction",
+                    "-b", part], check=False).returncode == 0:
+                continue
+        _run_privileged(["umount", part])
+    # power-off is the unprivileged path, but a 2003-era iPod can ignore the
+    # USB power-off (drive stays enumerated, screen may say "Do not
+    # disconnect"); a SCSI stop via eject(1) is what such devices understand.
+    # eject needs write access to the node, hence the elevation.
     if have("udisksctl"):
-        run(["udisksctl", "power-off", "-b", dev], check=False)
-    elif have("eject"):
-        run(["eject", dev], check=False)
+        if run(["udisksctl", "power-off", "--no-user-interaction",
+                "-b", dev], check=False).returncode == 0:
+            return
+    if have("eject"):
+        _run_privileged(["eject", dev])
+
+def _run_privileged(cmd):
+    """Run ``cmd`` as root, elevating through sudo IN THE TERMINAL.
+
+    The udisksctl calls in eject() pass --no-user-interaction so that when
+    polkit wants an admin (a mount udisks didn't make — our own `sudo mount`
+    fallback, or one left by an earlier sudo run — or a drive it deems
+    non-removable) they fail fast instead of raising the desktop's graphical
+    password dialog. This is where that authorization is asked for instead:
+    a sudo prompt on the terminal flashpod is already running in. With no
+    terminal to prompt at, sudo -n keeps it best-effort rather than hanging."""
+    if getattr(os, "geteuid", lambda: 0)() != 0 and have("sudo"):
+        if sys.stdin.isatty():
+            print(color("  %s needs root — elevating via sudo..." % cmd[0],
+                        C_DIM), file=sys.stderr)
+            cmd = ["sudo"] + cmd
+        else:
+            cmd = ["sudo", "-n"] + cmd
+    return run(cmd, check=False, capture=not sys.stdin.isatty())
 
 # ----------------------------------------------------------------------------
 # Self-test (no root / hardware): round-trip the layout and check fields
@@ -724,9 +831,12 @@ def flash(device=None, firmware=None,
           lba48=False, max_data_gb=None):
     """Flash a card end-to-end; the `ipod flash` entry point.
     Exits via sys.exit() on errors and aborted confirmations.
-    `before_eject(dev)` runs after the firmware verify, while the partition
-    nodes still exist (eject powers the device off) — `flashpod` uses it to
-    offer running init on the fresh card.
+    `before_eject(dev, raw_fobj, data_start)` runs after the firmware verify
+    and before the eject (which powers the device off) — `flashpod` uses it
+    to offer running init on the fresh card. It runs either side of the
+    partition-table commit depending on `Platform.init_before_mbr`: Windows
+    gets the still-open raw handle and no MBR yet, everyone else gets the
+    table already written and re-read, with `raw_fobj`/`data_start` None.
     `max_data_gb` caps the data partition (manifest `max_data_gb` or the
     `--max-data-gb` flag); None means no cap."""
     try:
@@ -749,13 +859,38 @@ def flash(device=None, firmware=None,
 
     total_sectors = plat.device_sectors(dev)
     if total_sectors <= 0:
-        sys.exit(color("could not determine size of %s" % dev, C_RED))
+        sys.exit(color("could not determine size of %s — is a card inserted? "
+                       "An empty slot in a multi-slot reader still appears as "
+                       "a disk, but reports size 0." % dev, C_RED))
     confirm(dev, total_sectors, assume_yes or dry_run, lba48, max_data_sectors)
     plat.unmount_all(dev, dry_run)
-    write_layout(dev, fw, total_sectors, dry_run, do_format, lba48, max_data_sectors)
+    result = write_layout(dev, fw, total_sectors, dry_run, do_format, lba48, max_data_sectors)
     verify_firmware(dev, fw, dry_run)
-    if before_eject and not dry_run:
-        before_eject(dev)
+    raw_fobj, mbr_header, data_start = result if result else (None, None, None)
+    hook = before_eject if (before_eject and not dry_run) else None
+
+    def commit_mbr():
+        """Write the deferred partition table and release the raw handle."""
+        if raw_fobj:
+            raw_fobj.seek(0); raw_fobj.write(mbr_header)
+            raw_fobj.flush()
+            raw_fobj.close()
+
+    # Where the init hook sits relative to the MBR is per-platform; see
+    # Platform.init_before_mbr. Windows must go first, through the still-open
+    # handle, while the disk has no partition table to be discovered. Everyone
+    # else mounts the partition instead and therefore needs it to exist.
+    if hook and plat.init_before_mbr():
+        try:
+            hook(dev, raw_fobj, data_start)
+        finally:
+            commit_mbr()
+        plat.reread_partition_table(dev)
+    else:
+        commit_mbr()
+        plat.reread_partition_table(dev)
+        if hook:
+            hook(dev, None, None)
     plat.eject(dev, dry_run)
     print(color("\nDone. %s is ready — insert it into the iPod." % dev, C_GRN), file=sys.stderr)
     return 0

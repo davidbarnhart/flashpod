@@ -1,21 +1,17 @@
 {
-  "_comment": "Catalog of stock Apple iPod firmware for `flashpod flash`. When no --firmware is given, flashpod offers this list, downloads the chosen image from base_url + file, caches it under ~/.cache/flashpod, and verifies it against sha256. The images are NOT bundled with flashpod (they are Apple's copyright); they are hosted as GitHub release assets. You can always bring your own with `--firmware <file>` (no network). Images ship as .bin.gz -- a gzipped raw Firmware-* image; load_firmware() dispatches on magic bytes, so a raw image or an Apple .ipsw works too if you supply one yourself. Apple ipsw naming was iPod_<family>.<version>.ipsw (family 1 = 1G/2G, 2 = 3G, 4/10 = 4G grayscale, 5 = photo, 11 = color); asset names keep that scheme and append the build date where it is known. build_date CANNOT be recovered from the file at runtime -- git and release downloads both reset mtimes, and the .ipsw zip timestamps are the 2006 repack date, not the build -- so it is recorded here. HARDWARE BOUNDARY: 2nd-generation (touch wheel) support first appeared in family-1 firmware 1.1.2. Anything older (0.0, 0.4) is 1G-ONLY -- the `generation` string is the only guidance the picker gives, so it must not claim 2G for those. We do not currently host 1.1.2 itself. LEGACY: the .ipsw assets remain on the release and are deliberately no longer referenced here; flashpod <= 0.1.7 ships a manifest that points at them, so deleting them would break those installs.",
+  "_comment": "Catalog of stock Apple iPod firmware for `flashpod flash`. When no --firmware is given, flashpod offers this list, downloads the chosen image from base_url + file, caches it under ~/.cache/flashpod, and verifies it against sha256. The images are NOT bundled with flashpod (they are Apple's copyright); they are hosted as GitHub release assets. You can always bring your own with `--firmware <file>` (no network). Images ship as .bin.gz -- a gzipped raw Firmware-* image; load_firmware() dispatches on magic bytes, so a raw image or an Apple .ipsw works too if you supply one yourself. Apple ipsw naming was iPod_<family>.<version>.ipsw (family 1 = 1G/2G, 2 = 3G, 4/10 = 4G grayscale, 5 = photo, 11 = color); asset names keep that scheme, using the version the picker shows rather than the Firmware-* filename's, and append the build date where it is known. Two families differ between the two numbers and scripts/extract_firmware.py maps them in VERSION_OVERRIDES: Firmware-2.2.0.0 is the 3G launch software Apple called 2.0, and the whole photo line counts 4.0/4.1/4.2/4.2.1 in its filenames while Apple's user-facing version is 1.0/1.1/1.2/1.2.1 (catalogues label the launch firmware '1.0 and 4.0', which is the evidence for the pairing). build_date is recorded here so the picker need not parse images at runtime, but it IS recoverable from the bytes: these binaries carry their compiled-in C __DATE__ string ('Nov 01 2001'), which scripts/extract_firmware.py reads. That method is self-verifying -- it reproduces the dates already recorded for 0.0, 0.4, 1.4 and 1.5, two of which were established long before the script existed and have no zip timestamp they could have come from. DO NOT use a .ipsw's zip timestamp as a build date: it is the PACKAGING date and runs a few days late (1.2 was built 2002-07-24 and packaged 2002-07-31; 1.1 and 1.2.2 are off by one and four days). Some circulating copies are also modern repacks whose stamp is the repack -- the 1.0.2 copy says 2025, the 2.2.0.0 copy says 2023. The zip stamp is a fallback only, and anything outside 2001-2007 is discarded either way. WHICH GENERATIONS CARRY A STAMP: families 1 and 2 (1G/2G, 3G) embed 'Bootloader Ui Shell ,Build <date>,<time>' and are exact. Families 4/10 and 5/11 (4G grayscale, photo) embed NOTHING datable -- their only 20xx strings are copyright lines and the PortalPlayer SoC's own 'PP5020AF-...-DT 2003.10.30' identifier, which is the chip, not the build -- so every 4G and photo date here comes from a secondary source and is marked UNVERIFIED in its entry. Family 13 (5G) does carry one, in a different shape: '<builduser> Oct 13 2005 02:42:20'. BEWARE SECONDARY-SOURCE DATES FOR A GENERATION'S FINAL VERSION: Apple's updaters were dated bundles carrying every model's firmware, discontinued models' images unchanged, so catalogues tend to list the last bundle's date as the firmware's. The tell is two generations sharing one date -- 2.3 and 3.1.1 are both listed as 2006-09-12, while 2.3's binary says 2005-02-16. HARDWARE BOUNDARY: 2nd-generation (touch wheel) support first appeared in family-1 firmware 1.2 (Apple's Firmware-1.1.2). Anything older -- 0.0, 0.2, 0.4 and 1.1 -- is 1G-ONLY, and the `generation` string is the only guidance the picker gives, so it must not claim 2G for those. 1.1 is the trap: it is a 2002 release with a modern-looking version number sitting on the wrong side of the line. scripts/extract_firmware.py derives the model list from the version rather than trusting a hand-typed one, so this rule is enforced at packaging time and not just documented here. LEGACY: the .ipsw assets remain on the release and are deliberately no longer referenced here; flashpod <= 0.1.7 ships a manifest that points at them, so deleting them would break those installs.",
   "base_url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware",
-  "_models_comment": "The iPod models flashpod can flash for, oldest first. `flashpod flash` asks which one you have and then offers only firmware whose `models` list includes it -- firmware is NOT interchangeable across models, and the 1G/2G split is the sharp one: 2G (touch wheel) support first appeared in family-1 firmware 1.1.2, so the 2001 images (0.0, 0.4) are 1G-only and would leave a 2G unusable.",
-  "_models_tell": "1G and 2G look identical -- same case, same screen, same four buttons ringing the wheel. The only difference you can check is by hand: the 1G's scroll wheel physically TURNS (it is mechanical), the 2G's does not move at all (touch-sensitive). Since that pair is also the one where a wrong pick matters (0.0 and 0.4 are 1G-only), the labels lead with that tell rather than with the model name.",
+  "_models_comment": "The iPod models flashpod can flash for, oldest first. `flashpod flash` asks which one you have and then offers only firmware whose `models` list includes it -- firmware is NOT interchangeable across models, and the 1G/2G split is the sharp one: 2G (touch wheel) support first appeared in family-1 firmware 1.2, so 0.0, 0.2, 0.4 and 1.1 are 1G-only and would leave a 2G unusable. Note that 1.1 is a 2002 image, so 'the 2001 ones are 1G-only' is NOT the rule -- the rule is 'older than 1.2'.",
+  "_models_tell": "1G and 2G look identical -- same case, same screen, same four buttons ringing the wheel. The only difference you can check is by hand: the 1G's scroll wheel physically TURNS (it is mechanical), the 2G's does not move at all (touch-sensitive). Since that pair is also the one where a wrong pick matters (0.0, 0.2, 0.4 and 1.1 are 1G-only), the labels lead with that tell rather than with the model name.",
   "_max_data_comment": "No firmware here caps the data partition below the 128 GiB LBA28 ceiling (that ceiling binds every one of these images; see --lba48). HARDWARE-TESTED 2026-07-17: firmware 1.0 (0.0) boots a 128 GB card AND plays audio whose clusters land past 14 GB, and 1.0.4 (0.4) boots a 128 GB card -- neither has a low ceiling, so no max_data_gb field is set. (An earlier 0.0 broken-folder that looked like a size limit was an UNINITIALIZED card -- 0.0 does not auto-create iPod_Control, so a flashed-but-not-init'd data partition shows the broken folder regardless of size; run init.) A max_data_gb field (decimal GB) on an entry would clamp its data partition; none is needed today. `flashpod flash --max-data-gb N` can still cap a partition manually.",
-  "_salvage_comment": "The 0.0/0.4 .bin.gz assets are ver=2 REPACKS. The original 2001 distribution files carried their directory at 0x4000 with payloads 0x800 BELOW their absolute devOffset (a logical/mis-packed layout); written verbatim the 1G boot ROM read garbage and broken-foldered. flashpod re-laid the osos/aupd payloads into the hardware-proven format-2 container (dir 0x4000+0x4200, payloads at absolute devOffset from 0x4400), which the 1G boots. build_date/version are unchanged -- same firmware, bootable packaging.",
+  "_provenance_comment": "Where these images came from, recorded because two of them are not obtainable from Apple or from any live download. 0.0 (Apple labelled it 1.0) is the LAUNCH firmware: recovered off a real iPod by the r/ipod community after a search spanning more than a decade (https://www.reddit.com/r/ipod/comments/pd9bqa/after_a_search_going_back_over_a_decade_by/), and that thread's download has since gone dead. Our copy was extracted from a Mac OS 9 1.0.4 firmware PATCHER that someone had rebuilt around the file -- which is also why the salvage repack below is needed: a patcher carries the image in Apple's distribution layout, not the on-card layout a 1G boot ROM can read. If this manifest ever has to be rebuilt, that patcher is the upstream, not an Apple download -- and it is now identifiable rather than merely a dead link. The file is 'iPod Software 1.0.0 Updater (Modified 1.0.4).zip', a Mac OS 9 updater bundle whose Info.plist reads '1.0, Copyright (c) 2001 Apple Computer' over a Mac OS Classic updater binary dated 2002-01-07, obtained from archive.org. It is NOT kept in this repo -- it is Apple's copyright and the wider collection runs to hundreds of MB -- so scripts read it from a local ./historic/ directory that .gitignore excludes. That upstream claim is no longer taken on trust either: running scripts/salvage_format0.py on the patcher's Firmware resource reproduces the shipped iPod_1.0.0 asset BYTE-FOR-BYTE, so the chain from patcher to release asset is now reproducible rather than remembered. ONE 1G VERSION IS STILL MISSING: 0.3 (Apple 1.0.3) has no image anywhere in the archive -- the sequence jumps 1.0.2 to 1.0.4. Its notes, recorded so a future find can be slotted straight in: 255-character filenames, adds Brazilian Portuguese, Danish, Finnish, Norwegian and Swedish. (0.2 was in the same position until its salvage repack landed; it is now a normal entry.)",
+  "_salvage_comment": "The 0.0/0.2/0.4 .bin.gz assets are ver=2 REPACKS (see _provenance_comment for where they came from). The original 2001 distribution files carried their directory at 0x4000 with payloads 0x800 BELOW their absolute devOffset (a logical/mis-packed layout); written verbatim the 1G boot ROM read garbage and broken-foldered. flashpod re-lays the osos/aupd payloads into the hardware-proven format-2 container (dir 0x4000+0x4200, payloads sector-aligned at absolute devOffset from 0x4400), which the 1G boots. build_date/version are unchanged -- same firmware, bootable packaging. This is now scripts/salvage_format0.py rather than a hand edit, and it is verifiable: run it on the format-0 sources of 0.0 and 0.4 and it reproduces both shipped, hardware-confirmed assets BYTE-FOR-BYTE. Two details that only that comparison would have caught -- the u16 at 0x108 must be set to 0x010c (every genuine format-2 AND format-3 image has it; format-0 has 0x0000), and the install-state directory fixups are baked in, unlike every other asset, which ship as pristine Apple bytes and get fixed up at flash time instead. All three repacks are confirmed on real 1G hardware -- 0.0 and 0.4 on 2026-07-17, 0.2 on 2026-07-31 -- so the tool is validated at both ends: it reproduces two known-good images byte-for-byte, and the one image it produced that had no reference to match still boots.",
   "models": [
-    { "id": "1G", "name": "1st generation", "years": "2001-02",
-      "tell": "scroll wheel physically turns" },
-    { "id": "2G", "name": "2nd generation", "years": "2002",
-      "tell": "wheel does not move (touch-sensitive)" },
-    { "id": "3G", "name": "3rd generation", "years": "2003",
-      "tell": "four buttons in a row above the wheel" },
-    { "id": "4G", "name": "4th generation", "years": "2004",
-      "tell": "click wheel, buttons on the wheel, grayscale" },
-    { "id": "photo", "name": "iPod photo", "years": "2004-05",
-      "tell": "click wheel, color display" }
+    { "id": "1G", "name": "1st generation", "years": "2001-02", "tell": "scroll wheel physically turns" },
+    { "id": "2G", "name": "2nd generation", "years": "2002", "tell": "wheel does not move (touch-sensitive)" },
+    { "id": "3G", "name": "3rd generation", "years": "2003", "tell": "four buttons in a row above the wheel" },
+    { "id": "4G", "name": "4th generation", "years": "2004", "tell": "click wheel, buttons on the wheel, grayscale" },
+    { "id": "photo", "name": "iPod photo", "years": "2004-05", "tell": "click wheel, color display" }
   ],
   "firmwares": [
     {
@@ -43,7 +39,88 @@
       ],
       "version": "1.4",
       "build_date": "2004-04-23",
-      "description": "Adds 20+ EQ presets, shuffle by album, track scrubbing, Contacts/Calendar/Clock, Korean and Chinese; iTunes 4.5 compatibility"
+      "description": "Compatibility with iTunes 4.5 and the iTunes Music Store; improved playback performance",
+      "_note": "Previously described as adding EQ presets, shuffle by album, track scrubbing, Contacts/Calendar/Clock and the CJK languages -- all of which are 1.1 and 1.2, inherited from when this list jumped 0.4 -> 1.4. Apple shipped this as 'iPod Update 2004-04-28', a single updater for every model made before that date, and split its notes by hardware. The two items above are the 'iPod without a Dock connector' list, which is what a 1G/2G is. DO NOT add the Apple Lossless Encoder from the other list: that was for dock-connector iPods and the mini only, and claiming it here would promise a codec this hardware never got. Incidentally the build_date below (2004-04-23) sitting five days before Apple's 2004-04-28 release is a small confirmation that the field means build, not release."
+    },
+    {
+      "file": "iPod_1.1.3_2003_04_25.bin.gz",
+      "sha256": "ecf6f63a66fb2a1ac812040b9ebaf452da8234e62eb3a362d030677387958137",
+      "size": 1988288,
+      "generation": "1st/2nd generation (FireWire)",
+      "models": [
+        "1G",
+        "2G"
+      ],
+      "version": "1.3",
+      "build_date": "2003-04-25",
+      "description": "Longer playback time on 1G (scroll-wheel) iPods; longer stand-by time on both. Apple listed these as the changes since 1.2, so they cover everything from 1.2.1 through 1.2.6 as well",
+      "_note": "The last software for iPods without a dock connector. Apple's notes read word-for-word like 1.2.6's because they are headed 'Changes since 1.2' -- cumulative over 1.2.1, 1.2.2 and 1.2.6, the release that actually delivered the battery work. (An earlier guess here that 1.3 was the 3G-launch updater was wrong; 1.3 is the end of the pre-dock-connector line, not the start of the next one.) NO 1.3.1 ENTRY, on Apple's own authority: the 1.3.1 page says 'This updater installs iPod 1.3 software on your iPod', and the archive agrees -- the 1.3 and 1.3.1 images both unwrap to 009395f3\u2026. 1.3.1 was an updater revision (Mac OS X 10.1.2 or newer, opening automatically from iTunes), not a firmware revision, which is why its changes were only ever documented as unknown. Apple's wording also confirms this entry's model list twice over: 'compatible with touch-wheel and scroll-wheel iPods without a dock connector', and 'install if you have an original or second-generation iPod ... with iPod software 1.2.6 or earlier'. Note that updaters are platform-specific but the firmware is not -- 1.3 shipped as a Mac OS 9 updater, a Mac OS X updater and a Windows/MusicMatch one, all installing this image."
+    },
+    {
+      "file": "iPod_1.1.2.6_2003_03_13.bin.gz",
+      "sha256": "c30198bd0130a6193622a6980e0a18b5e93062be64603cd2aca4c44c011fdc81",
+      "size": 1920510,
+      "generation": "1st/2nd generation (FireWire)",
+      "models": [
+        "1G",
+        "2G"
+      ],
+      "version": "1.2.6",
+      "build_date": "2003-03-13",
+      "description": "Longer playback time on 1G (scroll-wheel) iPods; longer stand-by time on both"
+    },
+    {
+      "file": "iPod_1.1.2.2_2002_09_26.bin.gz",
+      "sha256": "e62d3d02222ec3bb53042490c1504edd34bca02c8b6d7fc43d9533956085adcf",
+      "size": 1918738,
+      "generation": "1st/2nd generation (FireWire)",
+      "models": [
+        "1G",
+        "2G"
+      ],
+      "version": "1.2.2",
+      "build_date": "2002-09-26",
+      "description": "Europe-only release: permanently reduces the iPod's maximum sound output to meet European limits. Otherwise the same as 1.2.1",
+      "_note": "A regional variant rather than a step forward: 1.2.6 is what follows 1.2.1 functionally. The volume cap is stated plainly in the description because it is a real functional difference someone would want to know about, but it is stated as a fact, not a recommendation -- these are historic images and choosing one is the user's call."
+    },
+    {
+      "file": "iPod_1.1.2.1_2002_09_06.bin.gz",
+      "sha256": "a3c1a684b858633fd73b1683717355707bb1b332adf601d3b35e0d14b2c648fd",
+      "size": 1918705,
+      "generation": "1st/2nd generation (FireWire)",
+      "models": [
+        "1G",
+        "2G"
+      ],
+      "version": "1.2.1",
+      "build_date": "2002-09-06",
+      "description": "Battery icon now correctly indicates a full charge"
+    },
+    {
+      "file": "iPod_1.1.2_2002_07_24.bin.gz",
+      "sha256": "5f5fafab1ef27082f2f673569019246185e8d3e48c317666dfd0b44ec0ca18ba",
+      "size": 1677802,
+      "generation": "1st/2nd generation (FireWire)",
+      "models": [
+        "1G",
+        "2G"
+      ],
+      "version": "1.2",
+      "build_date": "2002-07-24",
+      "description": "Browse by album and genre; Calendar (iCalendar appointments and alarms); Clock; on-screen feedback showing when the FireWire cable is safe to unplug; Sound Check and Audible audiobooks with iTunes 3 on Mac OS X",
+      "_note": "THE 2G BOUNDARY. The oldest firmware that runs on a 2G, and the build date corroborates it: 2002-07-31 is the 2G's launch month, so this is the firmware that shipped with the hardware. Everything older in this list is 1G-only."
+    },
+    {
+      "file": "iPod_1.1.1_2002_03_15.bin.gz",
+      "sha256": "ae7ac136af836263ae19d864832f536f78b1173aead88ab0a19797f5b743ff5f",
+      "size": 1525404,
+      "generation": "1st generation only (predates 2G support)",
+      "models": [
+        "1G"
+      ],
+      "version": "1.1",
+      "build_date": "2002-03-15",
+      "description": "More than 20 EQ presets and per-song EQ set from iTunes; shuffle by album; track scrubbing from Now Playing; Contacts, holding up to 1000 vCards; Korean, Simplified Chinese and Traditional Chinese"
     },
     {
       "file": "iPod_1.0.4_2001_12_23.bin.gz",
@@ -55,7 +132,21 @@
       ],
       "version": "0.4",
       "build_date": "2001-12-23",
-      "description": "Adds Italian, Dutch, Spanish, Brazilian Portuguese, Danish, Finnish, Norwegian and Swedish; 255-character filenames; fixes low-battery sleep wake and blue-and-white Power Macintosh G3 compatibility"
+      "description": "Fixes compatibility with blue-and-white Power Macintosh G3 systems",
+      "_note": "Was previously described as adding eight languages, 255-character filenames and the low-battery sleep-wake fix. Those are 0.2 (Italian, Dutch, Spanish; the sleep-wake fix) and 0.3 (255-character filenames; Brazilian Portuguese, Danish, Finnish, Norwegian, Swedish). The old text was correct as 'what you gain coming from 0.0', which is what it meant when 0.0 and 0.4 were the only 1G images listed -- but it reads as misattribution now."
+    },
+    {
+      "file": "iPod_1.0.2_2001_11_28.bin.gz",
+      "sha256": "0219800e4e9d10cb0e18ec83418553a341f581976414c70747c200bdf1afa048",
+      "size": 724226,
+      "generation": "1st generation only (predates 2G support)",
+      "models": [
+        "1G"
+      ],
+      "version": "0.2",
+      "build_date": "2001-11-28",
+      "description": "Fixes a rare failure to wake from sleep when the battery is low; adds Italian, Dutch and Spanish",
+      "_note": "A ver=2 SALVAGE REPACK like 0.0 and 0.4, produced by scripts/salvage_format0.py from a format-0 33,554,432-byte full-partition dump (the 32 MiB of padding falls away with the re-lay; no separate trim). HARDWARE-TESTED 2026-07-31: flashed to a card and boots a real 1G. That matters more here than for the other two, because 0.2's source was a 32 MiB full-partition dump rather than a distribution file -- a different shape from the 0.0 and 0.4 sources -- so the re-lay had to find the payloads inside a padded image. It also confirms the layout independently of the byte-for-byte checks: the same code path, run on the format-0 sources of 0.0 and 0.4, reproduces both shipped images exactly. build_date is the image's own compiled-in __DATE__ string, 'Nov 28 2001', which lands between 0.0 (Nov 01) and 0.4 (Dec 23) as it should. Provenance stops at archive.org: this .ipsw was downloaded from there with the rest of the collection, and its own zip stamp (2025-09-20) is that of a modern repack, so who imaged the original iPod is not known and probably not knowable. Unlike 0.0, whose chain back to the Mac OS 9 patcher is reproducible, this one rests on the download plus the fact that it boots."
     },
     {
       "file": "iPod_1.0.0_2001_11_01.bin.gz",
@@ -78,7 +169,59 @@
         "3G"
       ],
       "version": "2.3",
-      "description": "Last stock Apple-released firmware for 3G"
+      "build_date": "2005-02-16",
+      "description": "Adds Shuffle Songs and Music to the main menu; supports iTunes 4.7 and later. Last stock Apple-released firmware for 3G",
+      "_note": "The asset keeps its original undated name. scripts/extract_firmware.py regenerates it as iPod_2.2.3_2005_02_16.bin.gz with an identical sha256, so the bytes are confirmed reproducible; renaming a shipped asset for cosmetics was not worth breaking a live URL over. build_date was recovered from the image's compiled-in __DATE__ after the entry already existed."
+    },
+    {
+      "file": "iPod_2.2.2_2004_04_23.bin.gz",
+      "sha256": "1671753301681b9c7954cafbb7605b05c151c450592351552778111d604649bd",
+      "size": 1938226,
+      "generation": "3rd generation (dock connector)",
+      "models": [
+        "3G"
+      ],
+      "version": "2.2",
+      "build_date": "2004-04-23",
+      "description": "Adds the Apple Lossless Encoder, for compressed encoding at high quality; compatibility with iTunes 4.5 and the iTunes Music Store; improved playback performance",
+      "_note": "Apple shipped this as 'iPod Update 2004-04-28', one updater for every model, with its notes split by hardware; this is the 'iPod with a Dock connector and iPod mini' list. Apple Lossless belongs HERE and deliberately not on 1.4, which is the same release for 1G/2G and did not get it. The binaries agree: 1.4 was built 2004-04-23 16:15:52 and this 84 minutes later at 17:39:59."
+    },
+    {
+      "file": "iPod_2.2.1_2003_10_12.bin.gz",
+      "sha256": "a0968ff426b5d60fa90e15613959aba84f82d0bd21c0775eabdc1c90308ef971",
+      "size": 1921701,
+      "generation": "3rd generation (dock connector)",
+      "models": [
+        "3G"
+      ],
+      "version": "2.1",
+      "build_date": "2003-10-12",
+      "description": "Adds Voice Memos (needs a third-party microphone) and digital photo storage (needs a third-party card reader); adds the Music Quiz game; enhanced On-The-Go playlists; improved backlight, battery meter and playback performance"
+    },
+    {
+      "file": "iPod_2.2.0.1_2003_06_15.bin.gz",
+      "sha256": "63c7cd10118070af6c0cda0212e5a032db5e0337e80c71d1c0a279c8b70867e7",
+      "size": 1847081,
+      "generation": "3rd generation (dock connector)",
+      "models": [
+        "3G"
+      ],
+      "version": "2.0.1",
+      "build_date": "2003-06-15",
+      "description": "Fixes left/right channel swapping and artist sorting; better Asian language support; improved mp3 VBR handling, backlight, alarm clock and playback performance; enhanced On-The-Go playlists"
+    },
+    {
+      "file": "iPod_2.2.0_2003_04_19.bin.gz",
+      "sha256": "aadbd8abbe75698c9385f37703b6103ef7a61667174863c1ea92d09c54d5fd62",
+      "size": 1829611,
+      "generation": "3rd generation (dock connector)",
+      "models": [
+        "3G"
+      ],
+      "version": "2.0",
+      "build_date": "2003-04-19",
+      "description": "Initial 3rd generation firmware. 2.0.1 went on to fix eight issues in it, including left/right channel swapping",
+      "_note": "The eight-fixes remark is not in Apple's notes for 2.0 -- it is read off 2.0.1's own notes, which list them, swapped stereo channels among them. Recorded because it is useful context for what the launch build was like, not as a steer away from it. Its zip stamp is a 2023 repack; build_date is the image's compiled-in __DATE__, nine days before the 3G shipped."
     },
     {
       "file": "iPod_4.3.1.1.bin.gz",
@@ -89,7 +232,60 @@
         "4G"
       ],
       "version": "3.1.1",
-      "description": "Last stock Apple-released firmware for 4G grayscale. Apple shipped this as families 4 and 10 (two board revisions) but the firmware image is byte-identical, so one entry covers both"
+      "description": "Bug fixes. Last stock Apple-released firmware for 4G grayscale. Apple shipped this as families 4 and 10 (two board revisions) but the firmware image is byte-identical, so one entry covers both",
+      "_note": "BUILT BETWEEN 2005-06-25 AND 2006-09-12 -- bounded, not known. No build_date field on purpose, so the picker shows nothing rather than a number we cannot stand behind. The lower bound is 3.1, which this succeeds and whose build date is 2005-06-25. The upper bound is 2006-09-12, the date a secondary source gives as this firmware's release -- which it is not: the same source gives the same 2006-09-12 for 3G's 2.3, and 2.3's own binary says it was built 2005-02-16. That date is the last dated iPod Updater bundle still carrying both images forward; Apple's updaters packaged every model's firmware and shipped discontinued models' images unchanged, so it bounds this one from above without dating it. Treat any 'release date' from that source for a generation's FINAL version the same way."
+    },
+    {
+      "file": "iPod_4.3.1.bin.gz",
+      "sha256": "be06ee7f7787cf9a6bf21fd74c3f6c51b3570a206d797e5bff8653b5845557a8",
+      "size": 2939293,
+      "generation": "4th generation (grayscale)",
+      "models": [
+        "4G"
+      ],
+      "version": "3.1",
+      "build_date": "2005-06-25",
+      "description": "Integration with iTunes 4.9 for downloading and listening to podcasts",
+      "_note": "Date is from a secondary source and UNVERIFIED -- 4G images carry no compiled-in build stamp, unlike family 1 and 2. It is consistent, though: iTunes 4.9 was the podcast release in late June 2005, and this slightly precedes it, which fits a build date better than a release date."
+    },
+    {
+      "file": "iPod_4.3.0.2.bin.gz",
+      "sha256": "6d209791a014e8d325882fb0bdd2b4981938dad8abd84e35ae591c3fc1b14375",
+      "size": 2911934,
+      "generation": "4th generation (grayscale)",
+      "models": [
+        "4G"
+      ],
+      "version": "3.0.2",
+      "build_date": "2004-11-18",
+      "description": "Compatibility with iTunes 4.7 and the iTunes Music Store; improved USB 2.0 connectivity",
+      "_note": "Date is from a secondary source and UNVERIFIED; 4G images carry no build stamp. Apple shipped this as families 4 and 10, byte-identical, so one entry covers both."
+    },
+    {
+      "file": "iPod_4.3.0.1.bin.gz",
+      "sha256": "1cb97fb53edf16bae019d94da96e013c077b2e0c7ff5529239c5ddf8ab1581b4",
+      "size": 2857124,
+      "generation": "4th generation (grayscale)",
+      "models": [
+        "4G"
+      ],
+      "version": "3.0.1",
+      "build_date": "2004-07-19",
+      "description": "The revision Apple shipped under the name 'iPod Software 3.0' -- same feature list as 3.0, with no separately published changes",
+      "_note": "A REAL firmware revision, not a repackage, which is why it gets an entry where 1.3.1 did not: osos was recompiled and grew 964 bytes (len 0x32a554 -> 0x32a918, checksum 0x114046e5 -> 0x11421938), the aupd payload changed at the same length, and the internal vers went 0x5000 -> 0x5001. Apple published no notes for the .1; the secondary source lists it among UPDATERS, dated 2004-07-19 (the 4G's announcement day), with notes that simply describe installing 'iPod Software 3.0'. NOT VERIFIED that the July 19 updater carried this exact image -- that is the source's numbering lining up with Apple's internal .1, which is suggestive, not proven. The date carries the same caveat."
+    },
+    {
+      "file": "iPod_4.3.0.bin.gz",
+      "sha256": "5ccad0c05ba71a8eae01b4c286f641a5ba3fc5b6f1919a9d11a497ad3767d315",
+      "size": 2856700,
+      "generation": "4th generation (grayscale)",
+      "models": [
+        "4G"
+      ],
+      "version": "3.0",
+      "build_date": "2004-07-03",
+      "description": "Factory image, built before the 4G was announced; 3.0.1 is the revision that shipped. Apple's notes for 'iPod Software 3.0' cover both: Shuffle Songs from the main menu; multiple On-The-Go playlists, with song deletion; selectable audiobook playback speed; audible click through the headphones; charging over USB; improved playback performance",
+      "_note": "Date is from a secondary source and UNVERIFIED (no build stamp in 4G images), but it is what makes this the factory image: 2004-07-03 is 16 days before the 4G was announced on 2004-07-19, so it cannot have been a public release, and no updater is known to have carried it. The 'factory image' framing is ours, not Apple's. It is there so the difference between this and 3.0.1 is legible -- Apple gave both the same name and the same notes -- not to discourage installing it."
     },
     {
       "file": "iPod_5.1.2.1.bin.gz",
@@ -100,7 +296,48 @@
         "photo"
       ],
       "version": "1.2.1",
-      "description": "Last stock Apple-released firmware for iPod photo and the color-display revision. Apple shipped this as families 5 and 11 but the firmware image is byte-identical, so one entry covers both"
+      "build_date": "2006-01-03",
+      "description": "Bug fixes. Last stock Apple-released firmware for iPod photo and the color-display revision. Apple shipped this as families 5 and 11 but the firmware image is byte-identical, so one entry covers both",
+      "_note": "Date is from a secondary source and UNVERIFIED (no build stamp in photo images). Unlike the other two finals it looks like a real date rather than a bundle artifact: 3.1.1 and 2.3 are both listed as 2006-09-12 by the same source, while this is 2006-01-03, and it falls where it should -- after 1.2's 2005-06-25 and before that September bundle. Treated as good, with the caveat recorded."
+    },
+    {
+      "file": "iPod_5.1.2.bin.gz",
+      "sha256": "dfa1cc54563edccc07fe7f6edaf2059e0143f26578327fa1ec167032d7535319",
+      "size": 3813768,
+      "generation": "4th generation (iPod photo / color display)",
+      "models": [
+        "photo"
+      ],
+      "version": "1.2",
+      "build_date": "2005-06-25",
+      "description": "Integration with iTunes 4.9 for downloading and listening to podcasts",
+      "_note": "Same release as 4G's 3.1: identical notes and identical date, independently sourced, which is the corroboration these two generations need since neither embeds a build stamp. Apple shipped firmware for all models in waves -- the binaries show it where they can be read (1.4 and 2.2 built 84 minutes apart, 1.5 and 2.3 two days apart)."
+    },
+    {
+      "file": "iPod_5.1.1.bin.gz",
+      "sha256": "35af52bb0c185d75c1c08bd385f17f3da8ef7b98ed3cbea3b5261f09cb160733",
+      "size": 3783941,
+      "generation": "4th generation (iPod photo / color display)",
+      "models": [
+        "photo"
+      ],
+      "version": "1.1",
+      "build_date": "2005-03-16",
+      "description": "Adds support for the optional iPod Camera Connector, for importing and viewing photos directly on the iPod; updated slideshow transitions",
+      "_note": "Date is from a secondary source and UNVERIFIED (no build stamp in photo images), but consistent: the Camera Connector was an early-2005 accessory."
+    },
+    {
+      "file": "iPod_5.1.0.bin.gz",
+      "sha256": "4c7d75f9880b037ddc688d739cb465d68f249a1cf518bbeab333bc7fd91f3a12",
+      "size": 3657793,
+      "generation": "4th generation (iPod photo / color display)",
+      "models": [
+        "photo"
+      ],
+      "version": "1.0",
+      "build_date": "2004-10-22",
+      "description": "Initial iPod photo firmware -- the image the device shipped with from the factory",
+      "_note": "Date is from a secondary source and UNVERIFIED (no build stamp in photo images). It sits days before the iPod photo's late-October 2004 announcement, the same shape as 4G's 3.0. It is NOT flagged the way 3.0 is, though: 4G had a 3.0.1 that superseded 3.0 at launch, whereas the photo line runs straight 1.0 -> 1.1, so as far as is known this is what users actually received."
     }
   ]
 }

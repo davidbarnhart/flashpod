@@ -153,6 +153,23 @@ class Platform(object):
         ``dev``; empty if none."""
         raise NotImplementedError
 
+    def partition_node(self, dev, index):
+        """Device node for 1-based partition ``index`` of whole disk ``dev``,
+        or None where the OS exposes no such node.
+
+        Naming is per-OS and NOT interchangeable -- Linux appends ``2`` (or
+        ``p2`` after a trailing digit, e.g. mmcblk0p2) while macOS always
+        appends ``s2``. Building it inline is how the post-flash init offer
+        silently skipped itself on macOS: it looked for /dev/disk3p2, which
+        never exists there."""
+        raise NotImplementedError
+
+    def fat_mount_cmd(self, part, mnt):
+        """argv that mounts the FAT partition ``part`` at ``mnt``, or None if
+        this platform can't. Linux's mount(8) probes the type itself; macOS
+        needs it named (``-t msdos``)."""
+        raise NotImplementedError
+
     def validate_target(self, dev, dry_run):
         """Safety gate before writing: confirm ``dev`` exists, is a whole
         disk (not a partition), and is not the disk backing the running
@@ -173,6 +190,27 @@ class Platform(object):
         """Tell the OS to re-read ``dev``'s partition table after writing."""
         raise NotImplementedError
 
+    def init_before_mbr(self):
+        """True if the post-flash init hook must run BEFORE the partition
+        table is committed.
+
+        The two families want opposite things and cannot be served by one
+        ordering. Windows writes the fresh FAT through the still-open raw
+        handle and must do it while no valid MBR exists, or the volume
+        manager discovers the partition, mounts it, and blocks writes to
+        those sectors. Linux and macOS instead mount the partition, so they
+        need the MBR written and the table re-read first -- with the
+        Windows ordering there is no /dev/sdb2 or /dev/diskNs2 to mount and
+        the hook silently does nothing."""
+        return False
+
+    def invalidate_cached_partitions(self, dev):
+        """After zeroing the partition table, tell the OS to drop cached
+        volume state so raw writes to any sector succeed.  No-op except on
+        Windows where the volume manager blocks writes to sectors claimed
+        by online volumes."""
+        pass
+
     def flush_buffers(self, dev):
         """Flush OS caches for ``dev`` so a subsequent read hits the media."""
         raise NotImplementedError
@@ -181,10 +219,64 @@ class Platform(object):
         """Flush and power off / eject ``dev``."""
         raise NotImplementedError
 
+    def eject_checked(self, dev):
+        """Eject ``dev`` and report the outcome as ``(ok, detail)``.
+
+        Where :meth:`eject` is fire-and-forget, this one answers "is it safe to
+        unplug yet?", so it must not claim a success it hasn't verified. The
+        default drives :meth:`eject` and judges by whether anything is still
+        mounted off the device; a backend whose eject tool explains its refusal
+        (macOS's diskutil names what is holding the volume) should override and
+        pass that message back as ``detail``."""
+        self.eject(dev, False)
+        return (not self.device_mountpoints(dev)), ""
+
     def open_raw(self, dev, mode):
         """Open ``dev`` for raw binary I/O. Default works for real files and
         POSIX device nodes; Windows overrides for ``\\\\.\\PhysicalDriveN``."""
         return open(dev, mode)
+
+    def prepare_raw_write(self, dev):
+        """Make raw WRITES to ``dev`` possible, before the writable handle
+        opens. Windows overrides this to lock/dismount the disk's volumes —
+        the volume manager otherwise denies writes to any sector inside a
+        recognized volume (WinError 5), even a letterless one. Elsewhere:
+        nothing to do."""
+        return
+
+    def raw_part_start_override(self):
+        """LBA the userspace FAT driver must use as the partition start,
+        overriding the MBR walk in :func:`open_raw_fat`. Windows returns this
+        after :meth:`prepare_raw_write` has temporarily cleared the on-disk
+        MBR (so the walk would find nothing). ``None`` means read the MBR
+        normally."""
+        return None
+
+    def finalize_raw_write(self, dev):
+        """Undo whatever :meth:`prepare_raw_write` changed once the raw write
+        is done. Windows overrides this to restore the partition table it
+        temporarily cleared. Elsewhere: nothing to do."""
+        return
+
+    def raw_open_direct(self):
+        """True when the userspace FAT driver should let fatfs.BlockDev open
+        the raw node itself (path mode: os.open, O_DIRECT on block devices,
+        bounce-buffered I/O) instead of wrapping :meth:`open_raw`'s file
+        object.
+
+        Linux overrides this to True: a buffered open() of a Linux block
+        device reads and writes through the page cache, whose readahead and
+        writeback re-batch our capped transfers into exactly the large/queued
+        I/O the gen-1 FireWire bridge corrupts — safe only while the device
+        queue is pinned (the udev rule / per-command auto-pin). O_DIRECT
+        removes that dependency, making the raw path self-sufficiently
+        bridge-safe. macOS gets the same property from the rdisk character
+        device (via open_raw + AlignedRawIO) and Windows from WinHandleIO,
+        so they keep the file-object path. Regression history: PR #54
+        (2026-07-25) rewired open_raw_fat through open_raw()/fileobj for
+        Windows and silently dropped Linux's O_DIRECT — a FireWire add on
+        that build crashed the bridge the next day."""
+        return False
 
     def raw_read_node(self, dev):
         """The device path to open for UNBUFFERED reads of ``dev``. Default is
@@ -193,14 +285,20 @@ class Platform(object):
         the gen-1 FireWire bridge corrupts into zeros)."""
         return dev
 
-    def raw_max_xfer(self):
+    def raw_max_xfer(self, device=None):
         """Safe default transfer size (in 512-byte sectors) for the userspace
         FAT driver, for BOTH reads and writes. 8 = 4 KiB, the Linux-kernel-
-        queue-proven ceiling for the FireWire bridge; macOS overrides this lower
-        (the raw device doesn't honour that queue cap, and only single-sector
-        transfers are proven safe over the bridge). Larger writes don't help
+        queue-proven ceiling for the FireWire bridge; macOS overrides this per
+        transport — lower for FireWire (the raw device doesn't honour that queue
+        cap, and only single-sector transfers are proven safe over the bridge),
+        far higher for USB. Larger writes don't help
         anyway — the bridge is bandwidth-limited. Override via
-        FLASHPOD_RAW_MAX_XFER (e.g. raise it on a USB reader)."""
+        FLASHPOD_RAW_MAX_XFER (e.g. raise it on a USB reader).
+
+        ``device`` lets a backend decide from the transport rather than the OS
+        — the bridge constraint is FireWire's, not the platform's. macOS does
+        this; Linux keeps a flat 8 until the Linux column of the transport
+        matrix is measured on hardware."""
         return 8
 
     # -- sync-path mount detection ----------------------------------------

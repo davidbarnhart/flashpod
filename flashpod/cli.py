@@ -7,7 +7,7 @@ Subcommands:
   flashpod ls artist|album        flat per-artist or per-album track counts
   flashpod add [path1 path2 ...]  add audio files; directories are scanned
                                   recursively (tags read via mutagen);
-                                  with no paths, prompts for one
+                                  with no paths, opens a directory picker
   flashpod rm id [id ...]         remove tracks by id (see `flashpod ls`)
   flashpod rm artist|album <name> remove all tracks by an artist / in an album
   flashpod init [name]            create iPod_Control structure + empty DB
@@ -34,6 +34,7 @@ import subprocess
 import sys
 import textwrap
 import time
+import ssl
 import urllib.error
 import urllib.request
 
@@ -48,6 +49,7 @@ from . import ipod_flash
 from . import itunesdb
 from . import platform
 from . import resources
+from . import __version__
 
 FIRMWARE_MANIFEST = resources.firmware_manifest()
 
@@ -185,6 +187,16 @@ def choose_firmware(manifest, model=None):
 
 
 def _firmware_cache_dir():
+    """Where downloaded firmware is cached.
+
+    `flash` resolves its firmware before elevating (see main()), so the normal
+    path reaches this as the invoking user and caches in their home. Running
+    `sudo flashpod flash` yourself instead does the download as root, which
+    caches somewhere else -- /root/.cache on Linux, and as root-owned files in
+    your own ~/.cache on macOS, where sudo preserves HOME. That path is not a
+    documented way to use flashpod; prefer plain `flashpod flash` and let it
+    elevate itself.
+    """
     base = os.environ.get("XDG_CACHE_HOME") or \
         os.path.join(os.path.expanduser("~"), ".cache")
     return os.path.join(base, "flashpod", "firmware")
@@ -198,10 +210,62 @@ def _sha256(path):
     return h.hexdigest()
 
 
+# Well-known CA bundles, in the order we'd rather find them.
+_CA_BUNDLES = (
+    "/etc/ssl/cert.pem",                    # macOS, FreeBSD
+    "/etc/ssl/certs/ca-certificates.crt",   # Debian, Ubuntu, Alpine
+    "/etc/pki/tls/certs/ca-bundle.crt",     # RHEL, Fedora, CentOS
+    "/etc/ssl/ca-bundle.pem",               # openSUSE
+    "/etc/ssl/certs",                       # a hashed directory, as a last resort
+)
+
+
+def _ca_bundle():
+    """A CA bundle we can actually verify against, or None to use the defaults.
+
+    The frozen builds are the problem this exists for. PyInstaller bundles no
+    certificates, and the ssl module it packages was compiled with the CA path
+    of the BUILD machine baked in -- so on someone else's Mac that path simply
+    does not exist and every HTTPS fetch dies with CERTIFICATE_VERIFY_FAILED
+    (unable to get local issuer certificate). Nothing is wrong with the user's
+    machine or the network; Python is just looking in a directory that was
+    never there.
+
+    Order: honour whatever ssl already resolves to (that covers a normal pip
+    install, and SSL_CERT_FILE, which get_default_verify_paths reflects), then
+    certifi if a build bundled it, then the platform's own store.
+    """
+    paths = ssl.get_default_verify_paths()
+    if (paths.cafile and os.path.exists(paths.cafile)) or \
+       (paths.capath and os.path.isdir(paths.capath)):
+        return None                        # defaults are fine -- don't override
+    try:
+        import certifi                     # not a dependency; used if present
+        where = certifi.where()
+        if os.path.exists(where):
+            return where
+    except Exception:                      # noqa: BLE001 - absent or broken
+        pass
+    for cand in _CA_BUNDLES:
+        if os.path.exists(cand):
+            return cand
+    return None                            # nothing found; let ssl raise
+
+
+def _ssl_context():
+    bundle = _ca_bundle()
+    if bundle and os.path.isdir(bundle):
+        ctx = ssl.create_default_context(capath=bundle)
+    else:
+        ctx = ssl.create_default_context(cafile=bundle)   # None = ssl defaults
+    return ctx
+
+
 def _download(url, dst, total=None):
     """Stream `url` to `dst` with a progress line. Raises on network/IO error."""
     req = urllib.request.Request(url, headers={"User-Agent": "flashpod"})
-    with urllib.request.urlopen(req) as resp, open(dst, "wb") as out:
+    with urllib.request.urlopen(req, context=_ssl_context()) as resp, \
+            open(dst, "wb") as out:
         total = total or int(resp.headers.get("Content-Length") or 0)
         done = 0
         last = 0.0
@@ -235,8 +299,16 @@ def ensure_firmware(entry, base_url):
     # manifest for fully-offline use — e.g. the macOS 10.8 release, where the
     # HTTPS download can't negotiate the TLS that GitHub requires.
     bundled = os.path.join(resources.firmware_dir(), name)
-    if os.path.exists(bundled) and (not want or _sha256(bundled) == want):
-        return bundled
+    if os.path.exists(bundled):
+        if not want or _sha256(bundled) == want:
+            return bundled
+        # Never fall back SILENTLY: on the offline-first heavy build the
+        # fallback download often can't work at all (no CA bundle on 10.8),
+        # so a quiet skip here turns "corrupted bundle" into a baffling
+        # SSL error somewhere else.
+        print(f"flashpod flash: the bundled {name} fails checksum "
+              f"verification (corrupted build?) — ignoring it and trying "
+              f"the cache/download instead.", file=sys.stderr)
 
     dst = os.path.join(_firmware_cache_dir(), name)
     url = entry.get("url") or (base_url.rstrip("/") + "/" + name if base_url else None)
@@ -267,9 +339,17 @@ def ensure_firmware(entry, base_url):
         _download(url, tmp, entry.get("size"))
     except (urllib.error.URLError, OSError) as exc:
         _rm(tmp)
-        print(f"flashpod flash: download failed ({exc}).\n"
-              f"  Download it yourself from {url} and pass it with --firmware.",
-              file=sys.stderr)
+        print(f"flashpod flash: download failed ({exc}).", file=sys.stderr)
+        if "CERTIFICATE_VERIFY" in str(exc):
+            # Say what this actually is: not a broken machine or a bad network,
+            # but a Python that cannot find any CA certificates.
+            print("  That's a certificate-store problem, not a network one — "
+                  "this build of\n  Python has no CA bundle it can find. Point "
+                  "it at your system's:\n"
+                  "    SSL_CERT_FILE=/etc/ssl/cert.pem flashpod flash ...",
+                  file=sys.stderr)
+        print(f"  Or download it yourself from {url} and pass it with "
+              f"--firmware.", file=sys.stderr)
         return None
     if want and _sha256(tmp) != want:
         _rm(tmp)
@@ -305,11 +385,16 @@ def load_library(mount):
     return None
 
 
-def _effective_xfer():
+def _effective_xfer(device=None):
     """The transfer size (in sectors) that will actually be used for reads and
-    writes, after the platform default and the FLASHPOD_RAW_MAX_XFER override."""
+    writes, after the platform default and the FLASHPOD_RAW_MAX_XFER override.
+
+    ``device`` is passed to the backend so it can decide from the transport:
+    the tiny-transfer rule exists for the FireWire bridge, and applying it to a
+    USB iPod costs ~7x on writes for a defect that path doesn't have."""
     plat = platform.current()
-    return max(1, int(os.environ.get("FLASHPOD_RAW_MAX_XFER", plat.raw_max_xfer())))
+    return max(1, int(os.environ.get("FLASHPOD_RAW_MAX_XFER",
+                                     plat.raw_max_xfer(device))))
 
 
 def open_raw_fat(device, writable=False):
@@ -320,13 +405,49 @@ def open_raw_fat(device, writable=False):
     On macOS a /dev/diskN path is mapped to the unbuffered /dev/rdiskN — reading
     the buffered node re-introduces the read-ahead the FireWire bridge corrupts.
     Transfer size (reads and writes) defaults to the platform's safe ceiling
-    (8 sectors on Linux, 1 on macOS where the bridge corrupts anything larger in
-    BOTH directions); FLASHPOD_RAW_MAX_XFER overrides it (raise on a USB reader,
-    which has no bridge)."""
+    (8 sectors on Linux; on macOS by transport — 1 sector over FireWire, where
+    the bridge corrupts anything larger in BOTH directions, 128 over USB, which
+    has no bridge); FLASHPOD_RAW_MAX_XFER overrides it."""
     plat = platform.current()
-    max_xfer = _effective_xfer()
+    max_xfer = _effective_xfer(device)
     node = plat.raw_read_node(device)
-    dev = fatfs.BlockDev(node, part_start=0, max_xfer=max_xfer, writable=writable)
+
+    def _open():
+        if plat.raw_open_direct():
+            # Linux: BlockDev opens the node itself so block devices get
+            # O_DIRECT — a buffered file object here re-introduces the page
+            # cache, whose readahead/writeback re-batching only pinned queue
+            # settings tame (that regression shipped in v0.3.0 and preceded a
+            # bridge crash).
+            return fatfs.BlockDev(node, part_start=0, max_xfer=max_xfer,
+                                  writable=writable)
+        # macOS (rdisk + AlignedRawIO) and Windows (WinHandleIO) wrap their
+        # raw handles in platform-specific file objects instead.
+        mode = "r+b" if writable else "rb"
+        return fatfs.BlockDev(part_start=0, max_xfer=max_xfer,
+                              fileobj=plat.open_raw(node, mode))
+
+    try:
+        dev = _open()
+    except OSError as exc:
+        # macOS re-mounts the volume the instant a raw WRITE handle closes
+        # (DiskArbitration), so the *next* raw command finds the device busy —
+        # `add` then `rm` failed every time, and a manual unmount only survived
+        # one operation. Unmount and retry once; reads are unaffected, so this
+        # never fires for them.
+        if exc.errno != errno.EBUSY or not writable:
+            raise
+        print("flashpod: %s is busy (the OS remounted the volume); "
+              "unmounting it and retrying..." % node, file=sys.stderr)
+        plat.unmount_all(device, False)
+        dev = _open()
+
+    override = plat.raw_part_start_override()
+    if override:
+        # Windows cleared the MBR to release partmgr's claim (prepare_raw_write),
+        # so the walk below would find nothing — it told us the partition LBA.
+        dev.part_start = override
+        return fatfs.Fat32(dev)
     boot = dev.read(0, 1)
     is_fat = boot[82:85] == b"FAT" and boot[510:512] == b"\x55\xaa"
     if not is_fat and boot[510:512] == b"\x55\xaa":
@@ -350,12 +471,72 @@ def _self_cmd():
     return [sys.argv[0]]                            # ./flashpod / installed script
 
 
+def _windows_sudo_mode():
+    """Sudo for Windows state: None if there's no sudo.exe (pre-24H2),
+    else the HKLM\\...\\CurrentVersion\\Sudo "Enabled" DWORD — 0 disabled,
+    1 "In a new window", 2 "With input disabled", 3 "Inline". Only Inline
+    elevates within the current console. A missing/unreadable key means
+    the feature was never enabled: 0."""
+    if shutil.which("sudo") is None:
+        return None
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                             r"SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo")
+        with key:
+            return int(winreg.QueryValueEx(key, "Enabled")[0])
+    except OSError:
+        return 0
+
+
+_WIN_SUDO_WHY = {
+    None: "this Windows has no `sudo` (it ships with Windows 11 24H2+)",
+    0: "Windows sudo is disabled",
+    1: 'Windows sudo is in "In a new window" mode — the elevated flashpod '
+       "would run in a separate console that closes when it exits",
+    2: 'Windows sudo is in "With input disabled" mode — flashpod\'s '
+       "interactive prompts couldn't read the keyboard",
+}
+
+
+def _windows_elevation_help(extra):
+    why = _WIN_SUDO_WHY.get(_windows_sudo_mode(),
+                            "Windows sudo is in an unrecognized mode")
+    rerun = " ".join(_self_cmd() + extra)
+    print(f"flashpod: can't self-elevate — {why}.\n"
+          "  Either run flashpod from an Administrator console:\n"
+          '    Win+X -> "Terminal (Admin)"  (or right-click PowerShell ->\n'
+          '    "Run as administrator"), then:\n'
+          f"      {rerun}\n"
+          "  or enable inline sudo once (Settings > System > For developers\n"
+          '    > enable "sudo", mode "Inline"; from an Administrator\n'
+          "    console: `sudo config --enable normal`) — after that,\n"
+          "  flashpod elevates itself.", file=sys.stderr)
+
+
 def _sudo_reexec(extra):
     """Re-exec this same flashpod under sudo with ``extra`` args appended
     (prompting for the password on a terminal). REPLACES the process and never
-    returns on success; returns only if it can't elevate (non-tty / no sudo)."""
-    if os.name == "nt" or not sys.stdin.isatty():
-        return                                     # can't prompt — caller handles it
+    returns on success; returns only if it can't elevate (non-tty / no sudo /
+    Windows sudo absent-disabled-or-not-Inline — with printed guidance)."""
+    if not sys.stdin.isatty():
+        return
+    if os.name == "nt":
+        # Windows 11 24H2+ ships sudo.exe.  In "Inline" mode it elevates
+        # within the same console, preserving interactive prompts — unlike
+        # ShellExecute "runas" which opens a detached window.  The
+        # environment is inherited, so no env/PYTHONPATH dance needed.
+        # Any other mode (or no/disabled sudo): don't run it — a disabled
+        # stub exits with only Microsoft's one-liner, and the window modes
+        # break interactivity. Say what to do instead.
+        if _windows_sudo_mode() == 3:
+            cmd = ["sudo"] + _self_cmd() + extra
+            try:
+                sys.exit(subprocess.call(cmd))
+            except OSError:
+                pass                               # sudo.exe vanished — fall through
+        _windows_elevation_help(extra)
+        return
     # sudo resets the environment, so the FLASHPOD_* tuning knobs the user set
     # would be lost across elevation. Re-assert them in the child via `env`.
     passthru = ["%s=%s" % (k, v) for k, v in sorted(os.environ.items())
@@ -506,7 +687,8 @@ class RawTarget:
         if audio is None:
             return None
         return _track_from_audio(
-            audio, os.path.splitext(os.path.basename(relpath))[0], fh.size)
+            audio, os.path.splitext(os.path.basename(relpath))[0], fh.size,
+            os.path.splitext(relpath)[1])
 
     def rebuild_library(self, name="iPod", progress=None, report=None):
         """Reconstruct the library from the track files already on the card:
@@ -565,14 +747,23 @@ class RawTarget:
             raise OSError("no Music/F## directories (run init first?)")
         fdir = random.choice(fdirs)
         ext = (ext or os.path.splitext(src)[1] or ".mp3").lower()
+        timing = os.environ.get("FLASHPOD_TIMING")
+        t0 = time.monotonic()
         while True:
             name = "fp%06d%s" % (random.randrange(10 ** 6), ext)
             dst = "%s/%s/%s" % (music, fdir, name)
             if not self.fs.exists(dst):
                 break
+        t_setup = time.monotonic()
         with open(src, "rb") as f:
             data = f.read()
+        t_read = time.monotonic()
         self.fs.write_file(dst, data, progress=progress)
+        if timing:
+            print("[timing] %s: setup %.2fs  source-read %.2fs  "
+                  "card-write %.2fs"
+                  % (os.path.basename(src), t_setup - t0, t_read - t_setup,
+                     time.monotonic() - t_read), file=sys.stderr)
         return ":".join(["", "iPod_Control", "Music", fdir, name])
 
     # -- rm ----------------------------------------------------------------
@@ -593,6 +784,22 @@ class RawTarget:
 
 def open_raw_target(device, writable=True):
     """Open `device` as a writable RawTarget, or print why and return None."""
+    # Pin the FireWire queue for the SESSION — not for our own I/O, which is
+    # O_DIRECT and safe at any settings (proven: ls and rm both ran clean at
+    # kernel defaults). It's for what happens AFTER: closing a writable
+    # handle on a block device makes udev re-probe it with big BUFFERED
+    # reads, and at default settings that probe alone collapsed the bridge
+    # to 0 capacity right after a successful `rm` (2026-07-27). The raw path
+    # runs as root, so the pin is silent; no-op off Linux / off FireWire.
+    if not ensure_firewire_disk_safe(device):
+        print(f"flashpod: couldn't pin safe FireWire I/O settings for "
+              f"{device}; the kernel may probe it unsafely after writes.",
+              file=sys.stderr)
+    if writable:
+        # Windows: lock/dismount the disk's volumes BEFORE the writable
+        # handle opens, or every data write inside the partition is denied
+        # (WinError 5) by the volume manager. No-op elsewhere.
+        platform.current().prepare_raw_write(device)
     try:
         fs = open_raw_fat(device, writable=writable)
     except PermissionError:
@@ -684,7 +891,17 @@ def first(tags, key):
     return str(val) if val else None
 
 
-AUDIO_EXTS = {".mp3", ".m4a", ".m4b", ".aac", ".wav", ".aif", ".aiff"}
+AUDIO_EXTS = {".mp3", ".m4a", ".m4b", ".aac", ".wav", ".aif", ".aiff", ".flac"}
+
+# Formats that need something other than flashpod's historical defaults. Only
+# FLAC is listed: every other extension keeps the filetype string and mhit
+# marker it has always been given, because existing libraries were built with
+# them. See itunesdb.MARKER_MP3.
+#
+# `.flac` presents to the 1G firmware as "fla": its extension lookup is
+# strrchr('.') then strncpy(..., 3), so the type is exactly three characters and
+# `.fla` and `.flac` are the same file to it (openpod wiki 20.8.0).
+FORMATS = {".flac": ("FLAC audio file", itunesdb.MARKER_FLAC)}
 
 # Test hook: point at a fake mounts table.
 MOUNTS_FILE = os.environ.get("FLASHPOD_MOUNTS_FILE", "/proc/mounts")
@@ -700,6 +917,19 @@ def candidate_mounts():
     for dev, mnt, fstype in platform.current().mounted_filesystems():
         ft = fstype.lower()
         if not ("fat" in ft or "msdos" in ft or "hfs" in ft):
+            continue
+        if dev.startswith("/dev/") and not os.path.exists(dev):
+            # The backing device vanished (iPod unplugged or crashed while
+            # mounted) — the mount is a stale handle that EIOs on touch.
+            # Filtering it HERE keeps it out of every chooser; without this,
+            # a replugged iPod (now on a new sdX) got offered NEXT TO its own
+            # corpse, and picking the corpse failed only at the point of use
+            # (seen live 2026-07-31). Say why, so the missing entry isn't
+            # mysterious. (Non-/dev/ sources — Windows drive letters — are
+            # left alone; the at-use staleness check still covers them.)
+            print(f"flashpod: ignoring {mnt} — stale mount, its device "
+                  f"({dev}) is gone (sudo umount -l {mnt} to clean up).",
+                  file=sys.stderr)
             continue
         score = 0
         if os.path.isdir(os.path.join(mnt, "iPod_Control")):
@@ -798,6 +1028,19 @@ def mount_device(dev, label=None):
     unresponsive (a real failure mode on this machine — the FireWire iPod can
     leave it timing out), falls back to `sudo mount`, which prompts for the
     password on a terminal."""
+    # A FireWire iPod must have its queue pinned BEFORE mounting: the mount
+    # itself is big buffered kernel reads, and at default settings those are
+    # what crash the bridge. (Learned the hard way: mount-then-pin left the
+    # bridge EIO'ing before the pin ever ran.)
+    if not ensure_firewire_disk_safe(dev):
+        disk = _disk_of_dev(dev)
+        print(f"flashpod: {dev} is a FireWire iPod and its host I/O settings "
+              f"could not be made safe — refusing to mount it (mounting reads "
+              f"big and can crash the bridge). Pin them and retry:\n"
+              f"  sudo sh -c 'echo 4 >/sys/block/{disk}/queue/max_sectors_kb; "
+              f"echo 0 >/sys/block/{disk}/queue/read_ahead_kb'",
+              file=sys.stderr)
+        return None
     res = None
     try:
         res = subprocess.run(["udisksctl", "mount", "-b", dev],
@@ -893,7 +1136,8 @@ def _attached_ipod_count():
         return None
     n = 0
     for d in data.get("blockdevices", []):
-        if d.get("type") != "disk":
+        # "rbc" too: early iPods are SCSI RBC devices over FireWire/SBP-2
+        if d.get("type") not in ("disk", "rbc"):
             continue
         ident = (" ".join(str(d.get(k) or "") for k in ("vendor", "model"))).lower()
         labels = " ".join((c.get("label") or "") for c in (d.get("children") or [])).upper()
@@ -953,30 +1197,30 @@ def offer_mount(announce_empty=True):
     return None
 
 
-def firewire_queue_problem(mount):
-    """Early iPod FireWire bridges crash on large or queued reads; the
+def _disk_of_dev(dev):
+    """Whole-disk name for a partition or disk node: /dev/sdb2 -> sdb,
+    /dev/nvme0n1p2 -> nvme0n1, /dev/sdb -> sdb."""
+    name = os.path.basename(dev)
+    stripped = re.sub(r"p?\d+$", "", name)
+    # nvme0n1 / mmcblk0 / loop0 ARE whole disks; only strip when the result
+    # still names a real disk (sdb2 -> sdb). Best answered by sysfs.
+    if stripped and os.path.isdir("/sys/block/" + stripped):
+        return stripped
+    return name
+
+
+def firewire_disk_problem(disk):
+    """Early iPod FireWire bridges crash on large or queued transfers; the
     kernel's default block-queue settings are therefore data-eating for
     them, and they reset on every re-attach.
-    If `mount` is backed by a FireWire disk with unsafe settings, return
+    If /dev/<disk> is a FireWire disk with unsafe settings, return
     (disk, [problems]); otherwise None."""
-    dev = None
     try:
-        f = open(MOUNTS_FILE)
-    except OSError:  # no /proc/mounts (macOS) -> no Linux queue to pin
+        res = subprocess.run(["lsblk", "-dno", "TRAN", "/dev/" + disk],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             universal_newlines=True)
+    except OSError:        # no lsblk (macOS/Windows) -> no Linux queue to pin
         return None
-    with f:
-        for line in f:
-            parts = line.split()
-            if len(parts) >= 2:
-                mnt = re.sub(r"\\([0-7]{3})",
-                             lambda m: chr(int(m.group(1), 8)), parts[1])
-                if mnt == mount:
-                    dev = parts[0]
-    if not dev or not dev.startswith("/dev/"):
-        return None
-    disk = re.sub(r"p?\d+$", "", os.path.basename(dev))  # sdb2 -> sdb
-    res = subprocess.run(["lsblk", "-dno", "TRAN", "/dev/" + disk],
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
     if res.returncode != 0 or res.stdout.strip() not in ("sbp", "ieee1394"):
         return None
     bad = []
@@ -998,13 +1242,51 @@ def firewire_queue_problem(mount):
     return (disk, bad) if bad else None
 
 
+def firewire_queue_problem(mount):
+    """firewire_disk_problem() for the disk backing `mount`; None when the
+    mount isn't backed by a FireWire disk (or there's no /proc/mounts)."""
+    dev = None
+    try:
+        f = open(MOUNTS_FILE)
+    except OSError:  # no /proc/mounts (macOS) -> no Linux queue to pin
+        return None
+    with f:
+        for line in f:
+            parts = line.split()
+            if len(parts) >= 2:
+                mnt = re.sub(r"\\([0-7]{3})",
+                             lambda m: chr(int(m.group(1), 8)), parts[1])
+                if mnt == mount:
+                    dev = parts[0]
+    if not dev or not dev.startswith("/dev/"):
+        return None
+    return firewire_disk_problem(_disk_of_dev(dev))
+
+
+def ensure_firewire_disk_safe(dev):
+    """Pin the queue of the FireWire disk backing `dev` BEFORE it is touched
+    with buffered I/O (an OS mount, most of all — the kernel FAT driver reads
+    big). Returns True when safe to proceed: not a FireWire disk, or pinned
+    (now) successfully. flashpod once mounted first and pinned after; the
+    mount-time reads ran at the data-eating defaults and EIO'd the bridge."""
+    disk = _disk_of_dev(dev)
+    problem = firewire_disk_problem(disk)
+    if not problem:
+        return True
+    pin_firewire_queue(disk)
+    return firewire_disk_problem(disk) is None  # verify, don't trust
+
+
 def pin_firewire_queue(disk):
-    """Write the safe queue settings (root or sudo). queue_depth is
-    best-effort (not writable on every device)."""
+    """Write the safe queue settings (root or sudo). queue_depth is only
+    written when it isn't already 1: some drivers (firewire_sbp2 here)
+    expose it read-only — and `[ -w ]` can't detect that under root, where
+    access(2) says yes but the store-less sysfs attr still refuses. sbp2
+    defaults to depth 1 anyway, which is exactly what we need."""
+    qd = f"/sys/block/{disk}/device/queue_depth"
     script = (f"echo 4 >/sys/block/{disk}/queue/max_sectors_kb && "
               f"echo 0 >/sys/block/{disk}/queue/read_ahead_kb && "
-              f"{{ [ ! -w /sys/block/{disk}/device/queue_depth ] || "
-              f"echo 1 >/sys/block/{disk}/device/queue_depth; }}")
+              f'{{ [ "$(cat {qd} 2>/dev/null)" = "1" ] || echo 1 >{qd}; }}')
     cmd = ["sh", "-c", script]
     if os.geteuid() != 0:
         print(f"flashpod: pinning safe FireWire I/O settings on {disk} "
@@ -1046,7 +1328,8 @@ def firewire_sbp2_needed():
 def _wait_for_firewire_disk(timeout=8.0):
     """After loading sbp2, poll until a FireWire (sbp/ieee1394) block disk shows
     up so the following scan can see it, then let the FAT probe settle so
-    fat_disk_candidates() reports the partition's fstype. Best-effort."""
+    fat_disk_candidates() reports the partition's fstype. Best-effort; returns
+    the disk name (e.g. "sdb") or None."""
     import time
     deadline = time.monotonic() + timeout
     while True:
@@ -1055,13 +1338,16 @@ def _wait_for_firewire_disk(timeout=8.0):
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                  universal_newlines=True, timeout=5).stdout
             for d in json.loads(out).get("blockdevices", []):
-                if d.get("type") == "disk" and d.get("tran") in ("sbp", "ieee1394"):
+                # type "rbc", not "disk": early iPods are SCSI RBC devices
+                # (checking "disk" alone made this wait always time out)
+                if d.get("type") in ("disk", "rbc") \
+                        and d.get("tran") in ("sbp", "ieee1394"):
                     time.sleep(1.0)               # let the partition probe land
-                    return True
+                    return d.get("name")
         except (OSError, ValueError, subprocess.SubprocessError):
             pass
         if time.monotonic() >= deadline:
-            return False
+            return None
         time.sleep(0.4)
 
 
@@ -1090,8 +1376,43 @@ def load_firewire_sbp2():
     except (OSError, KeyboardInterrupt) as exc:
         print(f"flashpod: couldn't load firewire_sbp2 ({exc}).", file=sys.stderr)
         return False
-    _wait_for_firewire_disk()
+    disk = _wait_for_firewire_disk()
+    if disk:
+        # Pin the fresh attach's queue NOW, while the sudo credentials from
+        # the modprobe are still cached — before anything (a mount offer, a
+        # scan, another process) touches the disk with buffered I/O at the
+        # data-eating default settings. Best-effort: the command-level checks
+        # still verify and refuse.
+        ensure_firewire_disk_safe(disk)
     return os.path.isdir("/sys/module/firewire_sbp2")
+
+
+def _hint_if_bridge_collapsed():
+    """After a failed scan: a FireWire disk reporting 0 sectors is the
+    bridge-collapse signature (large/queued buffered I/O wedged it — the
+    device stays on the bus but its capacity reads as zero). Say so, because
+    'none held an iPod database' points at the card when the cure is a
+    replug. Sweeps /sys/block itself rather than the candidate list: 0-byte
+    disks are excluded from candidates precisely because probing them can
+    hang, so the collapsed disk never appears there."""
+    try:
+        names = os.listdir("/sys/block")
+    except OSError:
+        return                               # not Linux
+    for name in names:
+        try:
+            if int(open("/sys/block/%s/size" % name).read()) != 0:
+                continue
+            res = subprocess.run(["lsblk", "-dno", "TRAN", "/dev/" + name],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 universal_newlines=True)
+        except (OSError, ValueError):
+            continue
+        if res.returncode == 0 and res.stdout.strip() in ("sbp", "ieee1394"):
+            print(f"flashpod: /dev/{name} is a FireWire device reporting 0 "
+                  "bytes — its bridge has collapsed (this iPod's bridge does "
+                  "that after large/queued I/O). Unplug the iPod, plug it "
+                  "back in, and retry.", file=sys.stderr)
 
 
 def scan_for_ipod(cands):
@@ -1143,13 +1464,102 @@ def _mounted_devices():
     return devs
 
 
+# A partition suffix on a whole-disk node: Linux "2"/"p2", macOS "s2" (and
+# nested "s5s1" for an APFS volume inside a container). Anything else is a
+# different disk that merely shares the prefix, e.g. sdb vs sdba1.
+_PART_SUFFIX = re.compile(r"^(?:p?\d+|(?:s\d+)+)$")
+
+
+def _block_node(node):
+    """macOS raw char node -> its block node: /dev/rdisk2 -> /dev/disk2.
+
+    Candidates arrive as raw nodes (that's what the FAT driver must open) but
+    the mount table names block nodes, so comparing them directly never
+    matches — which is how a mounted iPod got offered a second time as its own
+    raw device."""
+    base = os.path.basename(node)
+    if base.startswith("rdisk"):
+        return os.path.join(os.path.dirname(node), base[1:])
+    return node
+
+
+def _device_for_mount(mount):
+    """The device node backing a mountpoint, so the post-command eject offer
+    can act on a mounted iPod the same way it does on a raw one."""
+    if not mount:
+        return None
+    want = os.path.realpath(mount)
+    for dev, mnt, _fstype in platform.current().mounted_filesystems():
+        if os.path.realpath(mnt) == want:
+            return dev
+    return None
+
+
+def offer_eject(dev, rc=0):
+    """After a successful add/rm, offer to eject and don't return until that
+    has actually happened.
+
+    Worth asking because the safe moment to unplug is invisible from the
+    outside. Over a mount the OS may still be writing after we're done (macOS
+    indexes an iPod volume by default, uninvited), and on the raw path it
+    remounts the volume the instant our handle closes. "The command finished"
+    and "the card is quiet" are not the same event.
+
+    Skipped when the command failed, for image files, and with no terminal to
+    ask at."""
+    if rc != 0 or not dev or not sys.stdin.isatty():
+        return
+    try:
+        if os.path.isfile(dev):
+            return
+    except OSError:
+        return
+    plat = platform.current()
+    try:
+        ans = input("\nEject the iPod now? [Y/n] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print(file=sys.stderr)
+        return
+    if ans.startswith("n"):
+        print("Left attached — eject it before you unplug, or the OS may still "
+              "have writes in flight.")
+        return
+    detail = ""
+    for attempt in range(3):
+        ok, detail = plat.eject_checked(dev)
+        if ok:
+            print("Ejected — safe to disconnect.")
+            return
+        if attempt < 2:
+            first = detail.splitlines()[0] if detail else ""
+            print("  still busy%s — retrying..." % (": " + first if first else ""))
+            time.sleep(2)
+    first = detail.splitlines()[0] if detail else ""
+    print("flashpod: couldn't eject %s%s. Close anything using the volume, then "
+          "eject it yourself before unplugging."
+          % (dev, " (%s)" % first if first else ""), file=sys.stderr)
+
+
 def _unmounted_disks(disks):
     """Filter fat_disk_candidates() down to the ones NOT currently mounted —
     i.e. attached FAT disks that could be a second, unmounted iPod (the FireWire
-    unit sitting next to a freshly-flashed card in a reader)."""
+    unit sitting next to a freshly-flashed card in a reader). A WHOLE-disk
+    candidate (/dev/sdb — offered when udev couldn't identify its filesystems)
+    counts as mounted when any of its partitions is, so the mounted iPod isn't
+    re-offered as a "second" iPod via its own disk node."""
     mounted = _mounted_devices()
-    return [(node, desc) for node, desc in disks
-            if os.path.realpath(node) not in mounted]
+
+    def is_mounted(node):
+        real = os.path.realpath(_block_node(node))
+        if real in mounted:
+            return True
+        for m in mounted:
+            tail = m[len(real):] if m.startswith(real) else ""
+            if tail and _PART_SUFFIX.match(tail):
+                return True
+        return False
+
+    return [(node, desc) for node, desc in disks if not is_mounted(node)]
 
 
 def _choose_source(sources):
@@ -1286,6 +1696,7 @@ def detect_ls_source(opts):
         for node, desc in disks:
             print(f"  checked {node}" + (f"  ({desc})" if desc else ""),
                   file=sys.stderr)
+        _hint_if_bridge_collapsed()
         return None
     if len(found) == 1:
         node, desc = found[0]
@@ -1325,6 +1736,12 @@ def _cmd_args(opts):
             a.append(opts.device)
         if getattr(opts, "firmware", None):
             a += ["--firmware", opts.firmware]
+        # main() resolves the firmware before elevating and writes the result
+        # back onto opts, so this carries the caller's --max-data-gb AND any
+        # cap the chosen manifest entry set -- the child takes the --firmware
+        # path, where the entry (and its cap) is no longer consulted.
+        if getattr(opts, "max_data_gb", None) is not None:
+            a += ["--max-data-gb", str(opts.max_data_gb)]
         if getattr(opts, "yes", False):
             a.append("--yes")
         if getattr(opts, "no_format", False):
@@ -1352,16 +1769,29 @@ def run_raw(opts, node):
     target = open_raw_target(node, writable=True)
     if not target:
         return 1
-    if cmd == "init":
-        return cmd_init_raw(target, getattr(opts, "name", None) or "iPod")
-    if cmd == "rebuild":
-        return cmd_rebuild_raw(target, getattr(opts, "name", None))
-    if cmd in ("rm", "remove", "delete", "erase"):
-        return cmd_rm_raw(target, opts.what)
-    if cmd == "add":
-        return cmd_add_raw(target, opts.files or [prompt_for_path()])
-    print(f"flashpod: --raw doesn't support `{cmd}`.", file=sys.stderr)
-    return 1
+    try:
+        if cmd == "init":
+            return cmd_init_raw(target, getattr(opts, "name", None) or "iPod")
+        if cmd == "rebuild":
+            return cmd_rebuild_raw(target, getattr(opts, "name", None))
+        if cmd in ("rm", "remove", "delete", "erase"):
+            rc = cmd_rm_raw(target, opts.what)
+        elif cmd == "add":
+            files = opts.files
+            if not files:
+                files = prompt_for_paths(*_raw_db_facts(target))
+            rc = cmd_add_raw(target, files)
+        else:
+            print(f"flashpod: --raw doesn't support `{cmd}`.", file=sys.stderr)
+            return 1
+    finally:
+        # Windows may have cleared the partition table to allow raw writes;
+        # put it back so the OS re-discovers the iPod (no-op elsewhere).
+        platform.current().finalize_raw_write(node)
+    # After the partition table is back, not before — ejecting mid-write would
+    # be the exact hazard this offer exists to prevent.
+    offer_eject(node, rc)
+    return rc
 
 
 def _choose_init_disk(disks):
@@ -1399,6 +1829,100 @@ def _choose_init_disk(disks):
         return None
     return labelled[int(choice)][0] if choice.isdigit() and \
         int(choice) < len(labelled) else None
+
+
+def _is_firewire_disk(dev):
+    """True when the disk backing `dev` sits on FireWire (lsblk TRAN
+    sbp/ieee1394). False on error or off-Linux (no lsblk)."""
+    disk = _disk_of_dev(dev)
+    try:
+        res = subprocess.run(["lsblk", "-dno", "TRAN", "/dev/" + disk],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             universal_newlines=True)
+    except OSError:
+        return False
+    return res.returncode == 0 and res.stdout.strip() in ("sbp", "ieee1394")
+
+
+def _macos_disk_protocol(node):
+    """The bus a macOS disk sits on, from `diskutil info` ("USB",
+    "FireWire", "SATA", "Secure Digital", ...), or None when it can't be
+    determined — callers must treat None as unsafe-to-mount."""
+    disk = re.sub(r"^/dev/r", "/dev/", node)
+    try:
+        res = subprocess.run(["diskutil", "info", disk],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             universal_newlines=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode != 0:
+        return None
+    m = re.search(r"^\s*Protocol:\s*(.+?)\s*$", res.stdout, re.MULTILINE)
+    return m.group(1) if m else None
+
+
+def _macos_mount_ipod(node):
+    """Mount a scanned (non-FireWire) iPod disk on macOS and return the
+    iPod's mountpoint, or None. diskutil mounts the whole disk's volumes;
+    the iPod volume is then re-found via the normal mounted-iPod scan."""
+    disk = re.sub(r"^/dev/r", "/dev/", node)
+    try:
+        res = subprocess.run(["diskutil", "mountDisk", disk],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             universal_newlines=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode != 0:
+        print(f"flashpod: diskutil mountDisk failed: "
+              f"{(res.stderr or res.stdout).strip()}", file=sys.stderr)
+        return None
+    mounts = candidate_mounts()
+    return mounts[0] if mounts else None
+
+
+_RAW_FALLBACK_MSG = (
+    "iPod partition could not be successfully mounted by the operating "
+    "system. flashpod will use the partition in raw mode via its internal "
+    "FAT driver (slower).")
+
+
+def _raw_or_mounted(node, desc):
+    """A scanned iPod on a non-FireWire disk (USB reader, etc.) is better
+    served by the OS's FAT driver: big transfers and page cache, vs the
+    raw path's bridge-safe transfer ceiling (4 KiB on Linux, 1 sector on
+    macOS). Try to mount it and use the mount; fall back to raw when
+    mounting fails. FireWire keeps the raw path — its bridge is the
+    reason the ceiling exists, and an OS mount is the risky route there
+    (big buffered kernel reads).
+
+    Per platform: Linux discriminates FireWire via lsblk (sbp/ieee1394);
+    macOS via `diskutil info` Protocol, treating UNKNOWN as FireWire
+    (never mount what can't be identified — the FireWire iPod is exactly
+    the disk macOS must not probe with buffered reads). Windows never
+    reaches here usefully: lettered FAT volumes are auto-mounted and
+    detection already prefers them; letterless stays raw."""
+    if sys.platform.startswith("linux"):
+        if _is_firewire_disk(node):
+            return ("raw", node)
+        print(f"flashpod: {node} isn't FireWire — mounting it to use the "
+              "kernel's (much faster) FAT driver...", file=sys.stderr)
+        mnt = mount_device(node)
+    elif sys.platform == "darwin":
+        proto = _macos_disk_protocol(node)
+        if proto is None or "firewire" in proto.lower():
+            return ("raw", node)
+        print(f"flashpod: {node} is on {proto}, not FireWire — mounting it "
+              "to use the OS's (much faster) FAT driver...", file=sys.stderr)
+        mnt = _macos_mount_ipod(node)
+    else:
+        # Windows: the volume isn't OS-mounted (no drive letter — often
+        # policy-denied) and flashpod doesn't attempt one; say why raw.
+        print(_RAW_FALLBACK_MSG, file=sys.stderr)
+        return ("raw", node)
+    if mnt:
+        return ("mount", mnt)
+    print(_RAW_FALLBACK_MSG, file=sys.stderr)
+    return ("raw", node)
 
 
 def resolve_raw_target(opts):
@@ -1441,12 +1965,13 @@ def resolve_raw_target(opts):
         print(f"flashpod: scanned {len(disks)} disk(s); none held an iPod "
               "database. For a fresh card, run `flashpod init` first.",
               file=sys.stderr)
+        _hint_if_bridge_collapsed()
         return None
     if len(found) == 1:
         node, desc = found[0]
         print(f"Found iPod on {node}" + (f" ({desc})" if desc else "") + ".",
               file=sys.stderr)
-        return ("raw", node)
+        return _raw_or_mounted(node, desc)
     print("Multiple iPod disks found:")
     for i, (node, desc) in enumerate(found):
         print(f"  [{i}] {node}" + (f"  ({desc})" if desc else ""))
@@ -1456,7 +1981,7 @@ def resolve_raw_target(opts):
         print()
         return None
     idx = int(choice) if choice.isdigit() and int(choice) < len(found) else 0
-    return ("raw", found[idx][0])
+    return _raw_or_mounted(*found[idx])
 
 
 def detect_mount():
@@ -1529,6 +2054,134 @@ def expand(paths):
     return out
 
 
+def _mounted_db_facts(mount):
+    """Best-effort (track_count, db_file_bytes) for the picker's status
+    bar; (None, None) when the DB can't be read."""
+    db = os.path.join(mount, "iPod_Control", "iTunes", "iTunesDB")
+    try:
+        return len(itunesdb.parse(db).tracks), os.path.getsize(db)
+    except Exception:                                       # noqa: BLE001
+        return None, None
+
+
+def _raw_db_facts(target):
+    """Best-effort (track_count, db_file_bytes) over the raw FAT driver."""
+    try:
+        raw = target.fs.read_file("iPod_Control/iTunes/iTunesDB")
+        if raw:
+            return len(itunesdb.parse_bytes(raw).tracks), len(raw)
+    except Exception:                                       # noqa: BLE001
+        pass
+    return None, None
+
+
+def _invoking_home():
+    """The human's home directory, even when flashpod has sudo-elevated
+    itself (HOME is /root there — the picker would open in the wrong
+    place; the post-flash add offer always runs elevated)."""
+    user = os.environ.get("SUDO_USER")
+    if user and os.name != "nt" and os.geteuid() == 0:
+        try:
+            import pwd
+            return pwd.getpwnam(user).pw_dir
+        except (ImportError, KeyError):
+            pass
+    return os.path.expanduser("~")
+
+
+def _count_audio(path):
+    """Audio files `add` would take under ``path`` (file or directory) —
+    the picker's per-selection counter. AppleDouble junk excluded."""
+    def is_audio(name):
+        return (not name.startswith("._")
+                and os.path.splitext(name)[1].lower() in AUDIO_EXTS)
+    if os.path.isfile(path):
+        return 1 if is_audio(os.path.basename(path)) else 0
+    total = 0
+    for _root, _dirs, files in os.walk(path):
+        total += sum(1 for f in files if is_audio(f))
+    return total
+
+
+def _picker_status(existing, db_bytes):
+    """Status-bar closure for the picker: song counts plus an estimated
+    fraction of the firmware DB budget. The estimate prices each new
+    track at the existing library's average DB cost (or a typical ~700
+    bytes when the iPod is empty) — real tags aren't known until add
+    reads them, so the authoritative check stays in the add pre-flight."""
+    limit = _db_size_limit()
+    avg = (db_bytes / existing) if existing and db_bytes else 700.0
+    base = db_bytes or 0
+
+    def status(selected):
+        parts = ["iPod songs: %s" % ("?" if existing is None else
+                                     "{:,}".format(existing)),
+                 "selected: +{:,}".format(selected),
+                 "projected: %s" % ("?" if existing is None else
+                                    "{:,}".format(existing + selected))]
+        alert = False
+        if limit and existing is not None:
+            pct = (base + selected * avg) * 100.0 / limit
+            parts.append("~%d%% of DB budget" % round(pct))
+            alert = pct > 90.0        # red bar: nearly (or actually) over
+        return "  " + "  |  ".join(parts), alert
+    return status
+
+
+def prompt_for_paths(existing=None, db_bytes=None):
+    """`flashpod add` with no paths: open the interactive directory picker
+    (Miller columns, Space selects, Enter confirms) starting at the user's
+    home directory. Falls back to the single-path typed prompt when the
+    picker can't run. Returns a list of paths, or None (caller exits
+    nonzero) on cancel / nothing usable.
+
+    ``existing``/``db_bytes`` (optional): the iPod's current track count
+    and iTunesDB file size, for the picker's pinned status bar."""
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        # The picker takes over the whole screen; pause first so what was
+        # just printed (which device was identified, mount-vs-raw mode)
+        # can actually be read before it disappears. Typing a path here
+        # skips the picker entirely — the old direct workflow, and what
+        # scripted drivers (scripts/simulate_card.py) rely on.
+        try:
+            typed = input("\nPress ENTER to select content to add to the "
+                          "iPod (or type a path): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            print("flashpod add: cancelled", file=sys.stderr)
+            return None
+        if typed:
+            path = os.path.expanduser(typed)
+            if not os.path.exists(path):
+                print(f"flashpod add: no such file or directory: {path}",
+                      file=sys.stderr)
+                return None
+            return [path]
+        try:
+            from .pathpicker import DirectoryPicker
+            picked = DirectoryPicker(
+                _invoking_home(), count=_count_audio,
+                status=_picker_status(existing, db_bytes)).run()
+        except Exception as exc:
+            print(f"flashpod: directory picker failed ({exc}); "
+                  "type a path instead.", file=sys.stderr)
+            path = prompt_for_path()
+            return [path] if path else None
+        if picked is None:
+            print("flashpod add: cancelled", file=sys.stderr)
+            return None
+        if not picked:
+            print("flashpod add: nothing selected", file=sys.stderr)
+            return None
+        print(f"Adding {len(picked)} selected "
+              f"path{'s' if len(picked) != 1 else ''}:")
+        for path in picked:
+            print(f"  {path}")
+        return picked
+    path = prompt_for_path()
+    return [path] if path else None
+
+
 def prompt_for_path():
     """Ask for a file/directory when `flashpod add` is run with no paths.
     Returns None (caller exits nonzero) if we can't get a usable one."""
@@ -1571,6 +2224,122 @@ def fmt_duration(seconds):
     return f"{minutes}m{secs:02d}s" if minutes else f"{secs}s"
 
 
+def _fmt_remaining(sec):
+    """Coarse human phrasing for an ETA — deliberately quantized so tiny
+    estimate changes don't reach the screen."""
+    if sec >= 3600:
+        hours, rest = divmod(int(sec), 3600)
+        minutes = rest // 60
+        return "%d hour%s %d minute%s remaining" % (
+            hours, "s" if hours != 1 else "",
+            minutes, "s" if minutes != 1 else "")
+    if sec >= 120:
+        minutes = int(round(sec / 60.0))
+        if minutes >= 60:                    # 59m30s+ rounds up: say hours
+            return "1 hour 0 minutes remaining"
+        return "%d minutes remaining" % max(2, minutes)
+    if sec >= 45:
+        return "about a minute remaining"
+    return "less than a minute remaining"
+
+
+class EtaEstimator(object):
+    """Stable time-remaining for a batch copy whose total size is known
+    up front (pass 1 gives the whole manifest — the big advantage over a
+    file-manager ETA).
+
+    Three stabilizing layers, each killing a different jump source:
+
+    * The rate is an exponential moving average (memory TAU seconds) of
+      throughput over WALL CLOCK — page-cache bursts, fsync stalls, and
+      per-file gaps all land in the same stream and anything shorter
+      than ~TAU averages out. Real regime changes still flow in.
+    * The DISPLAYED value is a countdown, re-anchored to the model only
+      when the two diverge by >REANCHOR_FRAC or >REANCHOR_ABS seconds
+      AND the divergence has held for PERSIST continuous seconds. Burst/
+      stall cycles breach the band only transiently and never move the
+      display; a genuine correction (early estimate was wrong, the
+      medium slowed for real) lands as ONE step instead of a stair of
+      them — the precise failure mode of the old Windows copy dialog.
+    * No estimate at all during the first WARMUP seconds (better silent
+      than wild), and _fmt_remaining quantizes the phrasing.
+
+    ``clock`` is injectable for tests."""
+
+    WARMUP = 5.0
+    TAU = 60.0
+    REANCHOR_FRAC = 0.15
+    REANCHOR_ABS = 20.0
+    PERSIST = 8.0
+
+    def __init__(self, total_bytes, clock=time.monotonic):
+        self.total = total_bytes
+        self._clock = clock
+        self._start = clock()
+        self._last_t = self._start
+        self._last_done = 0
+        self._done = 0
+        self._rate = None
+        self._anchor_eta = None
+        self._anchor_t = None
+        self._breach_since = None
+        self.reanchors = 0        # observable for tests
+
+    def exclude(self, nbytes):
+        """A file dropped out of the batch (copy failed): shrink the goal."""
+        self.total = max(0, self.total - (nbytes or 0))
+
+    def update(self, done):
+        """Record cumulative batch progress (bytes)."""
+        now = self._clock()
+        dt = now - self._last_t
+        self._done = done
+        if dt <= 0:
+            return
+        inst = max(0.0, (done - self._last_done) / dt)
+        elapsed = now - self._start
+        if elapsed <= self.TAU:
+            # Early on, the cumulative average is the best estimator of the
+            # mean (for burst/stall traffic it's exact after each full
+            # cycle); an EWMA seeded inside a burst starts biased and its
+            # slow correction stair-steps the ETA upward.
+            self._rate = done / elapsed if elapsed > 0 else None
+        else:
+            import math
+            alpha = 1.0 - math.exp(-dt / self.TAU)
+            self._rate += alpha * (inst - self._rate)
+        self._last_t = now
+        self._last_done = done
+
+    def remaining_text(self):
+        """The string to show ('… remaining'), or None (warmup/unknown)."""
+        now = self._clock()
+        if (now - self._start < self.WARMUP or not self._rate
+                or self._rate <= 1e-9 or self.total <= 0):
+            return None
+        raw = max(0.0, (self.total - self._done) / self._rate)
+        if self._anchor_eta is None:
+            self._anchor_eta, self._anchor_t = raw, now
+            self.reanchors += 1
+        shown = max(0.0, self._anchor_eta - (now - self._anchor_t))
+        band = max(self.REANCHOR_FRAC * max(shown, raw), self.REANCHOR_ABS)
+        side = 0 if abs(raw - shown) <= band else (1 if raw > shown else -1)
+        if side == 0:
+            self._breach_since = None
+        elif self._breach_since is None or self._breach_since[0] != side:
+            self._breach_since = (side, now)
+        elif now - self._breach_since[1] >= self.PERSIST:
+            # Upward corrections overshoot slightly, so continued drift in
+            # the same direction settles inside the band instead of
+            # breaching again 30 seconds later (the stair-step effect).
+            self._anchor_eta = raw + 0.4 * band if side > 0 else raw
+            self._anchor_t = now
+            self._breach_since = None
+            self.reanchors += 1
+            shown = self._anchor_eta
+        return _fmt_remaining(shown)
+
+
 def read_audio(path):
     """Open `path` for tag/info reading. MP3s — the common case — skip
     mutagen's format detection, which scores every handler and reads whole
@@ -1601,7 +2370,7 @@ def read_audio_stream(fileobj, ext):
     return mutagen.File(fileobj, easy=True)
 
 
-def _track_from_audio(audio, fallback_title, size):
+def _track_from_audio(audio, fallback_title, size, ext=None):
     """Build an itunesdb.Track from an already-loaded mutagen audio object, a
     fallback title (used when untagged), and the file's byte size. Shared by
     make_track (tags from a path) and the rebuild path (tags from bytes). The
@@ -1613,7 +2382,10 @@ def _track_from_audio(audio, fallback_title, size):
     t.album = first(tags, "album")
     t.genre = first(tags, "genre")
     t.composer = first(tags, "composer")
-    t.filetype = "MPEG audio file"
+    filetype, marker = FORMATS.get((ext or "").lower(),
+                                   ("MPEG audio file", itunesdb.MARKER_MP3))
+    t.filetype = filetype
+    t.marker = marker
     tracknr = first(tags, "tracknumber")
     if tracknr and tracknr.split("/")[0].isdigit():
         t.track_nr = int(tracknr.split("/")[0])
@@ -1622,7 +2394,13 @@ def _track_from_audio(audio, fallback_title, size):
         t.year = int(date[:4])
     info = audio.info
     t.tracklen = int(info.length * 1000)
-    t.bitrate = getattr(info, "bitrate", 0) // 1000
+    # FLAC's StreamInfo carries no bitrate -- it is not a constant of the format
+    # -- so derive the average one rather than report 0, which the iPod shows as
+    # a blank in the track info.
+    bitrate = getattr(info, "bitrate", 0)
+    if not bitrate and info.length:
+        bitrate = int(size * 8 / info.length)
+    t.bitrate = bitrate // 1000
     t.samplerate = getattr(info, "sample_rate", 0)
     t.size = size
     return t
@@ -1660,7 +2438,7 @@ def make_track(lib, path, nr, total, report=None):
     # name). _track_from_audio leaves t.id at its default until committed.
     return _track_from_audio(
         audio, os.path.splitext(os.path.basename(path))[0],
-        os.path.getsize(path))
+        os.path.getsize(path), os.path.splitext(path)[1])
 
 
 def orunknown(s):
@@ -1771,6 +2549,7 @@ class LineWindow:
     def __init__(self, size=4):
         self.lines = collections.deque(maxlen=size)
         self.drawn = 0
+        self.status = None       # sticky footer under the window (ETA etc.)
         self.tty = sys.stdout.isatty()
 
     def _erase(self):
@@ -1783,8 +2562,21 @@ class LineWindow:
         width = shutil.get_terminal_size().columns
         for line in self.lines:
             sys.stdout.write(line[:max(1, width - 1)] + "\n")
-        self.drawn = len(self.lines)
+        if self.status:
+            sys.stdout.write(self.status[:max(1, width - 1)] + "\n")
+        self.drawn = len(self.lines) + (1 if self.status else 0)
         sys.stdout.flush()
+
+    def set_status(self, line):
+        """Set/replace the sticky footer line below the window (None
+        removes it). It never scrolls into history with the add() lines —
+        for live values like the batch ETA, which would otherwise fossilize
+        on every completed line. Progress-only: suppressed on non-tty."""
+        if not self.tty or line == self.status:
+            return
+        self._erase()
+        self.status = line
+        self._draw()
 
     def add(self, line, transient=False):
         """Roll a new line into the window (oldest scrolls off). ``transient``
@@ -1825,6 +2617,7 @@ class LineWindow:
             return
         self._erase()
         self.lines.clear()
+        self.status = None
 
 
 def track_key(t):
@@ -1841,7 +2634,8 @@ def cmd_add(mount, paths):
         load=lambda: load_library(mount),
         copy=lambda path, progress: itunesdb.copy_to_ipod(mount, path,
                                                            progress=progress),
-        save=lambda lib: (itunesdb.save(lib, mount), os.sync()),
+        save=lambda lib: (itunesdb.save(lib, mount),
+                          os.sync() if hasattr(os, "sync") else None),
         free_space=lambda: shutil.disk_usage(mount).free)
 
 
@@ -1874,7 +2668,8 @@ def cmd_rebuild(mount, name=None):
     win.clear()
     lib = _library_from_located(name or "iPod", located)
     itunesdb.save(lib, mount)
-    os.sync()
+    if hasattr(os, "sync"):
+        os.sync()
     n = len(lib.tracks)
     print(f"Rebuilt the iTunesDB on {mount}: {n} "
           f"track{'s' if n != 1 else ''} recovered from the iPod.")
@@ -2121,6 +2916,48 @@ def _winnow(pending, budget):
     return [item for n in names if n in kept for item in groups[n]]
 
 
+#: Serialized-iTunesDB byte budget the target iPod's firmware can load.
+#: Measured on real 1G hardware (2026-07-29): 3,776,000 bytes loads and
+#: plays; 3,776,684 makes the iPod show an EMPTY library (no error).
+#: Bisected to a one-track edge, then pinned to bytes — not track or
+#: record count — with slim/fat DB experiments (scripts/db_slice.py).
+#: Default keeps a safety margin under the proven-good point.
+#: FLASHPOD_DB_LIMIT overrides; 0 disables the check.
+IPOD_DB_SIZE_LIMIT = 3600000
+
+
+def _db_size_limit():
+    env = os.environ.get("FLASHPOD_DB_LIMIT")
+    if env is not None:
+        try:
+            return int(env)
+        except ValueError:
+            pass
+    return IPOD_DB_SIZE_LIMIT
+
+
+def _projected_db_size(lib, new_tracks):
+    """Serialized iTunesDB size after adding ``new_tracks`` to ``lib``."""
+    tmp = itunesdb.Library(lib.name)
+    tmp.tracks = list(lib.tracks) + list(new_tracks)
+    return len(itunesdb.serialize(tmp))
+
+
+def _fit_count(lib, new_tracks, limit):
+    """How many of ``new_tracks`` (in order) fit under the DB byte limit.
+    0 when the existing library alone is already over it."""
+    if _projected_db_size(lib, []) > limit:
+        return 0
+    lo, hi = 0, len(new_tracks)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _projected_db_size(lib, new_tracks[:mid]) <= limit:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
 def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
     """Batch-add files to the iPod. The backend is callables so this works the
     same over an OS mount (cmd_add) and over the raw device (cmd_add_raw):
@@ -2222,11 +3059,49 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
                     print("flashpod add: nothing selected; nothing added.")
                     return 0
 
+    # Pre-flight 2: will the grown iTunesDB still LOAD on the iPod? Early
+    # firmware has a hard heap budget for the parsed database and shows an
+    # EMPTY library past it — no error, just zero songs. Measured on real
+    # 1G hardware (2026-07-29, scripts/db_slice.py bisection + slim/fat
+    # experiments): 3,776,000 bytes loads, 3,776,684 doesn't; track and
+    # record counts don't matter, only serialized bytes.
+    db_dropped = 0
+    limit = _db_size_limit()
+    if pending and limit:
+        new_tracks = [t for _, t in pending]
+        projected = _projected_db_size(lib, new_tracks)
+        if projected > limit:
+            fit = _fit_count(lib, new_tracks, limit)
+            print(f"flashpod add: this batch would grow the iPod's database "
+                  f"to {projected:,} bytes — past the ~{limit:,}-byte "
+                  "ceiling early iPod firmware can load (the iPod would "
+                  "then show ZERO songs).", file=sys.stderr)
+            if fit <= 0:
+                print("  The library alone already exceeds the ceiling; "
+                      "remove tracks (`flashpod rm`) or set "
+                      "FLASHPOD_DB_LIMIT=0 to override.", file=sys.stderr)
+                return 1
+            if not sys.stdin.isatty():
+                print(f"  {fit} of the {len(pending)} new tracks would fit; "
+                      "trim the batch, or set FLASHPOD_DB_LIMIT=0 to "
+                      "override (can't prompt here).", file=sys.stderr)
+                return 1
+            if ask_yes(f"  {fit} of {len(pending)} new tracks fit under the "
+                       "ceiling. Add just those? [Y/n] "):
+                db_dropped = len(pending) - fit
+                pending = pending[:fit]
+            elif not ask_yes("  Add ALL anyway — the iPod will likely show "
+                             "an empty library? [y/N] ", default_yes=False):
+                print("flashpod add: nothing added.")
+                return 0
+
     # Pass 2: copy what survived.
     start = time.monotonic()
     npend = len(pending)
     added = 0
     added_bytes = 0
+    eta = EtaEstimator(sum(t.size or 0 for _, t in pending))
+    batch_done = [0]              # bytes of files already fully copied
     for nr, (path, track) in enumerate(pending, 1):
         label = track.title + (f" — {track.artist}" if track.artist else "")
         win.add(f"[{nr}/{npend}] Adding: {label}...")
@@ -2240,17 +3115,21 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
             if done < total_bytes and now - _last[0] < 0.125:
                 return
             _last[0] = now
+            eta.update(batch_done[0] + min(done, total_bytes))
             mib = 1 << 20
             pct = (done * 100 // total_bytes) if total_bytes else 100
             win.update(f"[{_nr}/{npend}] Adding: {_label}... {pct}% "
                        f"({done / mib:.1f}/{total_bytes / mib:.1f} MiB)")
+            win.set_status(eta.remaining_text())
 
         try:
             track.location = copy(path, _progress)
         except OSError as exc:
             win.note(f"[{nr}/{npend}] FAILED {path}: {exc}")
             failures += 1
+            eta.exclude(track.size)
             continue
+        batch_done[0] += track.size or 0
         # Assign the id now that the track is actually being committed: each
         # next_track_id() sees the tracks appended earlier in this batch, so
         # the ids are unique. (Failed copies above are skipped and burn no id.)
@@ -2258,6 +3137,7 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
         lib.tracks.append(track)
         added += 1
         added_bytes += track.size or 0
+    win.set_status(None)          # the ETA must not outlive the batch
     if added:
         save(lib)
     secs = time.monotonic() - start
@@ -2265,6 +3145,8 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
     parts = [f"{added} track{'s' if added != 1 else ''} added"]
     if dropped:
         parts.append(f"{dropped} dropped to fit free space")
+    if db_dropped:
+        parts.append(f"{db_dropped} dropped to fit the database ceiling")
     if skipped:
         parts.append(f"{skipped} skipped (already on iPod)")
     if failures:
@@ -2296,14 +3178,74 @@ def ask_yes(prompt, default_yes=True):
     return ans in ("y", "yes", "aye", "yea", "arr")
 
 
-def offer_init_after_flash(dev):
+def offer_init_after_flash(dev, raw_fobj=None, data_start=None):
     """Post-flash hook (ipod_flash.flash before_eject): offer to run init on
     the freshly flashed card right away, so it leaves the flash step fully
     usable. Must run before eject — eject powers the reader off and the
-    /dev node disappears until replug. Mounts the data partition at a temp
-    dir (we are root here), inits, unmounts; the normal eject follows."""
-    part = dev + ("p2" if dev[-1].isdigit() else "2")
-    if not os.path.exists(part):
+    /dev node disappears until replug."""
+    if sys.platform == "win32" or getattr(platform.current(), "is_image", False):
+        _offer_init_after_flash_win(dev, raw_fobj, data_start)
+    else:
+        _offer_init_after_flash_unix(dev)
+
+
+def _offer_init_after_flash_win(dev, raw_fobj=None, data_start=None):
+    """Windows: init + add music via the raw FAT driver — no OS mount needed.
+    Reuses the still-open write handle from the flash (MBR not yet written)
+    so Windows can't discover the partition and block our writes."""
+    if raw_fobj is None or data_start is None:
+        target = open_raw_target(dev)
+    else:
+        max_xfer = _effective_xfer(dev)
+        bdev = fatfs.BlockDev(part_start=data_start, max_xfer=max_xfer,
+                              fileobj=raw_fobj)
+        target = RawTarget(fatfs.Fat32(bdev), dev)
+    if target is None:
+        print("  could not reopen %s; run `flashpod init --raw %s` later."
+              % (dev, dev), file=sys.stderr)
+        return
+    if not ask_yes("\nThe card still needs the iPod database before it can "
+                   "take music (\"flashpod init\").\n"
+                   f"Run init on {dev} now? [Y/n] "):
+        print(f"Skipped. Later: run `flashpod init --raw {dev}`.",
+              file=sys.stderr)
+        return
+    target.init_structure("iPod")
+    print(f"Initialized iPod directory structure on {dev}")
+    if ask_yes("\nMusic can be loaded onto the card now, or later "
+               "when it is in the iPod.\n"
+               "Load music onto the card now? [Y/n] "):
+        cmd_add_raw(target, prompt_for_paths(0, None))  # freshly inited
+
+
+def _offer_init_after_flash_unix(dev):
+    """Linux/macOS: mount the data partition at a temp dir (we are root here),
+    init, unmount; the normal eject follows.
+
+    Partition naming and the mount invocation both come from the platform
+    backend: hardcoding Linux's here made this hook skip itself in silence on
+    macOS, which names the slice /dev/diskNs2 rather than /dev/diskNp2 and
+    needs mount(8) told the filesystem type."""
+    plat = platform.current()
+    try:
+        part = plat.partition_node(dev, 2)          # 2 = the FAT32 data partition
+    except NotImplementedError:
+        part = None
+    if not part:
+        return
+    # The node only appears once the OS has re-probed the table flash() just
+    # committed, and that is asynchronous — macOS re-probes in the background,
+    # Linux waits on udev. Give it a few seconds instead of racing it, and say
+    # so if it never turns up: skipping in silence is how this hook went
+    # unnoticed on macOS in the first place.
+    for _ in range(50):
+        if os.path.exists(part):
+            break
+        time.sleep(0.1)
+    else:
+        print("init skipped: %s never appeared after the partition table was "
+              "re-read.\n  Mount the card and run `flashpod init` instead."
+              % part, file=sys.stderr)
         return
     if not ask_yes("\nThe card still needs the iPod database before it can "
                    "take music (\"flashpod init\").\n"
@@ -2311,28 +3253,45 @@ def offer_init_after_flash(dev):
         print("Skipped. Later: mount the card and run `flashpod init`.",
               file=sys.stderr)
         return
+
+    # macOS re-probes and auto-mounts the fresh FAT32 the moment the partition
+    # table is re-read, so the slice is often already mounted under /Volumes.
+    # Reuse that rather than mounting it a second time (which fails, busy) --
+    # and leave a mount we did not make alone afterwards.
+    existing = [mp for p, mp in plat.device_mountpoints(part)
+                if os.path.basename(p) == os.path.basename(part)]
     import tempfile
-    mnt = tempfile.mkdtemp(prefix="flashpod-init-")
+    mnt = existing[0] if existing else tempfile.mkdtemp(prefix="flashpod-init-")
+    ours = not existing
     try:
-        _run_quiet_mount(["mount", part, mnt], check=True)
+        if ours:
+            cmd = plat.fat_mount_cmd(part, mnt)
+            if not cmd:
+                print("init skipped: cannot mount %s on this platform; mount "
+                      "the card and run `flashpod init` instead." % part,
+                      file=sys.stderr)
+                return
+            _run_quiet_mount(cmd, check=True)
         try:
             itunesdb.init_ipod(mnt, "iPod")
             print(f"Initialized iPod directory structure on {part}")
             if ask_yes("\nMusic can be loaded onto the card now, or later "
                        "when it is in the iPod.\n"
                        "Load music onto the card now? [Y/n] "):
-                cmd_add(mnt, [prompt_for_path()])
+                cmd_add(mnt, prompt_for_paths(0, None))  # freshly inited
             subprocess.run(["sync"], check=False)
         finally:
-            subprocess.run(["umount", mnt], check=False)
+            if ours:
+                subprocess.run(["umount", mnt], check=False)
     except subprocess.CalledProcessError as exc:
         print(f"init skipped: mounting {part} failed ({exc}); mount the card "
               "and run `flashpod init` instead.", file=sys.stderr)
     finally:
-        try:
-            os.rmdir(mnt)
-        except OSError:
-            pass
+        if ours:
+            try:
+                os.rmdir(mnt)
+            except OSError:
+                pass
 
 
 def _help_description():
@@ -2361,6 +3320,8 @@ def main():
         prog="flashpod",
         description=_help_description(),
         formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--version", action="version",
+                        version="%(prog)s " + __version__)
     parser.add_argument("--mount", default=None,
                         help="iPod mountpoint (default: auto-detect from "
                              "mounted filesystems)")
@@ -2453,6 +3414,11 @@ def main():
 
     opts = parser.parse_args()
 
+    # A regular file as the target -- `flash ipod.img`, `--raw ipod.img` -- is a
+    # disk image: no root, and none of the device-only steps (platform/image.py).
+    platform.use_image(opts.device if opts.command == "flash"
+                       else getattr(opts, "raw", None))
+
     if opts.command == "flash":
         if resources.is_lite():
             print("flashpod: this build doesn't image flash cards.\n"
@@ -2464,19 +3430,17 @@ def main():
             ipod_flash.self_test()
             return 0
         plat = platform.current()
-        if not opts.dry_run and not plat.is_admin():
-            # Writing to a disk needs root — elevate via sudo (prompts for the
-            # password on a terminal) rather than just bailing, like the raw
-            # data commands do.
-            if os.name != "nt" and sys.stdin.isatty():
-                print("flashpod flash: writing to a disk needs root — "
-                      "elevating via sudo...", file=sys.stderr)
-                _sudo_reexec(_cmd_args(opts))    # re-execs; returns only if sudo is missing
-            msg = "flashpod flash: " + plat.privilege_hint()
-            if os.name != "nt":           # offer the exact sudo rerun on POSIX
-                msg += "\n  sudo " + " ".join(_self_cmd() + _cmd_args(opts))
-            print(msg, file=sys.stderr)
-            return 1
+        # Pick and fetch the firmware BEFORE elevating. Downloading as root
+        # writes the cache into whatever HOME resolves to at that moment, and
+        # sudo does not treat HOME consistently: macOS preserves it (so root
+        # drops root-owned files in the user's ~/.cache and every later
+        # unprivileged run fails with EACCES), while Linux resets it to /root
+        # (so the user's cache is silently never reused). Resolving first
+        # sidesteps both -- the download runs as the invoking user, and the
+        # elevated child is handed the finished path via --firmware.
+        #
+        # It also means the model/firmware questions are answered before the
+        # password prompt instead of after it.
         max_data_gb = None
         if opts.firmware:
             firmware = opts.firmware          # bring-your-own; no network
@@ -2501,6 +3465,24 @@ def main():
                 return 1
         if opts.max_data_gb is not None:      # explicit override (or a BYO cap)
             max_data_gb = opts.max_data_gb
+        # Carry both resolved choices across the sudo boundary, so the elevated
+        # child re-runs neither the picker nor the download.
+        opts.firmware = firmware
+        opts.max_data_gb = max_data_gb
+
+        if not opts.dry_run and not plat.is_admin():
+            # Writing to a disk needs elevation — try sudo (prompts for
+            # credentials or shows a UAC dialog) rather than just bailing.
+            if sys.stdin.isatty():
+                role = "Administrator" if os.name == "nt" else "root"
+                print("flashpod flash: writing to a disk needs %s — "
+                      "elevating via sudo..." % role, file=sys.stderr)
+                _sudo_reexec(_cmd_args(opts))    # re-execs; returns only if sudo is missing
+            msg = "flashpod flash: " + plat.privilege_hint()
+            if os.name != "nt":   # Windows guidance already printed in full
+                msg += "\n  sudo " + " ".join(_self_cmd() + _cmd_args(opts))
+            print(msg, file=sys.stderr)
+            return 1
         # Offer init on the fresh card only when it will work: interactive,
         # a real write, and a FAT32 data partition to mount.
         offer = offer_init_after_flash if (
@@ -2617,7 +3599,11 @@ def main():
 
         if opts.command in ("rm", "remove", "delete", "erase"):
             lib = load_library(mount)
-            return cmd_rm(lib, mount, opts.what) if lib else 1
+            if not lib:
+                return 1
+            rc = cmd_rm(lib, mount, opts.what)
+            offer_eject(_device_for_mount(mount), rc)
+            return rc
 
         if opts.command == "init":
             itunesdb.init_ipod(mount, opts.name or "iPod")
@@ -2627,7 +3613,12 @@ def main():
         if opts.command == "rebuild":
             return cmd_rebuild(mount, getattr(opts, "name", None))
 
-        return cmd_add(mount, opts.files or [prompt_for_path()])
+        files = opts.files
+        if not files:
+            files = prompt_for_paths(*_mounted_db_facts(mount))
+        rc = cmd_add(mount, files)
+        offer_eject(_device_for_mount(mount), rc)
+        return rc
     except OSError as exc:
         _report_io_error(mount, exc)
         return 1

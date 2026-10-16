@@ -8,7 +8,9 @@ learned about it the hard way, so you don't have to rediscover it.
 
 - 64 GB **flash-modded** iPod (reports 63,996,657,664 bytes), a pre-2007 model.
 - Connects over **FireWire** (shows up as an `sbp` transport on Linux,
-  "Apple Computer, Inc." / FireWire in macOS `diskutil`).
+  "Apple Computer, Inc." / FireWire in macOS `diskutil`). On Linux, lsblk
+  reports its device TYPE as `rbc` (SCSI Reduced Block Commands), **not**
+  `disk` — filter on either, or the iPod vanishes from your tooling.
 - Pre-2007 ⇒ **no iTunesDB checksum/hash** needed — plain library writes work.
 - Partition layout written by flashpod: a 32 MiB firmware partition (MBR type
   0x00, hidden from macOS `diskutil`) followed by a FAT32 data partition (type
@@ -35,9 +37,15 @@ directions.** (On Linux the kernel queue cap of 4 KiB happens to be safe for
 the *kernel's* access pattern, but the macOS raw device has no such cap and
 corrupts at 4 KiB — see below.)
 
-## Linux: pin the block queue (flashpod does this for you)
+## Linux: flashpod's raw path is O_DIRECT (queue settings optional for it)
 
-On Linux the fix is per-device queue settings:
+flashpod's own raw driver opens Linux block devices with **O_DIRECT** — the
+page-cache bypass, Linux's equivalent of macOS `/dev/rdiskN` — so its capped
+transfers reach the hardware exactly as issued, with no kernel readahead or
+writeback re-batching. The raw path (`ls`/`add`/`rm`/`init` without a mount)
+is therefore bridge-safe on its own, whatever the queue settings say.
+
+What still wants the per-device queue settings pinned:
 
 ```
 max_sectors_kb = 4      # cap transfers at 4 KiB
@@ -45,11 +53,23 @@ read_ahead_kb  = 0      # no prefetch
 queue_depth    = 1      # one request at a time
 ```
 
+- using an **OS mount** of a FireWire iPod (the kernel FAT driver reads big),
+- **udev's own blkid probe** — at every (re-)attach, and **again every time a
+  writable handle on the device is closed** (udev watches block devices via
+  inotify). That second one bites pure-raw workflows: an unpinned post-write
+  probe collapsed the bridge to 0 capacity immediately after a successful
+  `rm` whose own O_DIRECT I/O had run clean. flashpod therefore pins at the
+  start of every raw session too (it's root there, so it's silent),
+- any other buffered reader — I/O flashpod doesn't issue and can't intercept.
+
 These **reset on every re-attach**, and unsafe defaults (128/128) are
-*data-eating*. flashpod checks before every command and auto-pins them via
-sudo; refuses to touch a FireWire iPod that's still unsafe (`--unsafe-queue`
-overrides). For a permanent fix, install the udev rule in
-`contrib/99-flashpod-firewire-ipod.rules`.
+*data-eating* for buffered access. flashpod checks before every command and
+auto-pins them via sudo; it refuses to touch a FireWire iPod that's still
+unsafe (`--unsafe-queue` overrides). The udev rule in
+`contrib/99-flashpod-firewire-ipod.rules` is optional defense-in-depth that
+covers the attach-time window no userspace program can reach; nothing in
+flashpod requires it — detection probes disks with flashpod's own driver and
+works even when udev's records are blank.
 
 > **Incident (the cautionary tale):** an afternoon attach ran with default
 > queue settings, an `ls` triggered EIO on the iTunesDB, the device collapsed
@@ -78,6 +98,53 @@ or pull the card into a USB reader, or use flashpod's
 
 This is specific to this flaky bridge + flash mod; stock 1G/2G iPods mount on
 Macs over FireWire fine.
+
+### The "disk you inserted was not readable" dialog
+
+Because the mount probe fails, macOS offers **Initialize… / Ignore / Eject**
+every time you attach the iPod.
+
+> **Always click Ignore. Never Initialize** — that opens Disk Utility pointed
+> at your iPod, one click from erasing the card.
+
+flashpod doesn't care either way: it reads `/dev/rdiskN` itself and never
+needs the volume mounted. To stop the panel appearing at all, disable the GUI
+agent that draws it (run in Terminal **on the Mac** — over SSH it lands in a
+different launchd bootstrap and won't affect your desktop session):
+
+```sh
+launchctl unload -w /System/Library/LaunchAgents/com.apple.DiskArbitrationAgent.plist
+```
+
+`diskarbitrationd` — the daemon that actually probes and mounts — keeps
+running, so ordinary disks still automount as before; only the notification
+panels stop. It persists across reboots; `load -w` puts it back. The
+trade-off: it silences the panel for *every* unreadable disk, not just the
+iPod. (An `/etc/fstab` entry can't help here — fstab matches on volume UUID
+or label, and the whole problem is that macOS can't read either one off this
+bridge.)
+
+### "It vanished from `diskutil` entirely"
+
+Different symptom, different cause: **the bridge is wedged**, not the card.
+Seen live on 10.8 — macOS had the whole driver stack attached
+(`IOFireWireSBP2LUN` → `iPodFireWireTransport` → `IOBlockStorageDriver`) but
+published **no `IOMedia`**, so no `/dev/diskN` existed and nothing could find
+it. That means the OS asked for the medium/capacity and got nothing back —
+the same collapse Linux shows as a 0-byte disk.
+
+The bridge is powered by the iPod's own battery, so **its state survives
+unplugging** — carrying a wedged iPod to another machine brings the wedge
+along, and a cable replug won't clear it. Reset the iPod itself: Hold on,
+Hold off, then **Menu + Play/Pause** until the Apple logo appears. The disk
+comes back.
+
+Diagnose it with:
+
+```sh
+ioreg -c IOFireWireSBP2LUN -r -d 6 | grep -E '\+-o'   # stack attached?
+ioreg -c IOMedia | grep -i ipod                       # any media node?
+```
 
 ## Write bandwidth
 

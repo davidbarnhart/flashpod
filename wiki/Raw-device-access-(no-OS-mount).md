@@ -18,7 +18,12 @@ the iPod invisible once). So flashpod identifies an iPod by its **actual iTunes
 database**:
 
 1. Enumerate attached disks worth probing (every external disk on macOS via
-   `diskutil`; FAT partitions on removable/USB/FireWire disks on Linux).
+   `diskutil`; on Linux, FAT-identified partitions on removable/USB/FireWire
+   disks — plus any external disk whose filesystems udev could *not* identify,
+   offered whole. udev is trusted positively, never for absence: its
+   attach-time probe reads through the buffered block layer, which the
+   FireWire bridge can zero, and the iPod must stay findable by our own
+   driver even when udev's records are blank).
 2. Open each with the FAT driver and check whether its filesystem contains
    `iPod_Control/iTunes/iTunesDB`.
 3. The one(s) that do are iPods. One hit → use it; several → pick from a list.
@@ -28,10 +33,16 @@ what's *on* it.
 
 ## The two things that make raw access correct
 
-1. **Unbuffered node.** On macOS, reads must go through `/dev/rdiskN`
+1. **Unbuffered access.** On macOS, reads must go through `/dev/rdiskN`
    (unbuffered), never `/dev/diskN` (buffered) — the buffered device
    re-introduces the read-ahead that corrupts the bridge. flashpod maps
-   `disk`→`rdisk` automatically, so even `--raw /dev/disk1` is safe.
+   `disk`→`rdisk` automatically, so even `--raw /dev/disk1` is safe. Linux
+   has no rdisk node; unbuffered there means **O_DIRECT**, which the driver
+   uses for block devices — without it, page-cache readahead/writeback
+   re-batch the capped transfers into exactly the large/queued I/O the
+   bridge corrupts, and the raw path silently depends on pinned queue
+   settings (that regression shipped once, in v0.3.0, and preceded a
+   mid-add bridge crash).
 2. **Tiny transfers.** Every read and write is capped at a bridge-safe size:
    **1 sector on macOS, 8 (4 KiB) on Linux.** macOS is single-sector because
    this bridge corrupts anything larger in *both* directions (proven on

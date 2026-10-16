@@ -1,0 +1,175 @@
+name: test
+
+# Runs on every push and pull request — unlike release.yml, which only fires on
+# a `v*` tag or a manual dispatch and therefore cannot catch a regression until
+# release time.
+#
+# macOS is covered HERE even though release.yml deliberately does not build a
+# macOS binary (the ship target is OS X 10.8, which no runner supports). The
+# distinction matters: we cannot BUILD for 10.8 in CI, but we can and must
+# EXERCISE the macOS backend, which drives `diskutil` through its command line.
+# A `-plist` argument-order bug shipped precisely because no runner ever ran
+# that code — see scripts/test_macos_platform.py.
+
+on:
+  push:
+    branches: ["**"]          # tags are release.yml's job, not this one
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same ref obsoletes the previous run — cancel it. Rapid
+# push trains otherwise stack up full-matrix runs nobody will read.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  # The SHIPPED ARTIFACT, built and flashed for real on all three OSes, on
+  # every push. Same workflow release.yml calls, so a regression in the frozen
+  # build surfaces here instead of after a tag.
+  #
+  # `source` below runs the SAME full simulated-card flash -- this is not a
+  # cheap check versus a thorough one. The difference is only what gets
+  # driven: `python -m flashpod` there, dist/flashpod here. Both are needed,
+  # because they can disagree: v0.3.1's macOS binary passed the entire source
+  # suite and still could not download firmware, the frozen build having
+  # carried the build machine's CA paths.
+  binary:
+    name: binary
+    uses: ./.github/workflows/binary.yml
+    # Independent of `source` below -- no `needs:`. Both run the same full
+    # simulated-card flash; the only difference is what they drive. This one
+    # drives the frozen artifact, `source` drives the source tree, and neither
+    # consumes the other's output, so they run in parallel and finish in
+    # whatever order their own work takes.
+    #
+    # Plain pushes build Linux only (the cheap, fast signal); the full
+    # three-OS matrix runs on pull requests, manual dispatch, and release
+    # tags (release.yml always builds everything).
+    with:
+      slim: ${{ github.event_name == 'push' }}
+
+  compat:
+    name: py36 compatibility
+    runs-on: ubuntu-latest     # source-only grep; one run covers every platform
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - run: sh scripts/check-py36-compat.sh
+
+  source:
+    name: source (${{ matrix.os }})
+    # Plain pushes run Linux only; PRs, dispatch, and tags get the full
+    # matrix (macOS coverage matters -- the diskutil backend runs against
+    # the real tool -- but it doesn't need to run on every push).
+    # macos-latest is arm64, the only macOS runner we can actually get:
+    # macos-13 (the last Intel runner) was tried and dropped -- the job sat
+    # queued for 7+ hours without ever being allocated, which blocks the
+    # whole run from completing. It was only ever extra confirmation; the
+    # macOS coverage that matters is the diskutil backend, and macos-latest
+    # exercises that. Revisit only if Intel capacity returns.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ github.event_name == 'push' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install mutagen
+
+      # ConPTY driver for the simulated-card test: flashpod's prompts are
+      # gated on isatty, and on Windows only a pseudoconsole makes that true.
+      - name: Install pywinpty (Windows only)
+        if: runner.os == 'Windows'
+        run: pip install pywinpty
+
+      - name: Self-test (layout + checksum maths, no device)
+        shell: bash
+        run: python -m flashpod flash --self-test
+
+      - name: Dry-run against an image (exercises the firmware download)
+        shell: bash
+        run: |
+          python -c "open('dummy.img','wb').truncate(64*1024*1024)"
+          python -m flashpod flash dummy.img --dry-run --yes
+
+      - name: Multi-iPod detection logic
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_multi_ipod_detect.py
+
+      - name: Linux disk-candidate enumeration logic
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_linux_fat_candidates.py
+
+      # The raw driver must open the device PATH on Linux (that's where
+      # O_DIRECT lives); PR #54 silently swapped in a buffered fileobj and
+      # no test noticed. The simulated-card run exercises the real O_DIRECT
+      # I/O; this pins the wiring cheaply on every platform.
+      - name: Raw-open wiring (O_DIRECT on Linux)
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_raw_open_wiring.py
+
+      - name: FireWire queue pinned before mounting
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_firewire_pin_order.py
+
+      - name: Eject elevates via sudo, not a polkit dialog
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_eject_elevation.py
+
+      - name: Firmware is resolved before sudo elevation
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_flash_preelevation.py
+
+      # A frozen build carries no CA certificates and its ssl module has the
+      # BUILD machine's cert path compiled in, so firmware downloads died with
+      # CERTIFICATE_VERIFY_FAILED on every other Mac. CI never saw it: the
+      # runners' own cert paths are always valid.
+      - name: HTTPS still verifies when ssl's CA path is missing
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_ca_bundle_fallback.py
+
+      - name: Post-flash init offer (partition naming per platform)
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_post_flash_init_offer.py
+
+      - name: macOS backend against live diskutil
+        if: runner.os == 'macOS'
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_macos_platform.py
+
+      # The only step that flashes for real: a backing file attached as an
+      # actual block device (losetup on Linux, hdiutil on macOS, a diskpart
+      # VHD on Windows), partitioned, formatted, inited and loaded with
+      # generated audio, then verified back out of the backing file. This is
+      # the coverage unit tests cannot reach -- the post-flash init offer
+      # broke twice without a single test failing.
+      #
+      # Elevation is required (flashpod refuses non-dry-run writes without
+      # it). On Linux/macOS that means sudo, passwordless on hosted runners;
+      # sudo resets PATH, so the interpreter setup-python installed has to be
+      # named explicitly. Windows runners already execute as Administrator,
+      # so no wrapper is needed there.
+      - name: End-to-end flash against a simulated card
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            python scripts/simulate_card.py --size-gb 2
+          else
+            sudo "$(which python)" scripts/simulate_card.py --size-gb 2
+          fi
