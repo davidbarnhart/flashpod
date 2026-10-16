@@ -140,3 +140,133 @@ def validate_firmware(fw):
     if len(fw) > FW_BLOCKS * SECTOR:
         raise ValueError("firmware (%d bytes) larger than the 32 MiB firmware partition"
                          % len(fw))
+
+
+# ----------------------------------------------------------------------------
+# Reading the firmware already on a card
+# ----------------------------------------------------------------------------
+#: osos load address of the 1G-3G (PP5002) images; the 1.x version word and
+#: the openpod fixes are addressed relative to it.
+PP5002_OSOS_ADDR = 0x28000000
+
+#: Where 1.5 keeps its version, as a word (0x01508000 = "1.5"): osos offset of
+#: vaddr 0x2803174c (openpod firmware session, bridge #1083). The 1.6 version
+#: fix writes 0x01608000 there.
+VERSION_WORD_OFFSET = 0x3174c
+VERSION_WORDS = {0x01508000: "1.5", 0x01608000: "1.6"}
+
+#: Exact osos builds that are not stock catalog entries, by sha256 of the
+#: osos payload as installed (openpod firmware session, bridge #1083).
+KNOWN_OSOS = {
+    "109ed777110982e2a31d7f724e4a7f78b73bef17bee90952e2c35c79f0714e21":
+        "openpod 1.6 release",
+}
+
+
+def _fixes_table():
+    """The vendored fixes table (firmware/fixes.json), or None."""
+    import json
+    from . import resources
+    path = resources.resource_path("firmware", "fixes.json")
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def fixes_present(osos, addr, table=None):
+    """Names of the openpod fixes whose every edit and appended code are in
+    ``osos`` (loaded at ``addr``). A fix is present iff all of its osos
+    edits hold their patched bytes and its appended code hashes to its
+    sha256 (bridge #1083). aupd edits aren't checked: only osos is read."""
+    import hashlib
+    table = table if table is not None else _fixes_table()
+    if not table:
+        return None
+    found = []
+    for fix in table.get("fixes", []):
+        ok = True
+        for e in fix["edits"]:
+            if e.get("image", "osos") != "osos":
+                continue
+            off = int(e["at"], 16) - addr
+            new = bytes.fromhex(e["patched"])
+            if not (0 <= off and off + len(new) <= len(osos)) \
+                    or osos[off:off + len(new)] != new:
+                ok = False
+                break
+        ap = fix.get("append")
+        if ok and ap:
+            off = int(ap["at"], 16) - addr
+            blob = osos[off:off + ap["bytes"]] if off >= 0 else b""
+            ok = (len(blob) == ap["bytes"]
+                  and hashlib.sha256(blob).hexdigest() == ap["sha256"])
+        if ok:
+            found.append(fix["name"])
+    return found
+
+
+def describe_installed(read, catalog=None):
+    """What firmware a card holds. ``read(offset, n)`` returns bytes at
+    ``offset`` in the firmware partition. ``catalog`` is the manifest's
+    ``firmwares`` list (entries with ``osos_sha256`` are matched).
+
+    Returns a dict: ``present`` (bool), ``reason`` when not present, else
+    ``format``, ``images`` (the directory), ``osos`` (``checksum_ok``,
+    ``sha256``, ``length``, ``addr``), ``build`` (a human label: the catalog
+    version, a known openpod build, or "unrecognized"), ``catalog_file``,
+    ``version_word`` (hex) and ``version_word_means`` ("1.5"/"1.6"/None),
+    and ``fixes`` (openpod fixes found, None without a fixes table)."""
+    import hashlib
+    if read(0, 4) != b"{{~~":
+        return {"present": False, "reason": "no STOP boot block"}
+    hdr = read(0x100, 0x10)
+    if hdr[0:4] != b"]ih[":
+        return {"present": False, "reason": "no [hi] volume header"}
+    ptr, = struct.unpack_from("<I", hdr, 4)
+    fmtver, = struct.unpack_from("<H", hdr, 0x0a)
+    shift = 0x200 if fmtver == 3 else 0
+    images = []
+    osos = None
+    for _off, typ, f in walk_directory(read(ptr + 0x200, 10 * 40), 0):
+        img = {"type": typ.decode("latin-1"), "id": f[0], "dev_offset": f[1],
+               "length": f[2], "addr": f[3], "checksum": f[5],
+               "vers": f[6], "load_addr": f[7]}
+        images.append(img)
+        if typ == b"osos" and osos is None:
+            osos = img
+    out = {"present": True, "format": fmtver, "images": images}
+    if osos is None:
+        out.update(present=False, reason="no osos image in the directory")
+        return out
+    if osos["length"] > FW_BLOCKS * SECTOR:
+        out.update(present=False, reason="osos length past the partition")
+        return out
+    payload = read(osos["dev_offset"] + shift, osos["length"])
+    digest = hashlib.sha256(payload).hexdigest()
+    out["osos"] = {"checksum_ok": (sum(payload) & 0xFFFFFFFF) == osos["checksum"],
+                   "sha256": digest, "length": osos["length"],
+                   "addr": osos["addr"]}
+    word = None
+    if osos["addr"] == PP5002_OSOS_ADDR and \
+            len(payload) >= VERSION_WORD_OFFSET + 4:
+        word, = struct.unpack_from("<I", payload, VERSION_WORD_OFFSET)
+    # only meaningful on a 1.x build; elsewhere that offset is just code
+    out["version_word"] = "0x%08x" % word if word in VERSION_WORDS else None
+    out["version_word_means"] = VERSION_WORDS.get(word)
+    match = next((e for e in (catalog or [])
+                  if e.get("osos_sha256") == digest), None)
+    if match:
+        out["build"] = "stock %s" % match.get("version", "?")
+        out["catalog_file"] = match.get("file")
+        out["models"] = match.get("models", [])
+    elif digest in KNOWN_OSOS:
+        out["build"] = KNOWN_OSOS[digest]
+        out["catalog_file"] = None
+    else:
+        out["build"] = "unrecognized"
+        out["catalog_file"] = None
+    out["fixes"] = fixes_present(payload, osos["addr"]) \
+        if osos["addr"] == PP5002_OSOS_ADDR else None
+    return out

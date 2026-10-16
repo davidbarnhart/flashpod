@@ -24,7 +24,6 @@ The iTunesDB is read/written natively (itunesdb.py) — no libgpod.
 import argparse
 import collections
 import errno
-import hashlib
 import json
 import os
 import re
@@ -34,7 +33,6 @@ import subprocess
 import sys
 import textwrap
 import time
-import ssl
 import urllib.error
 import urllib.request
 
@@ -50,6 +48,8 @@ from . import __version__
 from .errors import CorruptLibrary, NoSuchTrack
 from .library import (_ADD_HEADROOM, IPOD_DB_SIZE_LIMIT, _db_size_limit,  # noqa: F401
                       _fit_count, _projected_db_size)
+from .catalog import (_CA_BUNDLES, _ca_bundle, _firmware_cache_dir,  # noqa: F401
+                      _sha256, _ssl_context)
 from .target import RawTarget
 from .tracks import (AUDIO_EXTS, FORMATS, _library_from_located,  # noqa: F401
                      _track_from_audio, expand, first, make_track, orunknown,
@@ -188,81 +188,6 @@ def choose_firmware(manifest, model=None):
         print("flashpod flash: invalid selection", file=sys.stderr)
         return None
     return entries[int(choice)]
-
-
-def _firmware_cache_dir():
-    """Where downloaded firmware is cached.
-
-    `flash` resolves its firmware before elevating (see main()), so the normal
-    path reaches this as the invoking user and caches in their home. Running
-    `sudo flashpod flash` yourself instead does the download as root, which
-    caches somewhere else -- /root/.cache on Linux, and as root-owned files in
-    your own ~/.cache on macOS, where sudo preserves HOME. That path is not a
-    documented way to use flashpod; prefer plain `flashpod flash` and let it
-    elevate itself.
-    """
-    base = os.environ.get("XDG_CACHE_HOME") or \
-        os.path.join(os.path.expanduser("~"), ".cache")
-    return os.path.join(base, "flashpod", "firmware")
-
-
-def _sha256(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-# Well-known CA bundles, in the order we'd rather find them.
-_CA_BUNDLES = (
-    "/etc/ssl/cert.pem",                    # macOS, FreeBSD
-    "/etc/ssl/certs/ca-certificates.crt",   # Debian, Ubuntu, Alpine
-    "/etc/pki/tls/certs/ca-bundle.crt",     # RHEL, Fedora, CentOS
-    "/etc/ssl/ca-bundle.pem",               # openSUSE
-    "/etc/ssl/certs",                       # a hashed directory, as a last resort
-)
-
-
-def _ca_bundle():
-    """A CA bundle we can actually verify against, or None to use the defaults.
-
-    The frozen builds are the problem this exists for. PyInstaller bundles no
-    certificates, and the ssl module it packages was compiled with the CA path
-    of the BUILD machine baked in -- so on someone else's Mac that path simply
-    does not exist and every HTTPS fetch dies with CERTIFICATE_VERIFY_FAILED
-    (unable to get local issuer certificate). Nothing is wrong with the user's
-    machine or the network; Python is just looking in a directory that was
-    never there.
-
-    Order: honour whatever ssl already resolves to (that covers a normal pip
-    install, and SSL_CERT_FILE, which get_default_verify_paths reflects), then
-    certifi if a build bundled it, then the platform's own store.
-    """
-    paths = ssl.get_default_verify_paths()
-    if (paths.cafile and os.path.exists(paths.cafile)) or \
-       (paths.capath and os.path.isdir(paths.capath)):
-        return None                        # defaults are fine -- don't override
-    try:
-        import certifi                     # not a dependency; used if present
-        where = certifi.where()
-        if os.path.exists(where):
-            return where
-    except Exception:                      # noqa: BLE001 - absent or broken
-        pass
-    for cand in _CA_BUNDLES:
-        if os.path.exists(cand):
-            return cand
-    return None                            # nothing found; let ssl raise
-
-
-def _ssl_context():
-    bundle = _ca_bundle()
-    if bundle and os.path.isdir(bundle):
-        ctx = ssl.create_default_context(capath=bundle)
-    else:
-        ctx = ssl.create_default_context(cafile=bundle)   # None = ssl defaults
-    return ctx
 
 
 def _download(url, dst, total=None):

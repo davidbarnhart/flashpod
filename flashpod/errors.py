@@ -89,3 +89,13 @@ class NoSuchTrack(FlashpodError):
 
 class Cancelled(FlashpodError):
     code = "cancelled"
+
+
+class AlreadyInitialized(FlashpodError):
+    """init: the card already has an iTunesDB (pass overwrite=True)."""
+    code = "already_initialized"
+
+
+class PlanStale(FlashpodError):
+    """add(plan=...): the card or the selection changed since plan_add."""
+    code = "plan_stale"
