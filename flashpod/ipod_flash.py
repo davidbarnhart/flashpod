@@ -470,8 +470,10 @@ def format_data(f, dev, data_start, data_blocks):
         print(color("  could not write FAT32 to %s: %s - skipping data format."
                     % (dev, e), C_YEL), file=sys.stderr)
         return
-    print(color("  formatted data partition (FAT32, %d clusters @ %d KiB, "
-                "label 'IPOD')" % (geo["clusters"], spc * SECTOR // 1024), C_GRN),
+    cb = spc * SECTOR                 # small cards get 512-byte clusters,
+    size = ("%d KiB" % (cb // 1024)) if cb >= 1024 else ("%d bytes" % cb)
+    print(color("  formatted data partition (FAT32, %d clusters @ %s, "   # which read "0 KiB"
+                "label 'IPOD')" % (geo["clusters"], size), C_GRN),
           file=sys.stderr)
 
 def verify_firmware(dev, fw_bytes, dry):

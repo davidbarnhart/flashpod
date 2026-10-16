@@ -405,6 +405,32 @@ def check_meaningful(name, steps, recs):
     return problems
 
 
+#: Named text changes applied to the BASELINE's output before comparing,
+#: wherever they occur: (why, old, new). Each must occur somewhere in the
+#: baseline run, or the harness fails (a stale rewrite proves nothing).
+NAMED_REWRITES = [
+    ("512-byte clusters read '@ 0 KiB' in the flash summary",
+     " clusters @ 0 KiB,", " clusters @ 512 bytes,"),
+]
+
+
+def rewrite_baseline(records):
+    """Apply NAMED_REWRITES to baseline records; returns the set of rewrites
+    that matched somewhere."""
+    used = set()
+    for r in records:
+        for key in ("stdout", "stderr"):
+            text = r.get(key)
+            if not text:
+                continue
+            for why, old, new in NAMED_REWRITES:
+                if old in text:
+                    text = text.replace(old, new)
+                    used.add(why)
+            r[key] = text
+    return used
+
+
 def compare(name, a, b, steps=None):
     """Differences between baseline records ``a`` and tree records ``b``. A
     step with ``intended`` = {"why", "stdout"/"stderr": exact new text} is a
@@ -547,6 +573,13 @@ def main():
             print("BASELINE RUN IS NOT MEANINGFUL:")
             print("\n".join("  " + p for p in problems))
             return 1
+        used = set()
+        for recs in base.values():
+            used |= rewrite_baseline(recs)
+        stale = [w for w, _o, _n in NAMED_REWRITES if w not in used]
+        if stale and not opts.only:
+            print("NAMED REWRITE NEVER MATCHED (stale): " + "; ".join(stale))
+            return 1
         nsteps = sum(1 for r in base.values() for x in r if "argv" in x)
         print("baseline %s: %d scenarios, %d commands, all meaningful"
               % (baseline, len(base), nsteps))
@@ -568,6 +601,8 @@ def main():
                   if named else ""))
         for n, i, why in named:
             print("  - %s step %d: %s" % (n, i, why))
+        for why, old, new_s in NAMED_REWRITES:
+            print("  - everywhere: %r -> %r (%s)" % (old, new_s, why))
 
         if opts.mutants:
             failed_to_catch = []
