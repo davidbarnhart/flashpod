@@ -133,8 +133,12 @@ SCENARIOS = {
         S("init --raw {img}", expect="couldn't open a FAT"),
         {"py": "image", "size": 80 << 20},
         S("flash {img} --firmware {fw} --yes", write=True),
-        # BUG (baseline): add on a card with no iTunesDB exits 1 SILENTLY
-        S("add --raw {img} {music}", empty_ok=True),
+        # BUG in the baseline: add on a card with no iTunesDB exited 1
+        # SILENTLY. Fixed; the message is the one intended difference here.
+        S("add --raw {img} {music}", empty_ok=True, intended={
+            "why": "add on a card with no iTunesDB now says so",
+            "stderr": "flashpod: no iTunesDB on ipod.img (run `flashpod init` "
+                      "first?)\n"}),
         S("rm --raw {img} 1", expect="no iTunesDB"),
         S("init --raw {img}", write=True),
         S('add --raw {img} "{music}/Beta Group/broken.mp3"',
@@ -375,10 +379,22 @@ def check_meaningful(name, steps, recs):
     return problems
 
 
-def compare(name, a, b):
+def compare(name, a, b, steps=None):
+    """Differences between baseline records ``a`` and tree records ``b``. A
+    step with ``intended`` = {"why", "stdout"/"stderr": exact new text} is a
+    NAMED behaviour change: its exit code and image must still match the
+    baseline, and the named stream must be exactly the new text."""
     diffs = []
-    for ra, rb in zip(a, b):
+    steps = steps or [{}] * len(a)
+    for ra, rb, step in zip(a, b, steps):
+        intended = step.get("intended") or {}
         for key in ("rc", "stdout", "stderr", "sha"):
+            if key in intended:
+                if rb.get(key) != intended[key]:
+                    diffs.append("%s step %d: intended change (%s) not as "
+                                 "named: %r" % (name, ra["step"],
+                                                intended["why"], rb.get(key)))
+                continue
             if ra.get(key) != rb.get(key):
                 where = "%s step %d (%s): %s differs" % (
                     name, ra["step"], ra.get("argv", ra.get("py")), key)
@@ -493,13 +509,20 @@ def main():
         new = run_all(tree, root, fixtures, runner, opts.only)
         diffs = []
         for name in base:
-            diffs += compare(name, base[name], new[name])
+            diffs += compare(name, base[name], new[name], SCENARIOS[name])
         if diffs:
             print("DIFFERENT from baseline (%s):" % tree)
             print("\n\n".join(diffs))
             return 1
+        named = [(n, i, st["intended"]["why"]) for n, steps in SCENARIOS.items()
+                 if n in base for i, st in enumerate(steps) if st.get("intended")]
         print("IDENTICAL: %s matches the baseline on every step "
-              "(rc, stdout, stderr, image sha256)" % tree)
+              "(rc, stdout, stderr, image sha256)%s" % (
+                  tree, ", except %d NAMED change%s, each exactly as stated:"
+                  % (len(named), "s" if len(named) != 1 else "")
+                  if named else ""))
+        for n, i, why in named:
+            print("  - %s step %d: %s" % (n, i, why))
 
         if opts.mutants:
             failed_to_catch = []
@@ -513,7 +536,7 @@ def main():
                 got = run_all(mt, root, fixtures, runner, opts.only)
                 d = []
                 for name in base:
-                    d += compare(name, base[name], got[name])
+                    d += compare(name, base[name], got[name], SCENARIOS[name])
                 if d:
                     print("mutant caught (%s): %s" % (desc, d[0].splitlines()[0]))
                 else:

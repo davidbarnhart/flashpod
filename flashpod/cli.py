@@ -623,9 +623,17 @@ def cmd_rebuild_raw(target, name=None):
 
 
 def cmd_add_raw(target, paths):
+    def load():
+        lib = target.load_library()          # raises CorruptLibrary itself
+        if lib is None:
+            # said in words: this used to exit 1 with no message at all
+            print(f"flashpod: no iTunesDB on {target.node} (run `flashpod "
+                  "init` first?)", file=sys.stderr)
+        return lib
+
     return _cmd_add_core(
         paths,
-        load=target.load_library,
+        load=load,
         copy=target.copy,
         save=target.save_library,
         free_space=target.free_bytes,
