@@ -159,6 +159,11 @@ jobs:
           command -v ffmpeg >/dev/null || { sudo apt-get update -q && sudo apt-get install -yq ffmpeg; }
           PYTHONPATH=. python scripts/test_card.py
 
+      - name: A broken iTunesDB is refused, not read as empty
+        if: runner.os == 'Linux'
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_itunesdb_strict.py
+
       - name: flashpod burn checks (a file stands in for the card)
         if: runner.os == 'Linux'
         shell: bash
