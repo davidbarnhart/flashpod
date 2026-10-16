@@ -2559,6 +2559,7 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
     if not files:
         print("nothing to add", file=sys.stderr)
         return 1
+    rebuilt = False
     try:
         lib = load()
     except CorruptLibrary as exc:
@@ -2579,6 +2580,7 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
             print("flashpod: belay that — nothin' added.")
             return 0
         lib = rebuild()
+        rebuilt = True
     if not lib:
         return 1
     win = LineWindow()
@@ -2717,7 +2719,10 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
     added = len(copied)
     added_bytes = sum(t.size or 0 for t in copied)
     win.set_status(None)          # the ETA must not outlive the batch
-    if added:
+    # A rebuild the user said yes to is saved even when nothing new is added
+    # (every file already on the card): it used to be dropped, leaving the
+    # corrupt database in place.
+    if added or rebuilt:
         save(lib)
     secs = time.monotonic() - start
     elapsed = fmt_duration(secs)

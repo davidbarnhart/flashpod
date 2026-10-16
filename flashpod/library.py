@@ -8,6 +8,7 @@ is about; :mod:`flashpod.card` drives the same functions with a policy.
 """
 
 import os
+import re
 
 from . import itunesdb
 from .errors import NoSuchTrack
@@ -60,6 +61,11 @@ def _fit_count(lib, new_tracks, limit):
     return lo
 
 
+#: The title a rebuild gives an untagged track: the name flashpod gave its
+#: file on the card (target.RawTarget.copy / itunesdb.copy_to_ipod).
+_REBUILT_TITLE = re.compile(r"fp\d{6}$")
+
+
 def read_batch(lib, files, on_reading=None, report=None, on_duplicate=None,
                cancelled=None):
     """Pass 1 of an add: read every file's tags and drop the ones already on
@@ -77,6 +83,12 @@ def read_batch(lib, files, on_reading=None, report=None, on_duplicate=None,
     yet), ``failed`` the paths that aren't usable audio, ``skipped`` the
     duplicates' paths."""
     seen = {track_key(t) for t in lib.tracks}
+    # A rebuild names an UNTAGGED file after its card file ("fp123456"), so
+    # its key no longer matches the original's ("untagged", from the source
+    # file name) and re-adding the original copied it again. Such a track
+    # matches on size + duration alone.
+    rebuilt = {(t.size, t.tracklen) for t in lib.tracks
+               if _REBUILT_TITLE.match(t.title or "")}
     nfiles = len(files)
     pending, failed, skipped = [], [], []
     for nr, path in enumerate(files, 1):
@@ -89,7 +101,7 @@ def read_batch(lib, files, on_reading=None, report=None, on_duplicate=None,
             failed.append(path)
             continue
         key = track_key(track)
-        if key in seen:
+        if key in seen or (track.size, track.tracklen) in rebuilt:
             if on_duplicate:
                 on_duplicate(nr, nfiles, path)
             skipped.append(path)

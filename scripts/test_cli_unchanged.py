@@ -113,10 +113,16 @@ SCENARIOS = {
         S("ls --raw {img} all"),
         S("rebuild --raw {img}", write=True, expect="Rebuilt the iTunesDB"),
         S("ls --raw {img} all", expect="2 tracks"),
-        S("add --raw {img} {music}", write=True, expect="tracks added"),
+        # Re-add after the rebuild: tagged files only. Re-adding the untagged
+        # WAV here hit a baseline bug (a rebuilt untagged track wasn't seen as
+        # a duplicate, so it was copied again); that fix has its own
+        # before/after test, scripts/test_rebuild_dedup.py.
+        S('add --raw {img} "{music}/Alpha Band" '
+          '"{music}/Beta Group/Only Album/03 Third.mp3"', write=True,
+          expect="3 tracks added, 1 skipped"),
         S("ls --raw {img} all"),
         S("rm --raw {img} 55 56", write=True, expect="Removed 2 tracks"),
-        S("ls --raw {img} all", expect="4 tracks"),
+        S("ls --raw {img} all", expect="3 tracks"),
     ],
     "rejections": [
         # BUG in the baseline: an image too small for any data partition died
@@ -182,8 +188,21 @@ SCENARIOS = {
         {"py": "corrupt_db"},
         S("add --raw {img} {music}", pty=[(r"\[Aye/Nay\] ", "n\r")],
           expect="belay that"),
+        # BUGS in the baseline, both named here: the rebuilt untagged track
+        # wasn't seen as a duplicate (so "1 track added" was a second copy),
+        # and an accepted rebuild was only saved if something was added.
         S("add --raw {img} {music}", write=True,
-          pty=[(r"\[Aye/Nay\] ", "\r")], expect="1 track added"),
+          pty=[(r"\[Aye/Nay\] ", "\r")], expect="1 track added",
+          intended={"why": "after the rebuild every file is a duplicate, and "
+                           "the rebuilt database is saved anyway",
+                    "stdout_has": "0 tracks added, 5 skipped (already on "
+                                  "iPod), 1 failed",
+                    "sha": "changed"}),
+        S("ls --raw {img}", expect="tracks",
+          intended={"why": "the card lists the 5 rebuilt tracks (the "
+                           "baseline: 6, one a second copy)",
+                    "stdout_has": '"iPod": 5 tracks, 3 artists, 4 albums',
+                    "sha": "unchanged"}),
     ],
     "terminal_dblimit": [
         {"py": "image", "size": 80 << 20},
@@ -396,6 +415,25 @@ def compare(name, a, b, steps=None):
     for ra, rb, step in zip(a, b, steps):
         intended = step.get("intended") or {}
         for key in ("rc", "stdout", "stderr", "sha"):
+            if key + "_has" in intended:          # named: must contain
+                if intended[key + "_has"] not in (rb.get(key) or ""):
+                    diffs.append("%s step %d: intended change (%s) not as "
+                                 "named: %r lacks %r" % (
+                                     name, ra["step"], intended["why"],
+                                     (rb.get(key) or "")[-300:],
+                                     intended[key + "_has"]))
+                continue
+            if key == "sha" and intended.get("sha") in ("changed",
+                                                         "unchanged"):
+                # the image follows an earlier named change: only whether
+                # THIS step wrote it is compared
+                want = intended["sha"] == "changed"
+                if bool(rb.get("changed")) != want:
+                    diffs.append("%s step %d: intended change (%s): the image "
+                                 "should%s have changed" % (
+                                     name, ra["step"], intended["why"],
+                                     "" if want else " not"))
+                continue
             if key in intended:
                 if rb.get(key) != intended[key]:
                     diffs.append("%s step %d: intended change (%s) not as "

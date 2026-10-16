@@ -164,6 +164,11 @@ jobs:
         shell: bash
         run: PYTHONPATH=. python scripts/test_itunesdb_strict.py
 
+      - name: Re-adding after a rebuild doesn't copy untagged songs again
+        if: runner.os == 'Linux'
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_rebuild_dedup.py
+
       - name: flashpod burn checks (a file stands in for the card)
         if: runner.os == 'Linux'
         shell: bash
