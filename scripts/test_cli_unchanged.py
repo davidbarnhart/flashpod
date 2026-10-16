@@ -119,9 +119,16 @@ SCENARIOS = {
         S("ls --raw {img} all", expect="4 tracks"),
     ],
     "rejections": [
-        # (An image too small for any data partition currently dies with a
-        # traceback in the baseline; tracebacks carry file paths and line
-        # numbers, so that case is not compared here. Recorded as a bug.)
+        # BUG in the baseline: an image too small for any data partition died
+        # with a traceback (paths + line numbers, so its stderr can't match).
+        # Fixed; named below. Exit code and image must still match.
+        {"py": "image", "size": 1 << 20},
+        S("flash {img} --firmware {fw} --yes", intended={
+            "why": "a too-small card is refused in words, not a traceback",
+            "stderr": "firmware OK: fw.bin (225280 bytes, structure "
+                      "validated)\nipod.img is too small for an iPod card: "
+                      "1 MiB leaves no room for a data partition after the "
+                      "32 MiB firmware partition.\n"}),
         {"py": "image", "size": 64 << 20},
         S("flash {img} --firmware {badfw} --yes", expect="checksum mismatch"),
         S("flash {img} --firmware {fw} --dry-run", expect="dry-run"),

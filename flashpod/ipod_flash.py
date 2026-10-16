@@ -671,6 +671,14 @@ def flash(device=None, firmware=None,
         sys.exit(color("could not determine size of %s — is a card inserted? "
                        "An empty slot in a multi-slot reader still appears as "
                        "a disk, but reports size 0." % dev, C_RED))
+    try:
+        build_mbr_layout(total_sectors, lba48, max_data_sectors)
+    except ValueError:
+        # this used to escape as a traceback from inside confirm()
+        sys.exit(color("%s is too small for an iPod card: %s leaves no room "
+                       "for a data partition after the %s firmware partition."
+                       % (dev, fmt_size(total_sectors * SECTOR),
+                          fmt_size(FW_BLOCKS * SECTOR)), C_RED))
     confirm(dev, total_sectors, assume_yes or dry_run, lba48, max_data_sectors)
     plat.unmount_all(dev, dry_run)
     result = write_layout(dev, fw, total_sectors, dry_run, do_format, lba48, max_data_sectors)
