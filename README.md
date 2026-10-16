@@ -541,8 +541,55 @@ $ flashpod ls   --raw ipod.img
 An interactive `flash` of an image offers init and music afterwards, as it does
 for a card. The image is what an iPod emulator boots — openpod's
 `tools/ipod_emu_ui.py` reads one with `OPENPOD_DISK=ipod.img` — and it can be
-written to a real card byte for byte (`dd`), though `flashpod flash` on the
-card itself is the tested way to make one.
+written to a real card with `flashpod burn`, below.
+
+### `flashpod burn IMAGE [/dev/sdX]`
+
+Writes a card image file onto a real SD/CF card in a reader, byte for byte,
+then reads the card back to check it. Like `flash`, it erases the card, needs
+root (it elevates via sudo), and asks you to type `ERASE sdX` (`--yes` skips
+that). Leave out the device to choose from the attached removable disks.
+
+Before writing anything it refuses a target that isn't a removable whole disk
+(USB, MMC or hot-plug, per `lsblk`), a disk backing the running system, a
+FireWire disk (early iPod bridges crash on big writes), an empty reader slot,
+and a card smaller than the image; and it refuses an image with no partition
+table. The plan names the image's firmware and library and warns when the data
+partition reaches past 128 GiB (only LBA48 firmware can address that).
+`--dry-run` runs every check and writes nothing; `--no-verify` skips the
+read-back. Linux only for now.
+
+## Using flashpod as a library
+
+`flashpod.card` is the same engine as the CLI, for programs that manage card
+**image files** (an iPod emulator's web front end, for one). It never prints,
+prompts, mounts, asks for root or touches a device: every call refuses
+anything but a regular file.
+
+```python
+from flashpod import card
+
+card.create_blank("a.img", 8 * 10**9)          # sparse
+card.flash("a.img", "iPod_1.1.5.bin.gz")        # same bytes as `flashpod flash a.img --yes`
+card.init("a.img", "My iPod")
+plan = card.plan_add("a.img", ["/music/Album"]) # what would happen; writes nothing
+report = card.add("a.img", ["/music/Album"], plan=plan,
+                  policy={"full": "fit", "ceiling": "refuse"})
+info = card.inspect("a.img")                    # layout, firmware build + fixes, FAT32, iTunesDB counts
+card.remove("a.img", ids=[52, 53])
+card.flash_firmware("a.img", "other.ipsw")      # replace the firmware, keep the music
+```
+
+Also `format_data`, `tracks`, `rebuild`, `firmware_catalog`,
+`fetch_firmware`, `version()` and `API_VERSION` (major.minor; a major bump
+breaks callers). Results have `to_dict()`; errors are
+`flashpod.errors.FlashpodError` subclasses with a stable `code`. Long calls
+take `progress(stage, done, total, item)` and `cancelled()`; a cancelled add
+keeps exactly the tracks already copied. Each image is locked with
+`fcntl.flock` (shared to read, exclusive to write; `CardBusy` on a conflict),
+which other programs using the same image should take too. The module's
+docstring lists which of the CLI's safety rules it keeps and which only apply
+to devices.
 
 ## Notes
 

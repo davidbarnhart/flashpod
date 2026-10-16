@@ -13,6 +13,8 @@ Subcommands:
   flashpod init [name]            create iPod_Control structure + empty DB
   flashpod flash [/dev/sdX]       write iPod firmware + partition layout to a
                                   CF/SD card (1G/2G iPod; needs sudo)
+  flashpod burn IMAGE [/dev/sdX]  write a card image file onto a removable
+                                  SD/CF card (needs sudo)
 
 The mountpoint is auto-detected from mounted filesystems (FAT-family
 mounts under /media, ranked by iPod_Control presence), and a detected
@@ -1486,6 +1488,13 @@ def _cmd_args(opts):
         return [c] + list(getattr(opts, "what", None) or [])
     if c in ("init", "rebuild"):
         return [c] + ([opts.name] if getattr(opts, "name", None) else [])
+    if c == "burn":
+        a = [c, opts.image] + ([opts.device] if opts.device else [])
+        for flag, on in (("--yes", opts.yes), ("--dry-run", opts.dry_run),
+                         ("--no-verify", opts.no_verify)):
+            if on:
+                a.append(flag)
+        return a
     if c == "flash":
         a = [c]
         if getattr(opts, "device", None):
@@ -2913,6 +2922,19 @@ def main():
         parents=[common])
     p_rebuild.add_argument("name", nargs="?", help="iPod name (default: iPod)")
 
+    p_burn = sub.add_parser(
+        "burn", help="write a card image file to an SD/CF card (erases it)")
+    p_burn.add_argument("image", help="the card image file")
+    p_burn.add_argument("device", nargs="?",
+                        help="target disk, e.g. /dev/sdc (else a chooser of "
+                             "removable disks)")
+    p_burn.add_argument("--yes", action="store_true",
+                        help="skip the typed ERASE confirmation")
+    p_burn.add_argument("--dry-run", action="store_true",
+                        help="check everything and show the plan; write nothing")
+    p_burn.add_argument("--no-verify", action="store_true",
+                        help="don't read the card back afterwards")
+
     p_fl = sub.add_parser("flash",
                           help="write iPod firmware to a CF/SD card (erases it)")
     p_fl.add_argument("device", nargs="?",
@@ -2945,6 +2967,19 @@ def main():
     # disk image: no root, and none of the device-only steps (platform/image.py).
     platform.use_image(opts.device if opts.command == "flash"
                        else getattr(opts, "raw", None))
+
+    if opts.command == "burn":
+        from . import burn
+        if not opts.dry_run and not platform.current().is_admin():
+            if sys.stdin.isatty():
+                print("flashpod burn: writing to a disk needs root — "
+                      "elevating via sudo...", file=sys.stderr)
+                _sudo_reexec(_cmd_args(opts))  # returns only if sudo is missing
+            print("flashpod burn: needs root.\n  sudo "
+                  + " ".join(_self_cmd() + _cmd_args(opts)), file=sys.stderr)
+            return 1
+        return burn.burn(opts.image, opts.device, assume_yes=opts.yes,
+                         dry_run=opts.dry_run, verify=not opts.no_verify)
 
     if opts.command == "flash":
         if opts.self_test:

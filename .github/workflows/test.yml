@@ -148,6 +148,22 @@ jobs:
         shell: bash
         run: PYTHONPATH=. python scripts/test_post_flash_init_offer.py
 
+      # flashpod.card, the library API the emulator's web app calls: every
+      # operation on synthetic image files, checked against the CLI where
+      # both do the same thing. Linux: it uses fcntl.flock, and the tagged
+      # MP3s come from ffmpeg.
+      - name: Library API on image files (flashpod.card)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          command -v ffmpeg >/dev/null || { sudo apt-get update -q && sudo apt-get install -yq ffmpeg; }
+          PYTHONPATH=. python scripts/test_card.py
+
+      - name: flashpod burn checks (a file stands in for the card)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_burn.py
+
       - name: macOS backend against live diskutil
         if: runner.os == 'macOS'
         shell: bash
