@@ -54,5 +54,6 @@ include = ["flashpod*"]
 # (or supplied with --firmware).
 flashpod = [
     "firmware/firmware.json",
+    "firmware/fixes.json",
     "contrib/*.rules",
 ]

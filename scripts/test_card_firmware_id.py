@@ -22,7 +22,7 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from flashpod import card, catalog  # noqa: E402
+from flashpod import card  # noqa: E402
 
 fails = []
 

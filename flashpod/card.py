@@ -60,10 +60,12 @@ from . import itunesdb
 from . import layout
 from . import library
 from . import target as _target
-from .errors import (AlreadyInitialized, CardBusy, CardExists, CardTooSmall,  # noqa: F401 (re-exported)
-                     CorruptLibrary, DbCeiling, FirmwareInvalid, FlashpodError,
-                     LayoutMismatch, NoFirmware, NoSpace, NotACard,
-                     NothingToAdd, NotInitialized, PlanStale)
+# Every error a caller may catch is importable from here (card.CardBusy, ...).
+from .errors import (  # noqa: F401
+    AlreadyInitialized, CardBusy, CardExists, CardTooSmall, CorruptLibrary,
+    DbCeiling, FirmwareInvalid, FlashpodError, LayoutMismatch, NoFirmware,
+    NoSpace, NoSuchTrack, NotACard, NothingToAdd, NotInitialized, PlanStale)
+from .catalog import FirmwareUnavailable  # noqa: F401
 from .tracks import expand, orunknown, track_key
 
 try:
