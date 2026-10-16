@@ -1,0 +1,534 @@
+#!/usr/bin/env python3
+"""Prove the flashpod CLI behaves exactly as a baseline tree does.
+
+    python3 scripts/test_cli_unchanged.py --baseline ../flashpod-baseline
+    python3 scripts/test_cli_unchanged.py --baseline ../flashpod-baseline --mutants
+
+Runs the same scenarios -- sequences of real `flashpod` commands on a disk
+image file -- against the BASELINE tree and the tree this script lives in
+(``--tree`` overrides), and compares, step by step: exit code, stdout, stderr,
+and the sha256 of the image afterwards. Any difference fails, with a diff.
+
+Made for the library refactor (flashpod.card, 2026-10): the CLI was moved onto
+the library and must not change. The baseline is the pre-refactor commit.
+
+Inputs are synthetic only (scripts/synth_fixtures.py): a generated firmware
+volume, ffmpeg-made tagged MP3s, sparse images. Never real music or cards.
+
+Determinism: every command runs in a fresh process through a shim that seeds
+``random`` and freezes ``time.time``/``time.monotonic`` before flashpod is
+imported, with the same paths, environment and terminal size for both trees.
+The same baseline run twice must therefore match itself; ``--self`` checks
+that.
+
+Not vacuous: a step's output may not be empty, steps marked as writes must
+change the image, and ``expect`` strings must appear in the BASELINE output
+(so a scenario that silently stopped doing what it says fails). ``--mutants``
+applies deliberate one-line breakages to a copy of the tree under test and
+requires the comparison to FAIL for each.
+
+Terminal paths (the prompts) run under a pseudo-terminal, 80x24, answering
+prompts by pattern; their transcript (stdout+stderr merged, ANSI included) is
+compared whole.
+"""
+import argparse
+import difflib
+import errno
+import fcntl
+import hashlib
+import os
+import re
+import select
+import shlex
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import termios
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import synth_fixtures as synth  # noqa: E402
+
+RUNNER = r'''
+import os, random, sys, time
+sys.path.insert(0, os.environ["FP_TREE"])
+random.seed(1234)
+time.time = lambda: 1760000000.0
+time.monotonic = lambda: 1000.0
+sys.argv = ["flashpod"] + sys.argv[1:]
+from flashpod import cli
+sys.exit(cli.main())
+'''
+
+IMG = "ipod.img"
+
+
+# -- scenarios ----------------------------------------------------------------
+# A step is a dict:
+#   argv     flashpod arguments ("{img}", "{fw}", "{badfw}", "{music}" expand)
+#   env      extra environment
+#   pty      [(regex, answer), ...] -> run under a pseudo-terminal
+#   write    True if the step must change the image
+#   expect   substring that must appear in the baseline's output
+#   py       name of a harness action instead of a command (same for both)
+#   size     (for "image" py action) bytes
+
+def S(argv, **kw):
+    d = {"argv": shlex.split(argv)}
+    d.update(kw)
+    return d
+
+
+SCENARIOS = {
+    "lifecycle": [
+        {"py": "image", "size": 96 << 20},
+        S("flash {img} --firmware {fw} --yes", write=True,
+          expect="verify OK"),
+        S("ls --raw {img}", expect="no iPod_Control directory"),
+        S("init --raw {img} MyPod", write=True, expect="Initialized"),
+        S("ls --raw {img}", expect='iPod "MyPod": 0 tracks'),
+        S("add --raw {img} {music}", write=True,
+          expect="5 tracks added, 1 failed"),
+        S('add --raw {img} "{music}/Alpha Band/First Album/01 Opening.mp3"',
+          expect="already on iPod"),
+        S("ls --raw {img} all", expect="Second Song"),
+        S("ls --raw {img} artist", expect="3 artists (5 tracks)"),
+        S("ls --raw {img} artists"),
+        S("ls --raw {img} album", expect="4 albums (5 tracks)"),
+        S("ls --raw {img} albums"),
+        S("ls --raw {img}", expect="5 tracks"),
+        S("rm --raw {img} 53", write=True,
+          expect="Removed: Alpha Band - Second Song"),
+        S("rm --raw {img} 9999", expect="no track with id 9999"),
+        S("rm --raw {img} artist", expect="name required"),
+        S("rm --raw {img} abc", expect="expected track ids"),
+        S("rm --raw {img} album later album", write=True,
+          expect="Removed: Alpha Band - Return"),
+        S("rm --raw {img} artist Nobody", expect="no tracks match"),
+        S("rm --raw {img} artist beta group", write=True,
+          expect="Removed: Beta Group - Third"),
+        S("ls --raw {img} all"),
+        S("rebuild --raw {img}", write=True, expect="Rebuilt the iTunesDB"),
+        S("ls --raw {img} all", expect="2 tracks"),
+        S("add --raw {img} {music}", write=True, expect="tracks added"),
+        S("ls --raw {img} all"),
+        S("rm --raw {img} 55 56", write=True, expect="Removed 2 tracks"),
+        S("ls --raw {img} all", expect="4 tracks"),
+    ],
+    "rejections": [
+        # (An image too small for any data partition currently dies with a
+        # traceback in the baseline; tracebacks carry file paths and line
+        # numbers, so that case is not compared here. Recorded as a bug.)
+        {"py": "image", "size": 64 << 20},
+        S("flash {img} --firmware {badfw} --yes", expect="checksum mismatch"),
+        S("flash {img} --firmware {fw} --dry-run", expect="dry-run"),
+        S("ls --raw {img}", expect="couldn't read a FAT"),
+        S("add --raw {img} {music}", expect="couldn't open a FAT"),
+        # 64 MiB leaves too few clusters for FAT32: flashed, but unformatted
+        S("flash {img} --firmware {fw} --yes", write=True,
+          expect="too small for FAT32"),
+        S("init --raw {img}", expect="couldn't open a FAT"),
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --firmware {fw} --yes", write=True),
+        # BUG (baseline): add on a card with no iTunesDB exits 1 SILENTLY
+        S("add --raw {img} {music}", empty_ok=True),
+        S("rm --raw {img} 1", expect="no iTunesDB"),
+        S("init --raw {img}", write=True),
+        S('add --raw {img} "{music}/Beta Group/broken.mp3"',
+          expect="unreadable"),
+        S('add --raw {img} "{music}/Alpha Band/notes.txt"',
+          expect="not a recognized audio file"),
+        S("add --raw {img} /nonexistent/path"),
+        {"py": "corrupt_db"},
+        S("ls --raw {img}", expect="failed to parse"),
+        S("add --raw {img} {music}", expect="corrupt"),
+        S("rm --raw {img} 1", expect="corrupt"),
+    ],
+    "limits": [
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --firmware {fw} --yes", write=True),
+        S("init --raw {img}", write=True),
+        S("add --raw {img} {music}", env={"FLASHPOD_DB_LIMIT": "3000"},
+          expect="would fit"),
+        S("add --raw {img} {music}", env={"FLASHPOD_DB_LIMIT": "100"},
+          expect="already exceeds"),
+        S("add --raw {img} {music}", env={"FLASHPOD_DB_LIMIT": "0"},
+          write=True, expect="tracks added"),
+        S("add --raw {img} {big}", expect="free"),
+    ],
+    "terminal": [
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --firmware {fw}", write=True, pty=[
+            (r'Type "ERASE ipod\.img" to proceed: ', "ERASE ipod.img\r"),
+            (r"Run init on .* now\? \[Y/n\] ", "y\r"),
+            (r"Load music onto the card now\? \[Y/n\] ", "y\r"),
+            (r"or type a path\): ", "{music}\r"),
+        ], expect="tracks added"),
+        S("add --raw {img} {music}", pty=[], expect="already on iPod"),
+        {"py": "corrupt_db"},
+        S("add --raw {img} {music}", pty=[(r"\[Aye/Nay\] ", "n\r")],
+          expect="belay that"),
+        S("add --raw {img} {music}", write=True,
+          pty=[(r"\[Aye/Nay\] ", "\r")], expect="1 track added"),
+    ],
+    "terminal_dblimit": [
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --firmware {fw} --yes", write=True),
+        S("init --raw {img}", write=True),
+        S("add --raw {img} {music}", env={"FLASHPOD_DB_LIMIT": "3000"},
+          pty=[(r"Add just those\? \[Y/n\] ", "n\r"),
+               (r"Add ALL anyway.*\[y/N\] ", "\r")],
+          expect="nothing added"),
+        S("add --raw {img} {music}", env={"FLASHPOD_DB_LIMIT": "3000"},
+          write=True, pty=[(r"Add just those\? \[Y/n\] ", "\r")],
+          expect="dropped to fit the database ceiling"),
+    ],
+    "terminal_space": [
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --firmware {fw} --yes", write=True),
+        S("init --raw {img}", write=True),
+        S("add --raw {img} {big} {music}", pty=[(r"enter add", "q")],
+          expect="nothing added"),
+        S("add --raw {img} {big} {music}", write=True,
+          pty=[(r"enter add", "\r")], expect="dropped to fit free space"),
+    ],
+    "wrong_confirm": [
+        {"py": "image", "size": 64 << 20},
+        S("flash {img} --firmware {fw}",
+          pty=[(r"to proceed: ", "ERASE sdb\r")],
+          expect="did not match"),
+    ],
+}
+
+
+# -- running ------------------------------------------------------------------
+def sha(path):
+    if not os.path.exists(path):
+        return "-"
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def env_for(work, tree, extra):
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": os.path.join(work, "home"),
+        "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+        "PYTHONHASHSEED": "0", "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONIOENCODING": "utf-8", "TERM": "xterm",
+        "FP_TREE": tree,
+    }
+    env.update(extra or {})
+    return env
+
+
+def expand_arg(a, ctx):
+    return a.format(**ctx)
+
+
+def run_pipe(cmd, env, cwd):
+    p = subprocess.run(cmd, env=env, cwd=cwd, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       timeout=600)
+    return p.returncode, p.stdout.decode("utf-8", "replace"), \
+        p.stderr.decode("utf-8", "replace")
+
+
+def run_pty(cmd, env, cwd, answers, timeout=120):
+    master, slave = os.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+
+    def child_setup():
+        os.setsid()
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+    p = subprocess.Popen(cmd, env=env, cwd=cwd, stdin=slave, stdout=slave,
+                         stderr=slave, preexec_fn=child_setup, close_fds=True)
+    os.close(slave)
+    out = b""
+    seen = 0                       # answers match only text after the last one
+    pending = list(answers)
+    deadline = time.monotonic() + timeout
+    note = ""
+    while True:
+        if pending:
+            rx, ans = pending[0]
+            m = re.search(rx.encode(), out[seen:])
+            if m:
+                os.write(master, ans.encode())
+                seen += m.end()
+                pending.pop(0)
+                continue
+        if time.monotonic() > deadline:
+            note = "\n[harness] TIMEOUT waiting for %r\n" % (
+                pending[0][0] if pending else "exit")
+            p.kill()
+            break
+        r, _, _ = select.select([master], [], [], 0.2)
+        if r:
+            try:
+                data = os.read(master, 65536)
+            except OSError as e:
+                if e.errno == errno.EIO:
+                    break
+                raise
+            if not data:
+                break
+            out += data
+        elif p.poll() is not None:
+            # drain whatever is left, then stop
+            try:
+                while select.select([master], [], [], 0.1)[0]:
+                    data = os.read(master, 65536)
+                    if not data:
+                        break
+                    out += data
+            except OSError:
+                pass
+            break
+    rc = p.wait()
+    os.close(master)
+    if pending and not note:
+        note = "\n[harness] never saw prompt %r\n" % pending[0][0]
+    return rc, out.decode("utf-8", "replace") + note, ""
+
+
+def corrupt_db(img):
+    """Break the iTunesDB in place so it no longer parses: every "mhbd" magic
+    in the data partition (the live DB and any stale freed copy) becomes
+    "XXXX". The structure still says iPod; the database is unreadable.
+
+    (Overwriting the body instead does NOT make it unreadable: the parser
+    stops at the first unexpected header and returns an EMPTY library --
+    recorded as a finding, 2026-10-16.)"""
+    with open(img, "r+b") as f:
+        data = f.read()
+        start = 65599 * 512
+        hits = 0
+        i = data.find(b"mhbd", start)
+        while i >= 0:
+            f.seek(i)
+            f.write(b"XXXX")
+            hits += 1
+            i = data.find(b"mhbd", i + 4)
+        if not hits:
+            raise RuntimeError("no iTunesDB in the image to corrupt")
+
+
+def run_scenario(name, steps, tree, work, fixtures, runner):
+    if os.path.exists(work):
+        shutil.rmtree(work)
+    os.makedirs(os.path.join(work, "home"))
+    shutil.copytree(fixtures["music"], os.path.join(work, "music"))
+    ctx = {"img": IMG, "fw": fixtures["fw"], "badfw": fixtures["badfw"],
+           "music": os.path.join(work, "music"), "big": fixtures["big"]}
+    img = os.path.join(work, IMG)
+    records = []
+    for i, step in enumerate(steps):
+        if "py" in step:
+            if step["py"] == "image":
+                if os.path.exists(img):
+                    os.remove(img)
+                with open(img, "wb") as f:
+                    f.truncate(step["size"])
+            elif step["py"] == "corrupt_db":
+                corrupt_db(img)
+            records.append({"step": i, "py": step["py"], "sha": sha(img)})
+            continue
+        argv = [expand_arg(a, ctx) for a in step["argv"]]
+        cmd = [sys.executable, runner] + argv
+        env = env_for(work, tree, step.get("env"))
+        before = sha(img)
+        if "pty" in step:
+            answers = [(rx, ans.format(**ctx)) for rx, ans in step["pty"]]
+            rc, out, err = run_pty(cmd, env, work, answers)
+        else:
+            rc, out, err = run_pipe(cmd, env, work)
+        records.append({"step": i, "argv": " ".join(step["argv"]),
+                        "rc": rc, "stdout": out, "stderr": err,
+                        "sha": sha(img), "changed": sha(img) != before})
+    return records
+
+
+def check_meaningful(name, steps, recs):
+    """Vacuity guard, applied to the BASELINE records."""
+    problems = []
+    for step, rec in zip(steps, recs):
+        if "py" in step:
+            continue
+        text = rec["stdout"] + rec["stderr"]
+        where = "%s step %d (%s)" % (name, rec["step"], rec["argv"])
+        if not text.strip() and not step.get("empty_ok"):
+            problems.append(where + ": empty output")
+        if step.get("write") and not rec["changed"]:
+            problems.append(where + ": marked as a write, image unchanged")
+        if step.get("expect") and step["expect"] not in text:
+            problems.append(where + ": expected %r in output" % step["expect"])
+        if "TIMEOUT" in text or "never saw prompt" in text:
+            problems.append(where + ": " + text.strip().splitlines()[-1])
+    return problems
+
+
+def compare(name, a, b):
+    diffs = []
+    for ra, rb in zip(a, b):
+        for key in ("rc", "stdout", "stderr", "sha"):
+            if ra.get(key) != rb.get(key):
+                where = "%s step %d (%s): %s differs" % (
+                    name, ra["step"], ra.get("argv", ra.get("py")), key)
+                if key in ("stdout", "stderr"):
+                    d = "\n".join(difflib.unified_diff(
+                        str(ra[key]).splitlines(), str(rb[key]).splitlines(),
+                        "baseline", "tree", lineterm="", n=2))
+                    where += "\n" + d
+                else:
+                    where += ": %r vs %r" % (ra.get(key), rb.get(key))
+                diffs.append(where)
+                break
+    if len(a) != len(b):
+        diffs.append("%s: %d vs %d steps" % (name, len(a), len(b)))
+    return diffs
+
+
+def make_fixtures(root):
+    music = synth.make_music(os.path.join(root, "music"))
+    fw = synth.write_firmware(os.path.join(root, "fw.bin"))
+    badfw = synth.write_firmware(os.path.join(root, "badfw.bin"),
+                                 bad_checksum=True)
+    big = synth.big_wav(os.path.join(root, "big.wav"), 60)
+    return {"music": music, "fw": fw, "badfw": badfw, "big": big}
+
+
+def run_all(tree, root, fixtures, runner, only=None):
+    out = {}
+    for name, steps in SCENARIOS.items():
+        if only and name not in only:
+            continue
+        out[name] = run_scenario(name, steps, tree,
+                                 os.path.join(root, "work-" + name),
+                                 fixtures, runner)
+    return out
+
+
+#: Deliberate breakages: (description, file glob under flashpod/, old, new).
+#: Each must apply exactly once to the tree under test and make the comparison
+#: fail -- proof the harness can see a change of that kind.
+MUTANTS = [
+    ("a changed message",
+     "not a recognized audio file", "not a recognised audio file"),
+    ("an off-by-one in the database fit count",
+     "            hi = mid - 1\n    return lo\n",
+     "            hi = mid - 1\n    return max(0, lo - 1)\n"),
+]
+
+
+def apply_mutant(tree, old, new):
+    hits = []
+    for dirpath, _, files in os.walk(os.path.join(tree, "flashpod")):
+        for fn in files:
+            if fn.endswith(".py"):
+                p = os.path.join(dirpath, fn)
+                with open(p, encoding="utf-8") as f:
+                    s = f.read()
+                if s.count(old):
+                    hits.append((p, s))
+    if len(hits) != 1 or hits[0][1].count(old) != 1:
+        raise RuntimeError("mutant %r applies %d times, need exactly 1"
+                           % (old[:40], sum(h[1].count(old) for h in hits)))
+    p, s = hits[0]
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(s.replace(old, new))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--baseline", required=True,
+                    help="a checkout of the pre-refactor commit")
+    ap.add_argument("--tree", default=os.path.dirname(HERE),
+                    help="tree under test (default: this checkout)")
+    ap.add_argument("--self", action="store_true",
+                    help="compare the baseline against itself (determinism)")
+    ap.add_argument("--mutants", action="store_true",
+                    help="also require each deliberate mutant to FAIL")
+    ap.add_argument("--only", nargs="*", help="scenario names")
+    ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--dump", action="store_true",
+                    help="print every baseline step's output (for writing "
+                         "expectations)")
+    opts = ap.parse_args()
+
+    baseline = os.path.abspath(opts.baseline)
+    tree = os.path.abspath(baseline if opts.self else opts.tree)
+    root = tempfile.mkdtemp(prefix="fp-unchanged-")
+    try:
+        runner = os.path.join(root, "runner.py")
+        with open(runner, "w") as f:
+            f.write(RUNNER)
+        fixtures = make_fixtures(os.path.join(root, "fixtures"))
+        base = run_all(baseline, root, fixtures, runner, opts.only)
+        if opts.dump:
+            for name, recs in base.items():
+                for r in recs:
+                    print("==== %s step %d: %s  rc=%s changed=%s" % (
+                        name, r["step"], r.get("argv", r.get("py")),
+                        r.get("rc"), r.get("changed")))
+                    print(r.get("stdout", "") + r.get("stderr", ""))
+        problems = []
+        for name, recs in base.items():
+            problems += check_meaningful(name, SCENARIOS[name], recs)
+        if problems:
+            print("BASELINE RUN IS NOT MEANINGFUL:")
+            print("\n".join("  " + p for p in problems))
+            return 1
+        nsteps = sum(1 for r in base.values() for x in r if "argv" in x)
+        print("baseline %s: %d scenarios, %d commands, all meaningful"
+              % (baseline, len(base), nsteps))
+
+        new = run_all(tree, root, fixtures, runner, opts.only)
+        diffs = []
+        for name in base:
+            diffs += compare(name, base[name], new[name])
+        if diffs:
+            print("DIFFERENT from baseline (%s):" % tree)
+            print("\n\n".join(diffs))
+            return 1
+        print("IDENTICAL: %s matches the baseline on every step "
+              "(rc, stdout, stderr, image sha256)" % tree)
+
+        if opts.mutants:
+            failed_to_catch = []
+            for desc, old, new_s in MUTANTS:
+                mt = os.path.join(root, "mutant")
+                if os.path.exists(mt):
+                    shutil.rmtree(mt)
+                shutil.copytree(tree, mt, ignore=shutil.ignore_patterns(
+                    ".git", "build", "dist", "__pycache__", "*.img"))
+                apply_mutant(mt, old, new_s)
+                got = run_all(mt, root, fixtures, runner, opts.only)
+                d = []
+                for name in base:
+                    d += compare(name, base[name], got[name])
+                if d:
+                    print("mutant caught (%s): %s" % (desc, d[0].splitlines()[0]))
+                else:
+                    failed_to_catch.append(desc)
+            if failed_to_catch:
+                print("MUTANTS NOT CAUGHT: " + "; ".join(failed_to_catch))
+                return 1
+            print("all %d mutants caught" % len(MUTANTS))
+        return 0
+    finally:
+        if opts.keep:
+            print("kept " + root)
+        else:
+            shutil.rmtree(root, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
