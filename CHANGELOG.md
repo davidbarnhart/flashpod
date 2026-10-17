@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `flashpod add` lifts the iTunesDB size limit on firmware with the
+  large-library fix. When a batch would pass 1.5's ~3.8 MB ceiling, it reads
+  the card's firmware (a few sectors), and on flashpod 1.6 the only limit is
+  the 32,000-track playlist cap. `FLASHPOD_DB_LIMIT=0` is no longer needed on
+  a 1.6 card. The library's plan, add and inspect report which limit applies.
+
 ## 0.5.0 (2026-10-16)
 
 ### flashpod 1.6 firmware for the 1st and 2nd generation

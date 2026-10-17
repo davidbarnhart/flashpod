@@ -60,6 +60,33 @@ def open_image_fat(fileobj):
                        else "bad_fat", error=str(exc))
 
 
+def firmware_reader(read_sectors):
+    """``read(offset, n)`` over the card's firmware partition, given
+    ``read_sectors(lba, count)`` over the whole disk; None when sector 0
+    holds no MBR firmware partition (type 0x00 with a start and a length --
+    a Windows-flavor card; an APM card or a bare FAT partition has none)."""
+    from .layout import SECTOR
+    mbr = read_sectors(0, 1)
+    if len(mbr) < SECTOR or mbr[510:512] != b"\x55\xaa":
+        return None
+    start = None
+    for poff in (446, 462, 478, 494):
+        lba, count = struct.unpack_from("<II", mbr, poff + 8)
+        if mbr[poff + 4] == 0x00 and lba and count:
+            start = lba
+            break
+    if start is None:
+        return None
+
+    def read(offset, n):
+        first = offset // SECTOR
+        last = (offset + n - 1) // SECTOR
+        data = read_sectors(start + first, last - first + 1)
+        skip = offset - first * SECTOR
+        return bytes(data[skip:skip + n])
+    return read
+
+
 class RawTarget:
     """An iPod managed DIRECTLY over its raw device with the userspace FAT
     driver — no OS mount. Provides the read/write operations the data commands
@@ -207,6 +234,19 @@ class RawTarget:
         the pre-flight, proceed anyway'."""
         return self.fs.free_bytes()
 
+    # -- the card's firmware (for the add pre-flight's DB ceiling) ---------
+    def firmware_read(self):
+        """``read(offset, n)`` over the card's firmware partition, or None
+        when this target can't reach it (opened on the data partition's own
+        node, or no MBR firmware partition). The FAT's block device reads
+        relative to its partition, so the disk's sector 0 is -part_start."""
+        dev = self.fs.dev
+        try:
+            return firmware_reader(
+                lambda lba, count: dev.read(lba - dev.part_start, count))
+        except (OSError, ValueError):
+            return None
+
 
 class MountTarget(object):
     """An iPod reached through an OS MOUNT (the kernel's FAT driver): the same
@@ -214,10 +254,14 @@ class MountTarget(object):
     CLI's mount-path commands (cmd_add / cmd_rm / cmd_rebuild / init) so the
     library drives both backends with one set of operations."""
 
-    def __init__(self, mount):
+    def __init__(self, mount, firmware_read=None):
         self.mount = mount
         self.node = mount
         self.desc = ""
+        # A mount has no raw access of its own: the CLI may supply a
+        # () -> read(offset, n) over the card's firmware partition (it knows
+        # the device and can elevate to read it).
+        self._firmware_read = firmware_read
 
     def _path(self, location):
         return os.path.join(self.mount, *location.lstrip(":").split(":"))
@@ -287,3 +331,13 @@ class MountTarget(object):
     def free_bytes(self):
         import shutil
         return shutil.disk_usage(self.mount).free
+
+    def firmware_read(self):
+        """``read(offset, n)`` over the card's firmware partition, if the
+        caller supplied a way to get one; None otherwise."""
+        if self._firmware_read is None:
+            return None
+        try:
+            return self._firmware_read()
+        except (OSError, ValueError):
+            return None

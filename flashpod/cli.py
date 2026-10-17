@@ -2305,12 +2305,79 @@ class LineWindow:
         self.status = None
 
 
+def _whole_disk_node(node):
+    """The whole-disk node holding partition (or disk) ``node``: /dev/sdc2 ->
+    /dev/sdc, /dev/rdisk1s2 -> /dev/rdisk1. A disk image, or a node that
+    already is the disk, is returned as-is."""
+    if sys.platform == "darwin":
+        return platform.current().raw_read_node(
+            re.sub(r"^(/dev/r?disk\d+)s\d+$", r"\1", node))
+    if sys.platform.startswith("linux") and node.startswith("/dev/"):
+        return "/dev/" + _disk_of_dev(node)
+    return node
+
+
+def _sector_reader(disk):
+    """``read(lba, count) -> bytes`` over whole-disk ``disk``, read-only, in
+    bridge-safe direct transfers. Opens the node itself when permitted;
+    otherwise (an unelevated run over an OS mount) reads through `sudo dd`,
+    asking in the terminal -- or `sudo -n` when there's none to ask at.
+    None where neither is possible."""
+    plat = platform.current()
+    try:
+        if plat.raw_open_direct():
+            dev = fatfs.BlockDev(disk, max_xfer=_effective_xfer(disk))
+        else:
+            dev = fatfs.BlockDev(max_xfer=_effective_xfer(disk),
+                                 fileobj=plat.open_raw(disk, "rb"))
+        return dev.read
+    except PermissionError:
+        pass
+    if os.name == "nt" or not shutil.which("sudo") or not shutil.which("dd"):
+        return None
+    sudo = ["sudo"] if sys.stdin.isatty() else ["sudo", "-n"]
+    if sys.stdin.isatty():
+        print("flashpod: reading the iPod's firmware (to see how large a "
+              "library it can load) needs root — elevating via sudo...",
+              file=sys.stderr)
+
+    def read(lba, count):
+        cmd = sudo + ["dd", "if=" + disk, "bs=%d" % fatfs.SECTOR,
+                      "skip=%d" % lba, "count=%d" % count]
+        if sys.platform.startswith("linux"):
+            cmd.append("iflag=direct")     # no page cache: FireWire-safe
+        res = subprocess.run(cmd, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL)
+        if res.returncode != 0 or len(res.stdout) != count * fatfs.SECTOR:
+            raise IOError("couldn't read %s" % disk)
+        return res.stdout
+    return read
+
+
+def _mount_firmware_read(mount):
+    """A () -> read(offset, n) over the firmware partition of the card
+    mounted at ``mount`` (for MountTarget), or None from the call when it
+    can't be reached. Lazy: nothing is opened, and no sudo asked, until the
+    add needs the answer (a library past the stock database ceiling)."""
+    from .target import firmware_reader
+
+    def get():
+        node = _device_for_mount(mount)
+        if not node:
+            return None
+        read_sectors = _sector_reader(_whole_disk_node(node))
+        return firmware_reader(read_sectors) if read_sectors else None
+    return get
+
+
 def cmd_add(mount, paths):
     def load_error(exc):
         _say_mount_load_error(mount, exc)
         return 1
     # no rebuild offer over a mount: a corrupt DB is reported, as always
-    return _cmd_add_core(paths, MountTarget(mount), load_error, rebuild=None,
+    return _cmd_add_core(paths, MountTarget(mount,
+                                            _mount_firmware_read(mount)),
+                         load_error, rebuild=None,
                          corrupt_is_load_error=True)
 
 
@@ -2677,15 +2744,52 @@ def _cmd_add_core(paths, target, load_error, rebuild=None,
     # experiments): 3,776,000 bytes loads, 3,776,684 doesn't; track and
     # record counts don't matter, only serialized bytes.
     db_dropped = 0
-    limit = projected = None
+    limit = projected = db = None
     if pending:
-        limit, projected, fit = library.ceiling(lib, [t for _, t in pending])
-    if pending and limit:
+        db = library.ceiling(lib, [t for _, t in pending],
+                             library.library_fix_probe(target))
+        limit, projected, fit = db
+    if pending and limit and db.kind == "tracks":
+        # Past the stock byte ceiling, but the card's firmware has the
+        # library-leak fix: only the playlist's track cap is left.
+        total = len(lib.tracks) + len(pending)
+        if fit == len(pending):
+            print("flashpod add: the iPod's database will be "
+                  f"{projected:,} bytes — more than stock firmware loads, "
+                  "but this card's firmware has the large-library fix "
+                  f"({total:,} of {limit:,} tracks).")
+        else:
+            print(f"flashpod add: that is past the {limit:,} tracks the "
+                  "firmware lists; the rest would be on the card but never "
+                  "shown.", file=sys.stderr)
+            if fit <= 0:
+                print(f"  The library already holds {len(lib.tracks):,}; "
+                      "remove tracks (`flashpod rm`) or set "
+                      "FLASHPOD_DB_LIMIT=0 to override.", file=sys.stderr)
+                return 1
+            if not sys.stdin.isatty():
+                print(f"  {fit} of the {len(pending)} new tracks would fit; "
+                      "trim the batch, or set FLASHPOD_DB_LIMIT=0 to "
+                      "override (can't prompt here).", file=sys.stderr)
+                return 1
+            if ask_yes(f"  {fit} of {len(pending)} new tracks fit under the "
+                       "cap. Add just those? [Y/n] "):
+                db_dropped = len(pending) - fit
+                pending = pending[:fit]
+            elif not ask_yes("  Add ALL anyway — the iPod won't list the "
+                             "extra tracks? [y/N] ", default_yes=False):
+                print("flashpod add: nothing added.")
+                return 0
+    elif pending and limit:
         if projected > limit:
             print(f"flashpod add: this batch would grow the iPod's database "
                   f"to {projected:,} bytes — past the ~{limit:,}-byte "
                   "ceiling early iPod firmware can load (the iPod would "
                   "then show ZERO songs).", file=sys.stderr)
+            if db.firmware is None and "FLASHPOD_DB_LIMIT" not in os.environ:
+                print("  (Couldn't read the card's firmware to check for the "
+                      "large-library fix that flashpod 1.6 has; assuming "
+                      "stock.)", file=sys.stderr)
             if fit <= 0:
                 print("  The library alone already exceeds the ceiling; "
                       "remove tracks (`flashpod rm`) or set "

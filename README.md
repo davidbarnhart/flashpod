@@ -407,8 +407,12 @@ tracks 1–5 scrolled away above.
 > ~3.78 MB of iTunesDB (roughly 5,000–5,500 tracks with typical tags; it's the
 > *bytes* that matter, not the track count, so rich tags cost capacity).
 > `flashpod add` projects the database size before copying and offers to trim
-> the batch to what fits. `FLASHPOD_DB_LIMIT=<bytes>` overrides the ceiling
-> (`0` disables the check — e.g. for later models that may load more).
+> the batch to what fits. Firmware with openpod's library-leak fix (flashpod
+> 1.6) has no such ceiling: when a batch would pass it, `add` reads the card's
+> firmware (a few sectors; over an OS mount that may ask for your sudo
+> password), and if the fix is there the only limit left is the 32,000-track
+> playlist cap. `FLASHPOD_DB_LIMIT=<bytes>` overrides the ceiling and skips
+> that check (`0` disables it — e.g. for later models that may load more).
 
 ### `flashpod rm`
 
@@ -491,9 +495,8 @@ What you gain over 1.5:
 - **Big libraries.** 1.5 shows zero songs once the iTunesDB passes about
   3.8 MB (around 5,300 tracks), because of a memory leak; 1.6 fixes the leak,
   and a track's record takes 160 bytes instead of 448. It has run on
-  31,958 songs. `flashpod add` doesn't detect 1.6 on the card yet and still
-  stops at 1.5's limit; set `FLASHPOD_DB_LIMIT=0` to add past it on a 1.6
-  card (the remaining limit is the 32,000-track playlist cap).
+  31,958 songs. `flashpod add` sees the fix on the card and lets the
+  library grow to the 32,000-track playlist cap instead of 1.5's limit.
 - **Faster menus.** Artists, an artist and Songs open in about 2 seconds
   instead of 4-6, and the other lists are built with less repeated work.
 - **Faster start-up.** No whole-table name searches, no listing every music

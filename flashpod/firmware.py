@@ -294,6 +294,54 @@ def fixes_present(osos, addr, table=None, aupd=None):
     return found
 
 
+class _OnCard(object):
+    """A firmware image on the card, read only where it is sliced: lets
+    fixes_present test a fix against the card while reading just that fix's
+    bytes (the whole osos is 3.6 MB; FireWire raw reads run ~270 KiB/s)."""
+
+    def __init__(self, read, offset, length):
+        self._read, self._offset, self._length = read, offset, length
+
+    def __len__(self):
+        return self._length
+
+    def __getitem__(self, s):
+        start, stop, _ = s.indices(self._length)
+        if stop <= start:
+            return b""
+        return bytes(self._read(self._offset + start, stop - start))
+
+
+def fix_on_card(read, name, table=None):
+    """Whether the firmware on a card carries the openpod fix ``name``:
+    True/False, or None when it can't be told (no firmware volume, no osos,
+    the fix isn't in the table). ``read(offset, n)`` reads the firmware
+    partition. The same test as fixes_present, reading only the bytes the
+    fix's edits and appended code occupy."""
+    table = table if table is not None else _fixes_table()
+    fix = next((f for f in (table or {}).get("fixes", [])
+                if f["name"] == name), None)
+    if fix is None or read(0, 4) != b"{{~~":
+        return None
+    hdr = read(0x100, 0x10)
+    if hdr[0:4] != b"]ih[":
+        return None
+    ptr, = struct.unpack_from("<I", hdr, 4)
+    fmtver, = struct.unpack_from("<H", hdr, 0x0a)
+    shift = 0x200 if fmtver == 3 else 0
+    images = {}
+    for _off, typ, f in walk_directory(read(ptr + 0x200, 10 * 40), 0):
+        key = typ.decode("latin-1")
+        if key in ("osos", "aupd") and key not in images \
+                and f[2] <= FW_BLOCKS * SECTOR:
+            images[key] = (_OnCard(read, f[1] + shift, f[2]), f[3])
+    if "osos" not in images:
+        return None
+    osos, addr = images["osos"]
+    return name in fixes_present(osos, addr, {"fixes": [fix]},
+                                 aupd=images.get("aupd"))
+
+
 def describe_installed(read, catalog=None):
     """What firmware a card holds. ``read(offset, n)`` returns bytes at
     ``offset`` in the firmware partition. ``catalog`` is the manifest's

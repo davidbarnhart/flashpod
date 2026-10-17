@@ -9,6 +9,7 @@ is about; :mod:`flashpod.card` drives the same functions with a policy.
 
 import os
 import re
+import struct
 
 from . import itunesdb
 from .errors import NoSuchTrack
@@ -188,20 +189,84 @@ def select_for_removal(lib, what):
     return [by_id[i] for i in ids]
 
 
-def ceiling(lib, new_tracks):
-    """The iTunesDB size check for adding ``new_tracks`` to ``lib``:
-    ``(limit, projected, fit)``. ``limit`` is 0/None when disabled
-    (FLASHPOD_DB_LIMIT=0); ``fit`` is how many of ``new_tracks`` (in order)
-    stay under it -- all of them when the projection is within the limit."""
+#: Tracks the 1G/2G firmware lists once it carries openpod's library-leak
+#: fix (flashpod 1.6 does). With the leak gone the byte ceiling above no
+#: longer applies; what's left is the firmware's playlist cap -- a
+#: 33,000-track library boots and lists 32,000. Emulator-measured
+#: (openpod-gen1 wiki 26); hardware-run to 31,958 songs (2026-10-16).
+IPOD_PATCHED_TRACK_LIMIT = 32000
+
+#: The openpod fix (firmware/fixes.json) that removes the byte ceiling.
+LIBRARY_FIX = "library-leak"
+
+
+class Ceiling(object):
+    """The iTunesDB size check for an add (see :func:`ceiling`)."""
+
+    def __init__(self, kind, limit, projected, fit, firmware):
+        self.kind = kind            # "bytes", "tracks", or None (disabled)
+        self.limit = limit          # bytes, or tracks when kind == "tracks"
+        self.projected = projected  # serialized size in bytes (None: not run)
+        self.fit = fit              # how many of the new tracks fit, in order
+        self.firmware = firmware    # library fix on the card: True/False/None
+                                    # (None: couldn't read it, or not asked)
+
+    def __iter__(self):             # the old (limit, projected, fit) shape
+        return iter((self.limit, self.projected, self.fit))
+
+
+def ceiling(lib, new_tracks, fixed=None):
+    """The iTunesDB size check for adding ``new_tracks`` to ``lib``.
+
+    Stock 1G/2G firmware shows zero songs past ~3.78 MB of iTunesDB, so the
+    limit is bytes (IPOD_DB_SIZE_LIMIT; FLASHPOD_DB_LIMIT overrides, 0
+    disables). Firmware with openpod's library-leak fix has no byte ceiling,
+    only the 32,000-track playlist cap. ``fixed`` is a () -> True/False/None
+    that reads the card's firmware for the fix; it's called only when the
+    projection passes the byte limit (reading can cost a sudo prompt and,
+    over FireWire, time) and never when FLASHPOD_DB_LIMIT is set, which is
+    taken at its word. Returns a :class:`Ceiling`; ``fit`` is all of
+    ``new_tracks`` when they fit."""
     limit = _db_size_limit()
+    n = len(new_tracks)
     if not limit:
         # disabled: don't even serialize (it draws random ids, and the CLI's
         # output has always been reproducible without that draw)
-        return limit, None, len(new_tracks)
+        return Ceiling(None, limit, None, n, None)
     projected = _projected_db_size(lib, new_tracks)
-    if projected > limit:
-        return limit, projected, _fit_count(lib, new_tracks, limit)
-    return limit, projected, len(new_tracks)
+    if projected <= limit:
+        return Ceiling("bytes", limit, projected, n, None)
+    firmware = None
+    if fixed is not None and "FLASHPOD_DB_LIMIT" not in os.environ:
+        firmware = fixed()
+    if firmware:
+        cap = IPOD_PATCHED_TRACK_LIMIT
+        fit = n if len(lib.tracks) + n <= cap \
+            else max(0, cap - len(lib.tracks))
+        return Ceiling("tracks", cap, projected, fit, True)
+    return Ceiling("bytes", limit, projected,
+                   _fit_count(lib, new_tracks, limit), firmware)
+
+
+def library_fix_probe(target):
+    """A memoized () -> True/False/None: does the firmware on ``target``'s
+    card carry the library-leak fix? None when the target can't read its
+    firmware partition, or it holds no recognizable firmware. Nothing is
+    read until it's called, and then only once."""
+    from . import firmware as _firmware
+    memo = []
+
+    def probe():
+        if not memo:
+            read = target.firmware_read() \
+                if hasattr(target, "firmware_read") else None
+            try:
+                memo.append(_firmware.fix_on_card(read, LIBRARY_FIX)
+                            if read else None)
+            except (OSError, ValueError, struct.error):
+                memo.append(None)
+        return memo[0]
+    return probe
 
 
 def counts(lib):
