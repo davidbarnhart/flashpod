@@ -458,14 +458,22 @@ def _check_formattable(data_blocks):
                            % geo["clusters"], minimum=min_card_bytes())
 
 
-def flash(path, firmware, lba48=False, max_data_gb=None, format=True):
+def flash(path, firmware, lba48=False, max_data_gb=None, format=True,
+          arm=False):
     """Lay the card out from scratch -- MBR, firmware partition, FAT32 data
     partition -- exactly as ``flashpod flash IMAGE --yes`` does (same bytes),
     then verify the firmware region. ERASES the image. ``firmware`` is a
-    path (raw / .bin.gz / .ipsw) or bytes. Returns a Result with
+    path (raw / .bin.gz / .ipsw) or bytes. ``arm`` arms the disk-mode update
+    as ``flash --arm`` does (FirmwareInvalid, reason ``cannot_arm``, unless
+    the firmware's disk-mode program is a known one). Returns a Result with
     ``firmware_bytes``, ``data_start``, ``data_sectors``, ``clusters``,
     ``cluster_bytes`` (None when ``format=False``)."""
     fw = _firmware_bytes(firmware)
+    if arm:
+        try:
+            fw = _firmware.arm_firmware(fw)
+        except ValueError as exc:
+            raise FirmwareInvalid(str(exc), reason="cannot_arm")
     max_data_sectors = int(max_data_gb * 1000000000 // SECTOR) \
         if max_data_gb else None
     with _Image(path, write=True) as img:

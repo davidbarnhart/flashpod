@@ -12,8 +12,9 @@ temporary XDG cache, so nothing is downloaded and ~/.cache is not touched.
     writes it to a synthetic card, and card.inspect names it "flashpod 1.6",
     maker flashpod, version word 1.6, with all 23 fixes;
   * the CLI: `flashpod flash IMG --model 1G` on a terminal offers 1.6 first,
-    labelled "(flashpod)" and NOT AN APPLE RELEASE; choosing it flashes the
-    card, and the firmware region is byte-identical to the library's.
+    labelled "(flashpod)" and NOT AN APPLE RELEASE; choosing it asks whether
+    to arm (Enter: no), flashes the card unarmed, and the firmware region is
+    byte-identical to the library's.
 """
 import argparse
 import hashlib
@@ -88,6 +89,8 @@ def main():
     rc, out, _ = run_pty([sys.executable, "-m", "flashpod", "flash", cimg,
                        "--model", "1G"], env, ROOT,
                       [(r"Select firmware \[\d+\]: ", "0\n"),
+                       (r"Arm the card for a disk-mode update\? \[y/N\]: ",
+                        "\n"),
                        (r'Type "ERASE card\.img" to proceed: ',
                         "ERASE card.img\n"),
                        (r"\[Y/n\]", "n\n")])
@@ -95,11 +98,17 @@ def main():
                "")
     check("1.6 (flashpod)" in row and "NOT AN APPLE RELEASE" in row,
           "row 0 is 1.6 (flashpod), NOT AN APPLE RELEASE: %r" % row.strip())
+    check("Arm the card for a disk-mode update? [y/N]" in out
+          and "ARMED" not in out,
+          "it asks whether to arm (1.6's disk-mode program is known); "
+          "Enter leaves it unarmed")
     check(rc == 0, "flash exits 0 (rc %r)%s" % (
         rc, "" if rc == 0 else ": " + out.strip().splitlines()[-1]))
     f2 = card.inspect(cimg).firmware
-    check(f2["build"] == "flashpod 1.6", "inspect after the CLI flash: %r"
-          % f2["build"])
+    check(f2.get("build") == "flashpod 1.6"
+          and f2.get("aupd", {}).get("armed") is False,
+          "inspect after the CLI flash: %r, armed %r"
+          % (f2.get("build"), f2.get("aupd", {}).get("armed")))
     n = layout.DATA_START * 512
     check(sha(cimg, 0, n) == sha(img, 0, n),
           "MBR + firmware region identical to the library's flash")

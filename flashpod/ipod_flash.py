@@ -38,7 +38,8 @@ from .errors import VerifyFailed
 # The pure layout/firmware code moved to the library (flashpod.layout,
 # flashpod.firmware); re-exported so `ipod_flash.X` keeps working.
 from .firmware import (fixup_directories, load_firmware,  # noqa: F401
-                       validate_firmware, walk_directory)
+                       validate_firmware, walk_directory, arm_firmware,
+                       aupd_of, aupd_armed)
 from .layout import (DATA_START, FW_BLOCKS, FW_START, LBA28_MAX,  # noqa: F401
                      SECTOR, TAIL_RESERVE, build_mbr_layout,
                      fat_sectors_per_cluster)
@@ -346,8 +347,20 @@ def device_label(dev):
     return name or dev
 
 
+#: What arming does, in the plan and the question (bridge #1231, David's design).
+ARM_EXPLAINED = (
+    "On the next start from this card ON FIREWIRE POWER, the iPod reprograms "
+    "its own flash chip with the card's disk-mode program. On battery it "
+    "shows the connect-power icon and does nothing. If power is cut during "
+    "the first part of the programming (the erases and the first ~7%), the "
+    "iPod won't start again without an external chip programmer; after "
+    "that, a failure repairs itself on the next start. Not checked: "
+    "flashpod has no dump of this iPod's chip, so it can't rehearse the "
+    "update first (openpod's tools/flash_rom_update.py can).")
+
+
 def confirm(dev, total_sectors, assume_yes, lba48=False, max_data_sectors=None,
-            do_format=True):
+            do_format=True, armed=None):
     _, data_start, data_blocks = build_mbr_layout(total_sectors, lba48, max_data_sectors)
     fw_blocks = FW_BLOCKS
     if do_format:
@@ -389,6 +402,9 @@ def confirm(dev, total_sectors, assume_yes, lba48=False, max_data_sectors=None,
         print(color("    ↳ data capped at %s (--max-data-gb); the rest of the "
                     "card is left unused."
                     % fmt_size(max_data_sectors * SECTOR), C_YEL), file=sys.stderr)
+    if armed:
+        print(color("    ⚠ ARMED for a disk-mode update (%s). %s"
+                    % (armed, ARM_EXPLAINED), C_RED), file=sys.stderr)
     mps = _plat.current().device_mountpoints(dev)
     if mps:
         print(color("    mounted now : " + ", ".join("%s@%s" % m for m in mps), C_YEL),
@@ -688,7 +704,7 @@ def check_kept_data(plat, dev, total_sectors, dry_run, lba48=False,
 
 def flash(device=None, firmware=None,
           assume_yes=False, dry_run=False, do_format=True, before_eject=None,
-          lba48=False, max_data_gb=None):
+          lba48=False, max_data_gb=None, arm=False):
     """Flash a card end-to-end; the `ipod flash` entry point.
     Exits via sys.exit() on errors and aborted confirmations.
     `before_eject(dev, raw_fobj, data_start)` runs after the firmware verify
@@ -698,13 +714,22 @@ def flash(device=None, firmware=None,
     gets the still-open raw handle and no MBR yet, everyone else gets the
     table already written and re-read, with `raw_fobj`/`data_start` None.
     `max_data_gb` caps the data partition (manifest `max_data_gb` or the
-    `--max-data-gb` flag); None means no cap."""
+    `--max-data-gb` flag); None means no cap. `arm` leaves the disk-mode
+    update pending (firmware.arm_firmware): refused unless the firmware's
+    aupd is a known one."""
     try:
         fw = load_firmware(firmware)
     except (OSError, ValueError, StopIteration) as e:
         sys.exit(color("firmware error (%s): %s" % (firmware, e), C_RED))
     print(color("firmware OK: %s (%d bytes, structure validated)"
                 % (os.path.basename(firmware), len(fw)), C_GRN), file=sys.stderr)
+    armed = None
+    if arm:
+        try:
+            fw = arm_firmware(fw)
+        except ValueError as e:
+            sys.exit(color("can't arm: %s" % e, C_RED))
+        armed = aupd_of(fw)["known"]
 
     # An optional ceiling in decimal GB caps the data partition; a bigger card
     # is fine, we just clamp. (No firmware needs it now; --max-data-gb sets it.)
@@ -733,7 +758,7 @@ def flash(device=None, firmware=None,
     if not do_format:
         check_kept_data(plat, dev, total_sectors, dry_run, lba48, max_data_sectors)
     confirm(dev, total_sectors, assume_yes or dry_run, lba48, max_data_sectors,
-            do_format)
+            do_format, armed)
     plat.unmount_all(dev, dry_run)
     result = write_layout(dev, fw, total_sectors, dry_run, do_format, lba48, max_data_sectors)
     verify_firmware(dev, fw, dry_run)

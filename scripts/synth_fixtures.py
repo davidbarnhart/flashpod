@@ -39,8 +39,10 @@ def osos_payload(version_word=0x01508000, seed=1, length=OSOS_LEN):
 
 
 def firmware_bytes(version_word=0x01508000, seed=1, payload=None,
-                   bad_checksum=False):
-    """A format-2 firmware volume as Apple ships it (pre-install state)."""
+                   bad_checksum=False, aupd=None):
+    """A format-2 firmware volume as Apple ships it (pre-install state).
+    ``aupd`` (bytes) adds a disk-mode program after osos, with an aupd
+    entry in both directories in Apple's state: id 0, "update pending"."""
     payload = payload if payload is not None else osos_payload(version_word, seed)
     fw = bytearray(OSOS_DEV_OFFSET + len(payload))
     fw[0:4] = b"{{~~"
@@ -58,6 +60,15 @@ def firmware_bytes(version_word=0x01508000, seed=1, payload=None,
         fw[base + 4:base + 8] = b"soso"
         struct.pack_into("<8I", fw, base + 8, 0, dev_off, len(payload),
                          OSOS_ADDR, 0, cksum, 0x00010000, 0x048D0000)
+    if aupd is not None:
+        a_off = len(fw)
+        fw += aupd
+        for base, dev_off in ((ptr, a_off - 0x200), (ptr + 0x200, a_off)):
+            fw[base + 40:base + 44] = b"ksid"
+            fw[base + 44:base + 48] = b"dpua"
+            struct.pack_into("<8I", fw, base + 48, 0, dev_off, len(aupd),
+                             0x40000000, 0, sum(aupd) & 0xFFFFFFFF,
+                             0x00010000, 0x048D0040)
     return bytes(fw)
 
 

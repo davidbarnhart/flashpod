@@ -107,6 +107,81 @@ def fixup_directories(fw):
     return bytes(fw)
 
 
+#: The disk-mode programs (aupd payloads, as the LIVE directory points at
+#: them) flashpod will ARM, by sha256. Arming makes the iPod reprogram its
+#: own flash chip from the card, so only programs known to be good on a
+#: 1G/2G are allowed (openpod firmware session, bridge #1227/#1231).
+KNOWN_AUPD = {
+    "dc68f0fc5d9aae12a30a293507969821915b432d07e1e6b83ccf861650a656fb":
+        "flashpod 1.6 (openpod's disk-mode program, with large disks)",
+    "b32e141d98ad7c0cb94a1829764a491fdbd8980c86982610c2663700ab85b130":
+        "Apple 1.5",
+}
+
+
+def aupd_of(fw):
+    """``{"sha256", "known"}`` of the disk-mode program (aupd) the live
+    directory points at; ``known`` is its KNOWN_AUPD label or None. None
+    when the firmware has no aupd."""
+    import hashlib
+    if fw[0x100:0x104] != b"]ih[":
+        return None
+    ptr, = struct.unpack_from("<I", fw, 0x104)
+    fmtver, = struct.unpack_from("<H", fw, 0x10a)
+    shift = 0x200 if fmtver == 3 else 0
+    for _off, typ, f in walk_directory(fw, ptr + 0x200):
+        if typ == b"aupd":
+            blob = fw[f[1] + shift:f[1] + shift + f[2]]
+            if len(blob) != f[2]:
+                return None
+            digest = hashlib.sha256(blob).hexdigest()
+            return {"sha256": digest, "known": KNOWN_AUPD.get(digest)}
+    return None
+
+
+def arm_firmware(fw):
+    """Install-ready firmware with the disk-mode update ARMED: the aupd
+    entry's id back to 0 ("update pending") in BOTH directories, everything
+    else as fixup_directories left it -- what openpod's
+    tools/flash_rom_update.py writes. On its next start from the card, on
+    FireWire power, the iPod reprograms its flash chip from the card's aupd
+    and sets the id to 1 itself. Raises ValueError unless the aupd is one
+    in KNOWN_AUPD."""
+    info = aupd_of(fw)
+    if info is None:
+        raise ValueError("this firmware has no disk-mode program (aupd) "
+                         "to arm")
+    if info["known"] is None:
+        raise ValueError("this firmware's disk-mode program (aupd sha256 "
+                         "%s) isn't one flashpod knows is safe to arm"
+                         % info["sha256"])
+    fw = bytearray(fw)
+    ptr, = struct.unpack_from("<I", fw, 0x104)
+    n = 0
+    for base in (ptr, ptr + 0x200):
+        for off, typ, _f in walk_directory(fw, base):
+            if typ == b"aupd":
+                struct.pack_into("<I", fw, off + 8, 0)       # update pending
+                n += 1
+    if n != 2:
+        raise ValueError("expected an aupd entry in both directories, "
+                         "found %d" % n)
+    return bytes(fw)
+
+
+def aupd_armed(fw):
+    """True if the aupd entry is armed (id 0) in both directories, False if
+    in neither, None if there's no aupd or the two disagree."""
+    if fw[0x100:0x104] != b"]ih[":
+        return None
+    ptr, = struct.unpack_from("<I", fw, 0x104)
+    ids = [f[0] for base in (ptr, ptr + 0x200)
+           for _o, typ, f in walk_directory(fw, base) if typ == b"aupd"]
+    if len(ids) != 2 or (ids[0] == 0) != (ids[1] == 0):
+        return None
+    return ids[0] == 0
+
+
 def validate_firmware(fw):
     if fw[0:4] != b"{{~~":
         raise ValueError("not an iPod firmware image (missing STOP boot block)")
@@ -231,7 +306,9 @@ def describe_installed(read, catalog=None):
     "flashpod 1.6", a known openpod build, or "unrecognized"), ``maker``
     (the catalog entry's, else None), ``catalog_file``, ``version_word``
     (hex) and ``version_word_means`` ("1.5"/"1.6"/None), ``aupd``
-    (``sha256``, ``length``, ``addr``) when there is one, and ``fixes``
+    (``sha256``, ``length``, ``addr``, ``known`` -- its KNOWN_AUPD label or
+    None -- and ``armed``, a disk-mode update pending) when there is one,
+    and ``fixes``
     (openpod fixes found in osos and aupd, None without a fixes table)."""
     import hashlib
     if read(0, 4) != b"{{~~":
@@ -294,8 +371,12 @@ def describe_installed(read, catalog=None):
         blob = read(aupd["dev_offset"] + shift, aupd["length"])
         if len(blob) == aupd["length"]:
             aupd_code = (blob, aupd["addr"])
-            out["aupd"] = {"sha256": hashlib.sha256(blob).hexdigest(),
-                           "length": aupd["length"], "addr": aupd["addr"]}
+            digest = hashlib.sha256(blob).hexdigest()
+            # armed = a disk-mode update pending (id 0 in both directories)
+            out["aupd"] = {"sha256": digest,
+                           "length": aupd["length"], "addr": aupd["addr"],
+                           "known": KNOWN_AUPD.get(digest),
+                           "armed": aupd_armed(read(0, ptr + 0x200 + 400))}
     out["fixes"] = fixes_present(payload, osos["addr"], aupd=aupd_code) \
         if osos["addr"] == PP5002_OSOS_ADDR else None
     return out

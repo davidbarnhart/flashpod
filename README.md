@@ -513,6 +513,24 @@ Hardware-tested on 2026-10-16 on a 1st-generation iPod, with a 250 GB card of
 Shuffle Songs doesn't start on a library near 32,000 songs. It hasn't been
 tested on a 2G; it's offered for one because 1.5, which it's built from, is.
 
+**Arming a card for a disk-mode update (`--arm`).** A 1G/2G firmware
+carries a second program, the one the iPod runs in FireWire disk mode, which
+lives in the iPod's own flash chip, not on the card. flashpod normally writes
+the card with that update marked as already done, so the chip is left alone.
+An **armed** card leaves it pending: on the next start from the card **on
+FireWire power**, the iPod reprograms its flash chip with the card's
+disk-mode program (flashpod 1.6's carries disk mode past 128 GiB). On battery
+it shows the connect-power icon and does nothing. The risk is small but real:
+if power is cut during the first part of the programming (the erases and the
+first ~7%), the iPod won't start again without an external chip programmer;
+after that, a failure repairs itself on the next start. flashpod has no dump
+of your iPod's chip, so it can't rehearse the update first (openpod's
+`tools/flash_rom_update.py` can). Only disk-mode programs flashpod knows can
+be armed: flashpod 1.6's and Apple 1.5's. An interactive flash of one of them
+asks (default no); `--arm` arms without asking, `--no-arm` never arms, and a
+non-interactive run never arms without `--arm`. `card.flash(..., arm=True)`
+does the same in the library, and `inspect` reports whether a card is armed.
+
 These early images have no low disk-size ceiling — 1.0 and 1.0.4 were tested on
 a 128 GB card in full (the broken-folder icon on such a card means the data
 partition wasn't initialized, since 1.0 doesn't auto-create `iPod_Control`; run
@@ -538,6 +556,7 @@ Options:
 | `--firmware <file>` | use a local image — raw `Firmware-*`, `.bin.gz`, or `.ipsw` (bring-your-own; no download). Default: pick from the catalog and download it |
 | `--model <id>`      | iPod model to flash for (`1G`, `2G`, `3G`, `4G`, `photo`); decides which firmware is offered. Default: ask |
 | `--yes`             | skip the typed `ERASE sdX` confirmation |
+| `--arm` / `--no-arm` | arm the card for a disk-mode update, or don't (and don't ask). Without either, an interactive flash asks, defaulting to no; see below |
 | `--no-format`       | keep the data partition and its music: rewrite only the firmware and partition table. Refused unless the card's data partition already starts and ends where the new table puts it |
 | `--lba48`           | **experimental**: use the whole card for data, past the 128 GiB cap (LBA48-patched iPods only) |
 | `--max-data-gb <N>` | cap the data partition to N decimal GB (e.g. to make a smaller partition, or probe a firmware's disk-size ceiling) |

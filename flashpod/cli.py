@@ -221,6 +221,30 @@ def _download(url, dst, total=None):
             sys.stderr.write("\n")
 
 
+def ask_arm(firmware):
+    """Whether to arm the card for a disk-mode update, asked only on a
+    terminal and only when the firmware carries a disk-mode program flashpod
+    knows (firmware.KNOWN_AUPD). Defaults to no; a non-interactive run never
+    arms without --arm (bridge #1231, David's design)."""
+    if not sys.stdin.isatty():
+        return False
+    try:
+        info = ipod_flash.aupd_of(ipod_flash.load_firmware(firmware))
+    except (OSError, ValueError, StopIteration):
+        return False                     # flash() reports a bad image itself
+    if not info or not info["known"]:
+        return False
+    print("\nThis firmware carries a disk-mode program flashpod can arm "
+          "(%s).\nArming is optional. %s\n" % (info["known"],
+                                                ipod_flash.ARM_EXPLAINED))
+    try:
+        ans = input("Arm the card for a disk-mode update? [y/N]: ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    return ans.strip().lower() in ("y", "yes")
+
+
 def ensure_firmware(entry, base_url):
     """Resolve a manifest entry to a local .ipsw path: prefer a copy shipped
     inside the build, then the verified cache, else download + verify + cache.
@@ -1530,6 +1554,11 @@ def _cmd_args(opts):
             a.append("--no-format")
         if getattr(opts, "lba48", False):
             a.append("--lba48")
+        # the arm question is answered before elevating; carry the answer
+        if getattr(opts, "arm", False):
+            a.append("--arm")
+        elif getattr(opts, "no_arm", False):
+            a.append("--no-arm")
         return a
     return [c]
 
@@ -2963,6 +2992,13 @@ def main():
                       help="keep the data partition and its music: rewrite "
                            "only the firmware and partition table (refused "
                            "unless the card's data partition matches)")
+    arm = p_fl.add_mutually_exclusive_group()
+    arm.add_argument("--arm", action="store_true",
+                     help="arm the card for a disk-mode update: on its next "
+                          "start on FireWire power, the iPod reprograms its "
+                          "flash chip from the card (small risk; see README)")
+    arm.add_argument("--no-arm", action="store_true",
+                     help="don't arm, and don't ask")
     p_fl.add_argument("--lba48", action="store_true",
                       help="EXPERIMENTAL: use the whole card for data, past the "
                            "128 GiB LBA28 cap (only works on an LBA48-patched iPod)")
@@ -3037,6 +3073,9 @@ def main():
         # child re-runs neither the picker nor the download.
         opts.firmware = firmware
         opts.max_data_gb = max_data_gb
+        if not opts.arm and not opts.no_arm:
+            opts.arm = ask_arm(firmware)
+            opts.no_arm = not opts.arm
 
         if not opts.dry_run and not plat.is_admin():
             # Writing to a disk needs elevation — try sudo (prompts for
@@ -3062,7 +3101,8 @@ def main():
                                 do_format=not opts.no_format,
                                 before_eject=offer,
                                 lba48=opts.lba48,
-                                max_data_gb=max_data_gb)
+                                max_data_gb=max_data_gb,
+                                arm=opts.arm)
 
     # Explicit raw-device path: operate on the FAT ourselves, bypassing the OS
     # mount and all the mount-detection / FireWire-queue machinery (the whole

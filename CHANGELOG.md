@@ -18,12 +18,21 @@ RELEASE, and Apple's 1.5 stays the default. Over 1.5 it gives:
 - Artists, an artist and Songs open in about 2 s instead of 4-6, and start-up
   is faster;
 - characters the font lacks show as `?` instead of vanishing;
-- FireWire disk mode past 128 GiB, but only once the iPod's flash ROM has been
-  reprogrammed with openpod's tooling; a flashpod flash doesn't do that.
+- FireWire disk mode past 128 GiB, once the iPod's flash chip holds 1.6's
+  disk-mode program: flash with `--arm` (below), or use openpod's tooling.
 
 It was tested on a real 1st-generation iPod with a 250 GB card of 31,958 songs
 and a 128 GB FLAC card. Known limit, as on 1.5: Shuffle Songs doesn't start on
 a library near 32,000 songs. It hasn't been tested on a 2G. See the README.
+
+### `flash --arm`: arm the card for a disk-mode update
+
+Optionally, a flash can leave the card's disk-mode update pending, so that on
+its next start on FireWire power the iPod reprograms its own flash chip from
+the card. An interactive flash asks (default no); `--arm` arms without asking
+and `--no-arm` never arms. Only flashpod 1.6's and Apple 1.5's disk-mode
+programs can be armed. A power cut early in the programming leaves an iPod
+that needs an external chip programmer; the README explains the risk.
 
 ### flashpod as a library
 
