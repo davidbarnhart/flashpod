@@ -275,6 +275,9 @@ def build_answers(dev, music_dir, model="0"):
         # firmware selection (skipped entirely when --firmware is passed)
         (re.compile(r"Select model:\s*$"),                        model),
         (re.compile(r"Select firmware \[\d+\]:\s*$"),             ""),   # default
+        # the optional disk-mode arming (asked for firmware with a known
+        # aupd, e.g. stock 1.5): Enter takes the default, no
+        (re.compile(r"Arm the card for a disk-mode update\? \[y/N\]:\s*$"), ""),
         # the destructive confirmation (skipped by --yes, here for completeness)
         (re.compile(r'Type "ERASE [^"]+" to proceed:\s*$'),
          "ERASE " + os.path.basename(dev)),
