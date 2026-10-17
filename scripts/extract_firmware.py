@@ -83,7 +83,7 @@ ERA = (datetime.datetime(2001, 1, 1), datetime.datetime(2008, 1, 1))
 # The real build date is compiled INTO the image: these binaries carry a C
 # __DATE__ string ("Nov 01 2001", day space-padded). That is the primary
 # source, and it is verifiable -- it reproduces the dates the manifest
-# already recorded for 0.0, 0.4, 1.4 and 1.5, two of which were established
+# already recorded for 1.0, 1.0.4, 1.4 and 1.5, two of which were established
 # long before this script existed and had no zip timestamp to come from.
 #
 # An inner-zip timestamp is the fallback, and it is the PACKAGING date, not
@@ -220,18 +220,22 @@ VERSION_OVERRIDES = {
 
 
 def flashpod_version(family, version):
-    """Apple's version string -> the one the picker shows.
+    """Apple's version string -> the catalog's ``version``: Apple's own
+    user-facing number (VERSION_OVERRIDES maps the families whose Firmware-*
+    file names count differently)."""
+    return VERSION_OVERRIDES.get((family, version), version)
 
-    They differ in exactly one place. Apple's family-1 line ran 1.0, 1.0.2,
-    1.0.3, 1.0.4, then 1.1, 1.2, 1.3... -- so a plain string sort puts the
-    2001 launch images in the middle of the 2002-05 ones, and "1.0.4" reads
-    as newer than "1.4". flashpod renumbers the 1.0.x series to 0.x, which
-    is why firmware.json calls the launch firmware 0.0 while noting that
-    Apple labelled it 1.0.
-    """
+
+def asset_version(family, version):
+    """The version in an asset's file name. It matches flashpod_version()
+    except for the family-1 1.0.x line, which the picker once showed as 0.x
+    (so it sorted before 1.1): the published assets are named for that --
+    iPod_1.0.4_2001_12_23.bin.gz is family 1 + 0.4, Apple 1.0.4 -- and
+    renaming a release asset would break every older flashpod's download.
+    The catalog's ``version`` is Apple's (1.0, 1.0.2, 1.0.4)."""
     if family == 1 and (version == "1.0" or version.startswith("1.0.")):
         return "0." + version[len("1.0."):] if version != "1.0" else "0.0"
-    return VERSION_OVERRIDES.get((family, version), version)
+    return flashpod_version(family, version)
 
 
 def models_for(family, version):
@@ -283,9 +287,7 @@ def process(path, outdir):
         note = "no compiled-in date found; falling back to the zip timestamp"
 
     label = flashpod_version(family, version)
-    # Assets are named for the version the picker shows, not Apple's -- the
-    # shipped iPod_1.0.4_2001_12_23.bin.gz is family 1 at flashpod's 0.4.
-    stem = "iPod_%d.%s" % (family, label)
+    stem = "iPod_%d.%s" % (family, asset_version(family, version))
     if build_date:
         stem += build_date.strftime("_%Y_%m_%d")
     name = stem + ".bin.gz"

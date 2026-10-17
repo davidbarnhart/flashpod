@@ -13,6 +13,8 @@ Subcommands:
   flashpod init [name]            create iPod_Control structure + empty DB
   flashpod flash [/dev/sdX]       write iPod firmware + partition layout to a
                                   CF/SD card (1G/2G iPod; needs sudo)
+  flashpod burn IMAGE [/dev/sdX]  write a card image file onto a removable
+                                  SD/CF card (needs sudo)
 
 The mountpoint is auto-detected from mounted filesystems (FAT-family
 mounts under /media, ranked by iPod_Control presence), and a detected
@@ -24,7 +26,6 @@ The iTunesDB is read/written natively (itunesdb.py) — no libgpod.
 import argparse
 import collections
 import errno
-import hashlib
 import json
 import os
 import re
@@ -34,22 +35,28 @@ import subprocess
 import sys
 import textwrap
 import time
-import ssl
 import urllib.error
 import urllib.request
-
-import mutagen
-try:
-    from mutagen.mp3 import EasyMP3            # mutagen >= ~1.20
-except ImportError:                            # older layouts
-    from mutagen.easymp3 import EasyMP3
 
 from . import fatfs
 from . import ipod_flash
 from . import itunesdb
+from . import library
 from . import platform
 from . import resources
 from . import __version__
+# Moved to the library (flashpod.tracks / .target / .library / .errors) and
+# re-exported here: the CLI and its tests keep using these names.
+from . import card
+from .errors import CorruptLibrary, NoSuchTrack, NotInitialized
+from .library import (_ADD_HEADROOM, IPOD_DB_SIZE_LIMIT, _db_size_limit,  # noqa: F401
+                      _fit_count, _projected_db_size)
+from .catalog import (_CA_BUNDLES, _ca_bundle, _firmware_cache_dir,  # noqa: F401
+                      _sha256, _ssl_context)
+from .target import MountTarget, RawTarget
+from .tracks import (AUDIO_EXTS, FORMATS, _library_from_located,  # noqa: F401
+                     _track_from_audio, expand, first, make_track, orunknown,
+                     read_audio, read_audio_stream, track_key)
 
 FIRMWARE_MANIFEST = resources.firmware_manifest()
 
@@ -166,7 +173,8 @@ def choose_firmware(manifest, model=None):
         # "*" marks the default; build_date comes from the manifest, not the
         # file (mtimes do not survive git or a release download), and not
         # every image has a known one.
-        ver = e["version"] + (" *" if i == default else "")
+        ver = e["version"] + (" (%s)" % e["maker"] if e.get("maker") else "") \
+            + (" *" if i == default else "")
         size = "%.1fM" % (e["size"] / (1 << 20)) if e.get("size") else ""
         rows.append([i, ver, e.get("build_date", ""), size, e["description"]])
     for ln in _fmt_table(["#", "Version", "Built", "Size", "Notes"],
@@ -184,81 +192,6 @@ def choose_firmware(manifest, model=None):
         print("flashpod flash: invalid selection", file=sys.stderr)
         return None
     return entries[int(choice)]
-
-
-def _firmware_cache_dir():
-    """Where downloaded firmware is cached.
-
-    `flash` resolves its firmware before elevating (see main()), so the normal
-    path reaches this as the invoking user and caches in their home. Running
-    `sudo flashpod flash` yourself instead does the download as root, which
-    caches somewhere else -- /root/.cache on Linux, and as root-owned files in
-    your own ~/.cache on macOS, where sudo preserves HOME. That path is not a
-    documented way to use flashpod; prefer plain `flashpod flash` and let it
-    elevate itself.
-    """
-    base = os.environ.get("XDG_CACHE_HOME") or \
-        os.path.join(os.path.expanduser("~"), ".cache")
-    return os.path.join(base, "flashpod", "firmware")
-
-
-def _sha256(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-# Well-known CA bundles, in the order we'd rather find them.
-_CA_BUNDLES = (
-    "/etc/ssl/cert.pem",                    # macOS, FreeBSD
-    "/etc/ssl/certs/ca-certificates.crt",   # Debian, Ubuntu, Alpine
-    "/etc/pki/tls/certs/ca-bundle.crt",     # RHEL, Fedora, CentOS
-    "/etc/ssl/ca-bundle.pem",               # openSUSE
-    "/etc/ssl/certs",                       # a hashed directory, as a last resort
-)
-
-
-def _ca_bundle():
-    """A CA bundle we can actually verify against, or None to use the defaults.
-
-    The frozen builds are the problem this exists for. PyInstaller bundles no
-    certificates, and the ssl module it packages was compiled with the CA path
-    of the BUILD machine baked in -- so on someone else's Mac that path simply
-    does not exist and every HTTPS fetch dies with CERTIFICATE_VERIFY_FAILED
-    (unable to get local issuer certificate). Nothing is wrong with the user's
-    machine or the network; Python is just looking in a directory that was
-    never there.
-
-    Order: honour whatever ssl already resolves to (that covers a normal pip
-    install, and SSL_CERT_FILE, which get_default_verify_paths reflects), then
-    certifi if a build bundled it, then the platform's own store.
-    """
-    paths = ssl.get_default_verify_paths()
-    if (paths.cafile and os.path.exists(paths.cafile)) or \
-       (paths.capath and os.path.isdir(paths.capath)):
-        return None                        # defaults are fine -- don't override
-    try:
-        import certifi                     # not a dependency; used if present
-        where = certifi.where()
-        if os.path.exists(where):
-            return where
-    except Exception:                      # noqa: BLE001 - absent or broken
-        pass
-    for cand in _CA_BUNDLES:
-        if os.path.exists(cand):
-            return cand
-    return None                            # nothing found; let ssl raise
-
-
-def _ssl_context():
-    bundle = _ca_bundle()
-    if bundle and os.path.isdir(bundle):
-        ctx = ssl.create_default_context(capath=bundle)
-    else:
-        ctx = ssl.create_default_context(cafile=bundle)   # None = ssl defaults
-    return ctx
 
 
 def _download(url, dst, total=None):
@@ -286,6 +219,30 @@ def _download(url, dst, total=None):
                     last = now
         if sys.stderr.isatty():
             sys.stderr.write("\n")
+
+
+def ask_arm(firmware):
+    """Whether to arm the card for a disk-mode update, asked only on a
+    terminal and only when the firmware carries a disk-mode program flashpod
+    knows (firmware.KNOWN_AUPD). Defaults to no; a non-interactive run never
+    arms without --arm (bridge #1231, David's design)."""
+    if not sys.stdin.isatty():
+        return False
+    try:
+        info = ipod_flash.aupd_of(ipod_flash.load_firmware(firmware))
+    except (OSError, ValueError, StopIteration):
+        return False                     # flash() reports a bad image itself
+    if not info or not info["known"]:
+        return False
+    print("\nThis firmware carries a disk-mode program flashpod can arm "
+          "(%s).\nArming is optional. %s\n" % (info["known"],
+                                                ipod_flash.ARM_EXPLAINED))
+    try:
+        ans = input("Arm the card for a disk-mode update? [y/N]: ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    return ans.strip().lower() in ("y", "yes")
 
 
 def ensure_firmware(entry, base_url):
@@ -372,17 +329,24 @@ def _rm(path):
 def load_library(mount):
     """Parse the iTunesDB, or print why we can't and return None."""
     try:
-        return itunesdb.load(mount)
-    except FileNotFoundError:
+        return card.library(MountTarget(mount))
+    except (NotInitialized, CorruptLibrary, OSError) as exc:
+        _say_mount_load_error(mount, exc)
+    return None
+
+
+def _say_mount_load_error(mount, exc):
+    """Why the iTunesDB on a mounted iPod couldn't be loaded, in the words
+    the mount path has always used."""
+    if isinstance(exc, NotInitialized):
         if not os.path.isdir(mount):
             print(f"flashpod: {mount} does not exist — is the iPod "
                   "mounted?", file=sys.stderr)
         else:
             print(f"flashpod: no iTunesDB on {mount} "
                   "(run `flashpod init` first?)", file=sys.stderr)
-    except (OSError, ValueError) as exc:
+    else:
         print(f"flashpod: failed to read iTunesDB: {exc}", file=sys.stderr)
-    return None
 
 
 def _effective_xfer(device=None):
@@ -606,7 +570,12 @@ def load_library_raw(device):
     bridge on macOS). Returns a Library, or prints why and returns None."""
     try:
         fs = open_raw_fat(device)
-        data = fs.read_file("iPod_Control/iTunes/iTunesDB")
+        target = RawTarget(fs, device)
+        lib = target.load_library()
+    except CorruptLibrary as exc:
+        print(f"flashpod: failed to parse iTunesDB from {device}: {exc}",
+              file=sys.stderr)
+        return None
     except PermissionError:
         print(f"flashpod: need root to read {device}.\n"
               f"  sudo {' '.join(_self_cmd())} ls --raw {device}",
@@ -617,169 +586,10 @@ def load_library_raw(device):
               "(pass the iPod's data partition, e.g. /dev/rdisk1s2, or its "
               "whole disk /dev/rdisk1)", file=sys.stderr)
         return None
-    if data is None:
+    if lib is None:
         _diagnose_missing_db(fs, device)
         return None
-    try:
-        return itunesdb.parse_bytes(data)
-    except (ValueError, IndexError, struct.error) as exc:
-        print(f"flashpod: failed to parse iTunesDB from {device}: {exc}",
-              file=sys.stderr)
-        return None
-
-
-class CorruptLibrary(Exception):
-    """The iTunesDB file is present but won't parse (e.g. a torn write left
-    garbage in its clusters). The device is still an iPod — the database just
-    needs rebuilding — so this is distinct from "no database at all"."""
-
-
-class RawTarget:
-    """An iPod managed DIRECTLY over its raw device with the userspace FAT
-    driver — no OS mount. Provides the read/write operations the data commands
-    need (init/add/rm/ls), so the same command cores work over a mount or over
-    raw. ``fs`` is a writable :class:`fatfs.Fat32`."""
-    DB = "iPod_Control/iTunes/iTunesDB"
-
-    def __init__(self, fs, node, desc=""):
-        self.fs = fs
-        self.node = node
-        self.desc = desc
-
-    # -- library -----------------------------------------------------------
-    def load_library(self):
-        """Parse the iTunesDB. Returns a Library, None if there's no DB at all,
-        or raises CorruptLibrary if the DB is present but unparseable."""
-        data = self.fs.read_file(self.DB)
-        if data is None:
-            return None
-        try:
-            return itunesdb.parse_bytes(data)
-        except (ValueError, IndexError, struct.error) as exc:
-            raise CorruptLibrary(str(exc))
-
-    def iter_music_files(self):
-        """Yield (relpath, location) for every track file physically present
-        under iPod_Control/Music/F## — the raw view the rebuild reconstructs
-        the database from. relpath is the FAT path (for reading); location is
-        the ':'-style iTunesDB location."""
-        music = "iPod_Control/Music"
-        for d in sorted(self.fs.listdir(music) or [], key=lambda e: e.name):
-            if not (d.attr & fatfs.ATTR_DIRECTORY) \
-                    or not d.name.upper().startswith("F"):
-                continue
-            for f in sorted(self.fs.listdir(music + "/" + d.name) or [],
-                            key=lambda e: e.name):
-                if f.attr & fatfs.ATTR_DIRECTORY:
-                    continue
-                yield ("%s/%s/%s" % (music, d.name, f.name),
-                       ":".join(["", "iPod_Control", "Music", d.name, f.name]))
-
-    def read_track_file(self, relpath):
-        """Build a Track from a file's own tags, reading it LAZILY off the FAT
-        (open_file + mutagen's seek-based access pulls only the head/tail, not
-        the whole file — the difference between seconds and minutes over
-        FireWire). Returns None if the file isn't recognizable audio."""
-        fh = self.fs.open_file(relpath)
-        if fh is None:
-            return None
-        audio = read_audio_stream(fh, os.path.splitext(relpath)[1])
-        if audio is None:
-            return None
-        return _track_from_audio(
-            audio, os.path.splitext(os.path.basename(relpath))[0], fh.size,
-            os.path.splitext(relpath)[1])
-
-    def rebuild_library(self, name="iPod", progress=None, report=None):
-        """Reconstruct the library from the track files already on the card:
-        ensure the directory structure, then read every Music/F## file's tags
-        and build a fresh Library pointing at them. Recovers a corrupt-DB iPod
-        without re-copying or losing music. Returns the rebuilt Library (the
-        caller saves it). Does NOT write the DB itself, so `add` can append to
-        the result before its single save."""
-        self._ensure_dirs()
-        files = list(self.iter_music_files())
-        located = []
-        total = len(files)
-        for nr, (relpath, location) in enumerate(files, 1):
-            if progress:
-                progress(nr, total, relpath)
-            try:
-                t = self.read_track_file(relpath)
-            except (OSError, ValueError) as exc:
-                t = None
-                if report:
-                    report(f"skipping {relpath}: {exc}")
-            if t is not None:
-                located.append((location, t))
-        return _library_from_located(name, located)
-
-    def save_library(self, lib):
-        self.fs.write_file(self.DB, itunesdb.serialize(lib))
-        self.fs.sync()
-
-    # -- init --------------------------------------------------------------
-    def _makedirs(self, path):
-        cur = ""
-        for part in path.split("/"):
-            cur = cur + "/" + part if cur else part
-            if not self.fs.exists(cur):
-                self.fs.mkdir(cur)
-
-    def _ensure_dirs(self):
-        for sub in ["iTunes", "Device"] + ["Music/F%02d" % i for i in range(50)]:
-            self._makedirs("iPod_Control/" + sub)
-
-    def init_structure(self, name):
-        self._ensure_dirs()
-        self.save_library(itunesdb.Library(name))
-        self.fs.sync()
-
-    # -- add ---------------------------------------------------------------
-    def copy(self, src, progress=None, ext=None):
-        """Mirror itunesdb.copy_to_ipod over the raw FAT: spread across the
-        Music/F## dirs, collision-proof name, return the ':'-style location."""
-        import random
-        music = "iPod_Control/Music"
-        entries = self.fs.listdir(music) or []
-        fdirs = sorted(e.name for e in entries if e.name.upper().startswith("F"))
-        if not fdirs:
-            raise OSError("no Music/F## directories (run init first?)")
-        fdir = random.choice(fdirs)
-        ext = (ext or os.path.splitext(src)[1] or ".mp3").lower()
-        timing = os.environ.get("FLASHPOD_TIMING")
-        t0 = time.monotonic()
-        while True:
-            name = "fp%06d%s" % (random.randrange(10 ** 6), ext)
-            dst = "%s/%s/%s" % (music, fdir, name)
-            if not self.fs.exists(dst):
-                break
-        t_setup = time.monotonic()
-        with open(src, "rb") as f:
-            data = f.read()
-        t_read = time.monotonic()
-        self.fs.write_file(dst, data, progress=progress)
-        if timing:
-            print("[timing] %s: setup %.2fs  source-read %.2fs  "
-                  "card-write %.2fs"
-                  % (os.path.basename(src), t_setup - t0, t_read - t_setup,
-                     time.monotonic() - t_read), file=sys.stderr)
-        return ":".join(["", "iPod_Control", "Music", fdir, name])
-
-    # -- rm ----------------------------------------------------------------
-    def remove_location(self, location):
-        if not location:
-            return
-        path = "/".join(p for p in location.split(":") if p)
-        if self.fs.exists(path):
-            self.fs.remove(path)
-
-    # -- free space (for the add pre-flight) -------------------------------
-    def free_bytes(self):
-        """Free space in bytes, from the FAT layer (no OS mount to ask). Raises
-        OSError if it can't be determined, which the add core treats as 'skip
-        the pre-flight, proceed anyway'."""
-        return self.fs.free_bytes()
+    return lib
 
 
 def open_raw_target(device, writable=True):
@@ -815,30 +625,30 @@ def open_raw_target(device, writable=True):
 
 
 def cmd_init_raw(target, name):
-    target.init_structure(name)
+    card.init(target, name, overwrite=True)
     print(f"Initialized iPod directory structure on {target.node}")
     return 0
 
 
-def _raw_rebuild(target, name="iPod"):
-    """Reconstruct target's library from the files on the card, showing a
-    progress line (it reads every track off the iPod — slow over FireWire)."""
+def _raw_rebuild(target, name="iPod", save=False):
+    """Reconstruct target's library from the files on the card (card.rebuild),
+    showing a progress line (it reads every track off the iPod — slow over
+    FireWire). Returns the Library; saved only with ``save``."""
     win = LineWindow()
-    lib = target.rebuild_library(
-        name,
-        progress=lambda nr, total, rp:
+    res = card.rebuild(
+        target, name,
+        progress=lambda _stage, nr, total, rp:
             win.update(f"[{nr}/{total}] recovering "
                        f"{os.path.basename(rp)}..."),
-        report=win.note)
+        report=win.note, save=save)
     win.clear()
-    return lib
+    return res._library
 
 
 def cmd_rebuild_raw(target, name=None):
     """`flashpod rebuild` over the raw device: rebuild the iTunesDB from the
     music files physically present on the iPod."""
-    lib = _raw_rebuild(target, name or "iPod")
-    target.save_library(lib)
+    lib = _raw_rebuild(target, name or "iPod", save=True)
     n = len(lib.tracks)
     print(f"Rebuilt the iTunesDB on {target.node}: {n} "
           f"track{'s' if n != 1 else ''} recovered from the card.")
@@ -846,62 +656,51 @@ def cmd_rebuild_raw(target, name=None):
 
 
 def cmd_add_raw(target, paths):
-    return _cmd_add_core(
-        paths,
-        load=target.load_library,
-        copy=target.copy,
-        save=target.save_library,
-        free_space=target.free_bytes,
-        rebuild=lambda: _raw_rebuild(target))
+    def load_error(exc):
+        if isinstance(exc, NotInitialized):
+            # said in words: this used to exit 1 with no message at all
+            print(f"flashpod: no iTunesDB on {target.node} (run `flashpod "
+                  "init` first?)", file=sys.stderr)
+            return 1
+        raise exc
+
+    return _cmd_add_core(paths, target, load_error,
+                         rebuild=lambda: _raw_rebuild(target))
 
 
 def cmd_rm_raw(target, what):
+    def load_error(exc):
+        if isinstance(exc, CorruptLibrary):
+            print(f"flashpod: the iTunesDB on {target.node} is corrupt ({exc}) "
+                  "— run `flashpod rebuild` to rebuild it from the files on "
+                  "the card.", file=sys.stderr)
+        else:
+            print(f"flashpod: no iTunesDB on {target.node} (run `flashpod "
+                  "init` first?)", file=sys.stderr)
+        return 1
+
+    def on_error(t, exc):
+        print(f"flashpod: couldn't remove {t.location}: {exc}",
+              file=sys.stderr)
+
+    return _cmd_rm_core(target, what, load_error, on_error)
+
+
+def _cmd_rm_core(target, what, load_error, on_error=None):
+    """`rm` on any target, through card.remove: the CLI only words it."""
     try:
-        lib = target.load_library()
-    except CorruptLibrary as exc:
-        print(f"flashpod: the iTunesDB on {target.node} is corrupt ({exc}) — "
-              "run `flashpod rebuild` to rebuild it from the files on the "
-              "card.", file=sys.stderr)
-        return 1
-    if lib is None:
-        print(f"flashpod: no iTunesDB on {target.node} (run `flashpod init` "
-              "first?)", file=sys.stderr)
-        return 1
-    victims, rc = _rm_victims(lib, what)
-    if victims is None:
-        return rc
-    for t in victims:
-        try:
-            target.remove_location(t.location)
-        except OSError as exc:
-            print(f"flashpod: couldn't remove {t.location}: {exc}",
-                  file=sys.stderr)
-        lib.tracks.remove(t)
-        print(f"Removed: {orunknown(t.artist)} - {orunknown(t.title)}")
+        victims = card.remove(
+            target, what=what, on_error=on_error,
+            on_removed=lambda t: print(f"Removed: {orunknown(t.artist)} - "
+                                       f"{orunknown(t.title)}"))
+    except (NotInitialized, CorruptLibrary) as exc:
+        return load_error(exc)
+    except NoSuchTrack as exc:
+        return _say_no_such_track(exc, what)
     if len(victims) > 1:
         print(f"Removed {len(victims)} tracks")
-    target.save_library(lib)
     return 0
 
-
-def first(tags, key):
-    val = tags.get(key)
-    if isinstance(val, list):
-        val = val[0] if val else None
-    return str(val) if val else None
-
-
-AUDIO_EXTS = {".mp3", ".m4a", ".m4b", ".aac", ".wav", ".aif", ".aiff", ".flac"}
-
-# Formats that need something other than flashpod's historical defaults. Only
-# FLAC is listed: every other extension keeps the filetype string and mhit
-# marker it has always been given, because existing libraries were built with
-# them. See itunesdb.MARKER_MP3.
-#
-# `.flac` presents to the 1G firmware as "fla": its extension lookup is
-# strrchr('.') then strncpy(..., 3), so the type is exactly three characters and
-# `.fla` and `.flac` are the same file to it (openpod wiki 20.8.0).
-FORMATS = {".flac": ("FLAC audio file", itunesdb.MARKER_FLAC)}
 
 # Test hook: point at a fake mounts table.
 MOUNTS_FILE = os.environ.get("FLASHPOD_MOUNTS_FILE", "/proc/mounts")
@@ -1730,6 +1529,13 @@ def _cmd_args(opts):
         return [c] + list(getattr(opts, "what", None) or [])
     if c in ("init", "rebuild"):
         return [c] + ([opts.name] if getattr(opts, "name", None) else [])
+    if c == "burn":
+        a = [c, opts.image] + ([opts.device] if opts.device else [])
+        for flag, on in (("--yes", opts.yes), ("--dry-run", opts.dry_run),
+                         ("--no-verify", opts.no_verify)):
+            if on:
+                a.append(flag)
+        return a
     if c == "flash":
         a = [c]
         if getattr(opts, "device", None):
@@ -1748,6 +1554,11 @@ def _cmd_args(opts):
             a.append("--no-format")
         if getattr(opts, "lba48", False):
             a.append("--lba48")
+        # the arm question is answered before elevating; carry the answer
+        if getattr(opts, "arm", False):
+            a.append("--arm")
+        elif getattr(opts, "no_arm", False):
+            a.append("--no-arm")
         return a
     return [c]
 
@@ -1766,24 +1577,28 @@ def run_raw(opts, node):
     if cmd in ("ls", "list"):
         lib = load_library_raw(node)
         return cmd_ls(lib, opts.field) if lib else 1
+    if getattr(platform.current(), "is_image", False):
+        # A card image: opened (and locked against the web app or an emulator
+        # writing it at the same time) by the library, like every card.* call.
+        try:
+            with card.open_target(node, write=True) as img:
+                rc = _run_raw_command(opts, img.target())
+        except card.CardBusy:
+            print(f"flashpod: {node} is in use by another program (an "
+                  "emulator, the web app, another flashpod); try again when "
+                  "it's done.", file=sys.stderr)
+            return 1
+        except card.NotACard as exc:
+            print(f"flashpod: couldn't open a FAT filesystem on {node}: "
+                  f"{exc.details.get('error', exc)}", file=sys.stderr)
+            return 1
+        offer_eject(node, rc)
+        return rc
     target = open_raw_target(node, writable=True)
     if not target:
         return 1
     try:
-        if cmd == "init":
-            return cmd_init_raw(target, getattr(opts, "name", None) or "iPod")
-        if cmd == "rebuild":
-            return cmd_rebuild_raw(target, getattr(opts, "name", None))
-        if cmd in ("rm", "remove", "delete", "erase"):
-            rc = cmd_rm_raw(target, opts.what)
-        elif cmd == "add":
-            files = opts.files
-            if not files:
-                files = prompt_for_paths(*_raw_db_facts(target))
-            rc = cmd_add_raw(target, files)
-        else:
-            print(f"flashpod: --raw doesn't support `{cmd}`.", file=sys.stderr)
-            return 1
+        rc = _run_raw_command(opts, target)
     finally:
         # Windows may have cleared the partition table to allow raw writes;
         # put it back so the OS re-discovers the iPod (no-op elsewhere).
@@ -1792,6 +1607,24 @@ def run_raw(opts, node):
     # be the exact hazard this offer exists to prevent.
     offer_eject(node, rc)
     return rc
+
+
+def _run_raw_command(opts, target):
+    """init / rebuild / rm / add on an opened raw target (device or image)."""
+    cmd = opts.command
+    if cmd == "init":
+        return cmd_init_raw(target, getattr(opts, "name", None) or "iPod")
+    if cmd == "rebuild":
+        return cmd_rebuild_raw(target, getattr(opts, "name", None))
+    if cmd in ("rm", "remove", "delete", "erase"):
+        return cmd_rm_raw(target, opts.what)
+    if cmd == "add":
+        files = opts.files
+        if not files:
+            files = prompt_for_paths(*_raw_db_facts(target))
+        return cmd_add_raw(target, files)
+    print(f"flashpod: --raw doesn't support `{cmd}`.", file=sys.stderr)
+    return 1
 
 
 def _choose_init_disk(disks):
@@ -2031,27 +1864,6 @@ def _choose_mounted(cands):
         return cands[int(choice)][1]
     print("flashpod: invalid selection", file=sys.stderr)
     return None
-
-
-def expand(paths):
-    """Expand directories into sorted recursive lists of audio files."""
-    out = []
-    for p in paths:
-        if not os.path.isdir(p):
-            out.append(p)
-            continue
-        found = []
-        for root, dirs, files in os.walk(p):
-            dirs.sort()
-            for f in sorted(files):
-                if f.startswith("._"):  # macOS AppleDouble junk
-                    continue
-                if os.path.splitext(f)[1].lower() in AUDIO_EXTS:
-                    found.append(os.path.join(root, f))
-        if not found:
-            print(f"warning: no audio files found under {p}", file=sys.stderr)
-        out.extend(found)
-    return out
 
 
 def _mounted_db_facts(mount):
@@ -2340,111 +2152,6 @@ class EtaEstimator(object):
         return _fmt_remaining(shown)
 
 
-def read_audio(path):
-    """Open `path` for tag/info reading. MP3s — the common case — skip
-    mutagen's format detection, which scores every handler and reads whole
-    files in the process (its APEv2 scorer reads to EOF), making it painfully
-    slow over network mounts. ``mutagen.File(easy=True)`` already returns an
-    EasyMP3 for an MP3, so going straight to EasyMP3 yields the identical
-    object minus the sniffing. Anything else — or an MP3 that won't parse,
-    e.g. a misnamed file — falls back to full format detection."""
-    if os.path.splitext(path)[1].lower() == ".mp3":
-        try:
-            return EasyMP3(path)
-        except Exception:
-            pass                      # mislabeled/corrupt — sniff it properly
-    return mutagen.File(path, easy=True)
-
-
-def read_audio_stream(fileobj, ext):
-    """Like read_audio, but for a seekable file-like with no OS path (a lazy
-    fatfs._FatFile during a rebuild). mutagen reads tags by SEEKING — it touches
-    only the head and tail — so handing it a lazy FAT file means we pull a
-    cluster or two off the device per track instead of the whole file. Same
-    MP3 fast-path; mutagen accepts a file-like for any format."""
-    if ext.lower() == ".mp3":
-        try:
-            return EasyMP3(fileobj)
-        except Exception:
-            fileobj.seek(0)           # reset for the full-detection fallback
-    return mutagen.File(fileobj, easy=True)
-
-
-def _track_from_audio(audio, fallback_title, size, ext=None):
-    """Build an itunesdb.Track from an already-loaded mutagen audio object, a
-    fallback title (used when untagged), and the file's byte size. Shared by
-    make_track (tags from a path) and the rebuild path (tags from bytes). The
-    unique track id is assigned by the caller at commit time, not here."""
-    tags = audio.tags or {}
-    t = itunesdb.Track()
-    t.title = first(tags, "title") or fallback_title
-    t.artist = first(tags, "artist")
-    t.album = first(tags, "album")
-    t.genre = first(tags, "genre")
-    t.composer = first(tags, "composer")
-    filetype, marker = FORMATS.get((ext or "").lower(),
-                                   ("MPEG audio file", itunesdb.MARKER_MP3))
-    t.filetype = filetype
-    t.marker = marker
-    tracknr = first(tags, "tracknumber")
-    if tracknr and tracknr.split("/")[0].isdigit():
-        t.track_nr = int(tracknr.split("/")[0])
-    date = first(tags, "date")
-    if date and date[:4].isdigit():
-        t.year = int(date[:4])
-    info = audio.info
-    t.tracklen = int(info.length * 1000)
-    # FLAC's StreamInfo carries no bitrate -- it is not a constant of the format
-    # -- so derive the average one rather than report 0, which the iPod shows as
-    # a blank in the track info.
-    bitrate = getattr(info, "bitrate", 0)
-    if not bitrate and info.length:
-        bitrate = int(size * 8 / info.length)
-    t.bitrate = bitrate // 1000
-    t.samplerate = getattr(info, "sample_rate", 0)
-    t.size = size
-    return t
-
-
-def _library_from_located(name, located):
-    """Assemble a Library from [(location, Track), ...], assigning each track a
-    unique id in order (next_track_id sees the tracks already appended). Shared
-    by the raw and mount rebuild paths."""
-    lib = itunesdb.Library(name)
-    for location, t in located:
-        t.location = location
-        t.id = lib.next_track_id()
-        lib.tracks.append(t)
-    return lib
-
-
-def make_track(lib, path, nr, total, report=None):
-    """Read tags from `path` and build an itunesdb.Track (location unset).
-    Reports the skip reason (default: stderr) and returns None on unusable
-    files."""
-    report = report or (lambda msg: print(msg, file=sys.stderr))
-    try:
-        audio = read_audio(path)
-    except Exception as exc:
-        report(f"[{nr}/{total}] skipping {path}: unreadable ({exc})")
-        return None
-    if audio is None:
-        report(f"[{nr}/{total}] skipping {path}: not a recognized audio file")
-        return None
-    # NB: the unique track id is assigned at append time (cmd_add), not here.
-    # During a batch the tracks aren't in lib.tracks yet, so next_track_id()
-    # would hand every track in the batch the same id — which collapses them
-    # to one entry in the iPod's playlist (all tracks show the first one's
-    # name). _track_from_audio leaves t.id at its default until committed.
-    return _track_from_audio(
-        audio, os.path.splitext(os.path.basename(path))[0],
-        os.path.getsize(path), os.path.splitext(path)[1])
-
-
-def orunknown(s):
-    return s if s else "(unknown)"
-
-
 def cmd_ls(lib, field):
     if field in ("artists", "albums"):
         field = field[:-1]            # 'artists'/'albums' -> 'artist'/'album'
@@ -2465,10 +2172,9 @@ def cmd_ls(lib, field):
                      orunknown(t.album).casefold(),
                      t.track_nr, orunknown(t.title).casefold())
     tracks = sorted(lib.tracks, key=key)
-    albums = {(k[0], k[1]) for k in map(key, tracks)}
-    artists = {k[0] for k in map(key, tracks)}
-    print(f'iPod "{lib.name}": {len(tracks)} tracks, '
-          f'{len(artists)} artists, {len(albums)} albums')
+    ntracks, nartists, nalbums = library.counts(lib)    # = card.inspect's
+    print(f'iPod "{lib.name}": {ntracks} tracks, '
+          f'{nartists} artists, {nalbums} albums')
     prev_artist = prev_album = None
     for t in tracks:
         artist, album = orunknown(t.artist), orunknown(t.album)
@@ -2491,53 +2197,30 @@ def cmd_ls(lib, field):
     return 0
 
 
-def _rm_victims(lib, what):
-    """Select the tracks `rm` should delete from `what` (ids, or
-    `artist|album <name>`). Returns (victims, None) or (None, exit_code) with
-    the error already printed."""
-    if what[0] in ("artist", "album"):
-        if len(what) < 2:
-            print(f"flashpod rm {what[0]}: name required", file=sys.stderr)
-            return None, 2
-        name = " ".join(what[1:]).casefold()
-        victims = [t for t in lib.tracks
-                   if (getattr(t, what[0]) or "").casefold() == name]
-        if not victims:
-            print("flashpod rm: no tracks match that name "
-                  "(see `flashpod ls`)", file=sys.stderr)
-            return None, 1
-        return victims, None
-    try:
-        ids = [int(i) for i in what]
-    except ValueError:
+def _say_no_such_track(exc, what):
+    """Word card.remove's NoSuchTrack the way `rm` always has; returns the
+    exit code."""
+    why = exc.details["reason"]
+    if why == "name_required":
+        print(f"flashpod rm {what[0]}: name required", file=sys.stderr)
+        return 2
+    if why == "no_match":
+        print("flashpod rm: no tracks match that name "
+              "(see `flashpod ls`)", file=sys.stderr)
+        return 1
+    if why == "bad_ids":
         print("flashpod rm: expected track ids, or `artist <name>` / "
               "`album <name>`", file=sys.stderr)
-        return None, 2
-    by_id = {t.id: t for t in lib.tracks}
-    missing = [i for i in ids if i not in by_id]
-    if missing:
-        print(f"flashpod rm: no track with id "
-              f"{', '.join(map(str, missing))} (see `flashpod ls all`)",
-              file=sys.stderr)
-        return None, 1
-    return [by_id[i] for i in ids], None
+        return 2
+    print(f"flashpod rm: no track with id "
+          f"{', '.join(map(str, exc.details['missing']))} "
+          f"(see `flashpod ls all`)", file=sys.stderr)
+    return 1
 
 
-def cmd_rm(lib, mount, what):
-    victims, rc = _rm_victims(lib, what)
-    if victims is None:
-        return rc
-
-    for t in victims:
-        path = t.filename_on_ipod(mount)
-        if path and os.path.exists(path):
-            os.unlink(path)
-        lib.tracks.remove(t)
-        print(f"Removed: {orunknown(t.artist)} - {orunknown(t.title)}")
-    if len(victims) > 1:
-        print(f"Removed {len(victims)} tracks")
-    itunesdb.save(lib, mount)
-    return 0
+def cmd_rm(mount, what):
+    return _cmd_rm_core(MountTarget(mount), what,
+                        lambda exc: (_say_mount_load_error(mount, exc), 1)[1])
 
 
 class LineWindow:
@@ -2620,65 +2303,35 @@ class LineWindow:
         self.status = None
 
 
-def track_key(t):
-    """Dedup identity: same byte length + duration + title. Catches the same
-    file added twice (e.g. a single that is also present in its album folder)
-    using only metadata already in the DB and the incoming file's tags — never
-    reads the iPod's stored copies back (slow always, FireWire-fatal)."""
-    return (t.size, t.tracklen, (t.title or "").strip().casefold())
-
-
 def cmd_add(mount, paths):
-    return _cmd_add_core(
-        paths,
-        load=lambda: load_library(mount),
-        copy=lambda path, progress: itunesdb.copy_to_ipod(mount, path,
-                                                           progress=progress),
-        save=lambda lib: (itunesdb.save(lib, mount),
-                          os.sync() if hasattr(os, "sync") else None),
-        free_space=lambda: shutil.disk_usage(mount).free)
+    def load_error(exc):
+        _say_mount_load_error(mount, exc)
+        return 1
+    # no rebuild offer over a mount: a corrupt DB is reported, as always
+    return _cmd_add_core(paths, MountTarget(mount), load_error, rebuild=None,
+                         corrupt_is_load_error=True)
 
 
 def cmd_rebuild(mount, name=None):
     """`flashpod rebuild` over an OS mount: rebuild the iTunesDB from the track
     files under <mount>/iPod_Control/Music/F##, recovering a corrupt/missing
     database without re-copying or losing music."""
-    music = os.path.join(mount, "iPod_Control", "Music")
-    if not os.path.isdir(music):
+    target = MountTarget(mount)
+    if not target.music_dir_exists():
         print(f"flashpod: no iPod_Control/Music on {mount} — is this an iPod?",
               file=sys.stderr)
         return 1
-    files = []
-    for d in sorted(os.listdir(music)):
-        ddir = os.path.join(music, d)
-        if not (d.upper().startswith("F") and os.path.isdir(ddir)):
-            continue
-        for fn in sorted(os.listdir(ddir)):
-            fp = os.path.join(ddir, fn)
-            if os.path.isfile(fp):
-                files.append((fp, ":".join(["", "iPod_Control", "Music", d, fn])))
     win = LineWindow()
-    located = []
-    total = len(files)
-    for nr, (fp, location) in enumerate(files, 1):
-        win.update(f"[{nr}/{total}] recovering {os.path.basename(fp)}...")
-        t = make_track(None, fp, nr, total, report=win.note)
-        if t is not None:
-            located.append((location, t))
+    res = card.rebuild(
+        target, name or "iPod",
+        progress=lambda _stage, nr, total, fp:
+            win.update(f"[{nr}/{total}] recovering {os.path.basename(fp)}..."),
+        report=win.note)
     win.clear()
-    lib = _library_from_located(name or "iPod", located)
-    itunesdb.save(lib, mount)
-    if hasattr(os, "sync"):
-        os.sync()
-    n = len(lib.tracks)
+    n = res.tracks
     print(f"Rebuilt the iTunesDB on {mount}: {n} "
           f"track{'s' if n != 1 else ''} recovered from the iPod.")
     return 0
-
-
-# Leave a little slack free so the iTunesDB rewrite and FAT cluster overhead
-# don't tip a "just fits" batch over the edge.
-_ADD_HEADROOM = 2 << 20
 
 
 def fmt_size(nbytes):
@@ -2916,67 +2569,30 @@ def _winnow(pending, budget):
     return [item for n in names if n in kept for item in groups[n]]
 
 
-#: Serialized-iTunesDB byte budget the target iPod's firmware can load.
-#: Measured on real 1G hardware (2026-07-29): 3,776,000 bytes loads and
-#: plays; 3,776,684 makes the iPod show an EMPTY library (no error).
-#: Bisected to a one-track edge, then pinned to bytes — not track or
-#: record count — with slim/fat DB experiments (scripts/db_slice.py).
-#: Default keeps a safety margin under the proven-good point.
-#: FLASHPOD_DB_LIMIT overrides; 0 disables the check.
-IPOD_DB_SIZE_LIMIT = 3600000
-
-
-def _db_size_limit():
-    env = os.environ.get("FLASHPOD_DB_LIMIT")
-    if env is not None:
-        try:
-            return int(env)
-        except ValueError:
-            pass
-    return IPOD_DB_SIZE_LIMIT
-
-
-def _projected_db_size(lib, new_tracks):
-    """Serialized iTunesDB size after adding ``new_tracks`` to ``lib``."""
-    tmp = itunesdb.Library(lib.name)
-    tmp.tracks = list(lib.tracks) + list(new_tracks)
-    return len(itunesdb.serialize(tmp))
-
-
-def _fit_count(lib, new_tracks, limit):
-    """How many of ``new_tracks`` (in order) fit under the DB byte limit.
-    0 when the existing library alone is already over it."""
-    if _projected_db_size(lib, []) > limit:
-        return 0
-    lo, hi = 0, len(new_tracks)
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if _projected_db_size(lib, new_tracks[:mid]) <= limit:
-            lo = mid
-        else:
-            hi = mid - 1
-    return lo
-
-
-def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
-    """Batch-add files to the iPod. The backend is callables so this works the
-    same over an OS mount (cmd_add) and over the raw device (cmd_add_raw):
-    load() -> Library|None (or raises CorruptLibrary), copy(path, progress) ->
-    location, save(Library) -> None. ``free_space() -> bytes`` enables the
-    pre-flight size check + winnow loop; the mount path supplies it from
-    ``shutil.disk_usage`` and the raw path from the FAT free-cluster count. A
-    ``free_space()`` that raises OSError (e.g. the count is unavailable) just
-    skips the pre-flight and proceeds. ``rebuild() -> Library`` (optional), when
-    the existing iTunesDB is corrupt, offers to write a fresh empty one."""
+def _cmd_add_core(paths, target, load_error, rebuild=None,
+                  corrupt_is_load_error=False):
+    """Batch-add files to the iPod: the CLI's half of card.plan_add /
+    card.apply_add. The library reads the tags, dedups, copies and saves;
+    this asks the questions (rebuild a corrupt DB? which artists fit? add
+    past the DB ceiling?) and prints the progress and the summary. Works the
+    same over a raw device / image (target.RawTarget) and an OS mount
+    (target.MountTarget). ``load_error(exc)`` words a missing (or, with
+    ``corrupt_is_load_error``, corrupt) iTunesDB and returns the exit code;
+    ``rebuild() -> Library`` (optional) offers to rebuild a corrupt one."""
     if not paths or not paths[0]:
         return 1
     files = expand(paths)
     if not files:
         print("nothing to add", file=sys.stderr)
         return 1
+    rebuilt = False
     try:
-        lib = load()
-    except CorruptLibrary as exc:
+        lib = card.library(target)
+    except NotInitialized as exc:
+        return load_error(exc)
+    except (CorruptLibrary, OSError) as exc:
+        if corrupt_is_load_error or not isinstance(exc, CorruptLibrary):
+            return load_error(exc)
         # The structure says iPod, but the database is garbage (a torn write?).
         # Offer to rebuild rather than crash. Needs a backend rebuild() and a
         # tty to ask on; otherwise point the user at `flashpod init`.
@@ -2994,49 +2610,42 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
             print("flashpod: belay that — nothin' added.")
             return 0
         lib = rebuild()
+        rebuilt = True
     if not lib:
         return 1
-    seen = {track_key(t) for t in lib.tracks}
     win = LineWindow()
-    nfiles = len(files)
-    failures = 0
-    skipped = 0
     dropped = 0
 
-    # Pass 1: read tags + dedup, so we know the batch's true size (post-dedup)
-    # before copying a single byte. Tag reading can be slow (mutagen sniffs by
-    # reading whole files; painful over a network mount), so show which file
-    # we're on — otherwise the scan looks like a hang.
-    pending = []
-    for nr, path in enumerate(files, 1):
+    # Pass 1 (card.plan_add): read tags + dedup, so we know the batch's true
+    # size (post-dedup) before copying a single byte. Tag reading can be slow
+    # (mutagen sniffs by reading whole files; painful over a network mount),
+    # so show which file we're on — otherwise the scan looks like a hang.
+    def _reading(_stage, nr, nfiles, path):
         win.add(f"[{nr}/{nfiles}] Reading tags: {os.path.basename(path)}...",
                 transient=True)
-        track = make_track(lib, path, nr, nfiles, report=win.note)
-        if not track:
-            failures += 1
-            continue
-        key = track_key(track)
-        if key in seen:
-            # routine, high-volume on a big library — roll it through the live
-            # window (replacing this file's "Reading tags" line) instead of
-            # persisting it; the count lands in the summary. (make_track's own
-            # reports — unreadable / not audio — still persist via win.note.)
-            win.update(f"[{nr}/{nfiles}] skipping {os.path.basename(path)}: "
-                       f"already on iPod")
-            skipped += 1
-            continue
-        seen.add(key)
-        pending.append((path, track))
+
+    def _duplicate(nr, nfiles, path):
+        # routine, high-volume on a big library — roll it through the live
+        # window (replacing this file's "Reading tags" line) instead of
+        # persisting it; the count lands in the summary. (make_track's own
+        # reports — unreadable / not audio — still persist via win.note.)
+        win.update(f"[{nr}/{nfiles}] skipping {os.path.basename(path)}: "
+                   f"already on iPod")
+
+    plan = card.plan_add(target, files, progress=_reading, report=win.note,
+                         on_duplicate=_duplicate, lib=lib, expand_dirs=False,
+                         assess=False)
+    pending = list(plan._items)
+    failures = len(plan.failed)
+    skipped = len(plan.duplicates)
     win.clear()
 
     # Pre-flight: does the batch fit? (mount and raw paths both supply this.)
-    if pending and free_space is not None:
-        try:
-            budget = free_space() - _ADD_HEADROOM
-        except OSError as exc:
-            win.note(f"flashpod add: couldn't check free space ({exc}); "
-                     "proceeding anyway")
-            budget = None
+    if pending:
+        budget = plan.budget
+        if plan.free_error is not None:
+            win.note(f"flashpod add: couldn't check free space "
+                     f"({plan.free_error}); proceeding anyway")
         if budget is not None:
             batch = sum(t.size or 0 for _, t in pending)
             if batch <= budget:
@@ -3066,12 +2675,11 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
     # experiments): 3,776,000 bytes loads, 3,776,684 doesn't; track and
     # record counts don't matter, only serialized bytes.
     db_dropped = 0
-    limit = _db_size_limit()
+    limit = projected = None
+    if pending:
+        limit, projected, fit = library.ceiling(lib, [t for _, t in pending])
     if pending and limit:
-        new_tracks = [t for _, t in pending]
-        projected = _projected_db_size(lib, new_tracks)
         if projected > limit:
-            fit = _fit_count(lib, new_tracks, limit)
             print(f"flashpod add: this batch would grow the iPod's database "
                   f"to {projected:,} bytes — past the ~{limit:,}-byte "
                   "ceiling early iPod firmware can load (the iPod would "
@@ -3097,16 +2705,18 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
 
     # Pass 2: copy what survived.
     start = time.monotonic()
-    npend = len(pending)
-    added = 0
-    added_bytes = 0
     eta = EtaEstimator(sum(t.size or 0 for _, t in pending))
     batch_done = [0]              # bytes of files already fully copied
-    for nr, (path, track) in enumerate(pending, 1):
-        label = track.title + (f" — {track.artist}" if track.artist else "")
-        win.add(f"[{nr}/{npend}] Adding: {label}...")
 
+    def _label(track):
+        return track.title + (f" — {track.artist}" if track.artist else "")
+
+    def _start(nr, npend, track):
+        win.add(f"[{nr}/{npend}] Adding: {_label(track)}...")
+
+    def _progress_for(nr, npend, track):
         last = [0.0]
+        label = _label(track)
 
         def _progress(done, total_bytes, _nr=nr, _label=label, _last=last):
             now = time.monotonic()
@@ -3121,25 +2731,25 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
             win.update(f"[{_nr}/{npend}] Adding: {_label}... {pct}% "
                        f"({done / mib:.1f}/{total_bytes / mib:.1f} MiB)")
             win.set_status(eta.remaining_text())
+        return _progress
 
-        try:
-            track.location = copy(path, _progress)
-        except OSError as exc:
-            win.note(f"[{nr}/{npend}] FAILED {path}: {exc}")
-            failures += 1
-            eta.exclude(track.size)
-            continue
+    def _copied(nr, npend, track):
         batch_done[0] += track.size or 0
-        # Assign the id now that the track is actually being committed: each
-        # next_track_id() sees the tracks appended earlier in this batch, so
-        # the ids are unique. (Failed copies above are skipped and burn no id.)
-        track.id = lib.next_track_id()
-        lib.tracks.append(track)
-        added += 1
-        added_bytes += track.size or 0
+
+    def _failed(nr, npend, path, track, exc):
+        win.note(f"[{nr}/{npend}] FAILED {path}: {exc}")
+        eta.exclude(track.size)
+
+    # Pass 2 + the single DB save (card.apply_add). A rebuild the user said
+    # yes to is saved even when nothing new is added (every file already on
+    # the card): it used to be dropped, leaving the corrupt database in place.
+    report = card.apply_add(target, plan, keep=pending, save_anyway=rebuilt,
+                            on_start=_start, on_progress=_progress_for,
+                            on_copied=_copied, on_failed=_failed)
+    failures += len(report._failed)
+    added = len(report._copied)
+    added_bytes = sum(t.size or 0 for t in report._copied)
     win.set_status(None)          # the ETA must not outlive the batch
-    if added:
-        save(lib)
     secs = time.monotonic() - start
     elapsed = fmt_duration(secs)
     parts = [f"{added} track{'s' if added != 1 else ''} added"]
@@ -3210,7 +2820,7 @@ def _offer_init_after_flash_win(dev, raw_fobj=None, data_start=None):
         print(f"Skipped. Later: run `flashpod init --raw {dev}`.",
               file=sys.stderr)
         return
-    target.init_structure("iPod")
+    card.init(target, "iPod", overwrite=True)
     print(f"Initialized iPod directory structure on {dev}")
     if ask_yes("\nMusic can be loaded onto the card now, or later "
                "when it is in the iPod.\n"
@@ -3273,7 +2883,7 @@ def _offer_init_after_flash_unix(dev):
                 return
             _run_quiet_mount(cmd, check=True)
         try:
-            itunesdb.init_ipod(mnt, "iPod")
+            card.init(MountTarget(mnt), "iPod", overwrite=True)
             print(f"Initialized iPod directory structure on {part}")
             if ask_yes("\nMusic can be loaded onto the card now, or later "
                        "when it is in the iPod.\n"
@@ -3351,6 +2961,19 @@ def main():
         parents=[common])
     p_rebuild.add_argument("name", nargs="?", help="iPod name (default: iPod)")
 
+    p_burn = sub.add_parser(
+        "burn", help="write a card image file to an SD/CF card (erases it)")
+    p_burn.add_argument("image", help="the card image file")
+    p_burn.add_argument("device", nargs="?",
+                        help="target disk, e.g. /dev/sdc (else a chooser of "
+                             "removable disks)")
+    p_burn.add_argument("--yes", action="store_true",
+                        help="skip the typed ERASE confirmation")
+    p_burn.add_argument("--dry-run", action="store_true",
+                        help="check everything and show the plan; write nothing")
+    p_burn.add_argument("--no-verify", action="store_true",
+                        help="don't read the card back afterwards")
+
     p_fl = sub.add_parser("flash",
                           help="write iPod firmware to a CF/SD card (erases it)")
     p_fl.add_argument("device", nargs="?",
@@ -3366,7 +2989,16 @@ def main():
     p_fl.add_argument("--dry-run", action="store_true",
                       help="show the plan, write nothing")
     p_fl.add_argument("--no-format", action="store_true",
-                      help="don't mkfs the data partition")
+                      help="keep the data partition and its music: rewrite "
+                           "only the firmware and partition table (refused "
+                           "unless the card's data partition matches)")
+    arm = p_fl.add_mutually_exclusive_group()
+    arm.add_argument("--arm", action="store_true",
+                     help="arm the card for a disk-mode update: on its next "
+                          "start on FireWire power, the iPod reprograms its "
+                          "flash chip from the card (small risk; see README)")
+    arm.add_argument("--no-arm", action="store_true",
+                     help="don't arm, and don't ask")
     p_fl.add_argument("--lba48", action="store_true",
                       help="EXPERIMENTAL: use the whole card for data, past the "
                            "128 GiB LBA28 cap (only works on an LBA48-patched iPod)")
@@ -3383,6 +3015,19 @@ def main():
     # disk image: no root, and none of the device-only steps (platform/image.py).
     platform.use_image(opts.device if opts.command == "flash"
                        else getattr(opts, "raw", None))
+
+    if opts.command == "burn":
+        from . import burn
+        if not opts.dry_run and not platform.current().is_admin():
+            if sys.stdin.isatty():
+                print("flashpod burn: writing to a disk needs root — "
+                      "elevating via sudo...", file=sys.stderr)
+                _sudo_reexec(_cmd_args(opts))  # returns only if sudo is missing
+            print("flashpod burn: needs root.\n  sudo "
+                  + " ".join(_self_cmd() + _cmd_args(opts)), file=sys.stderr)
+            return 1
+        return burn.burn(opts.image, opts.device, assume_yes=opts.yes,
+                         dry_run=opts.dry_run, verify=not opts.no_verify)
 
     if opts.command == "flash":
         if opts.self_test:
@@ -3428,6 +3073,9 @@ def main():
         # child re-runs neither the picker nor the download.
         opts.firmware = firmware
         opts.max_data_gb = max_data_gb
+        if not opts.arm and not opts.no_arm:
+            opts.arm = ask_arm(firmware)
+            opts.no_arm = not opts.arm
 
         if not opts.dry_run and not plat.is_admin():
             # Writing to a disk needs elevation — try sudo (prompts for
@@ -3453,7 +3101,8 @@ def main():
                                 do_format=not opts.no_format,
                                 before_eject=offer,
                                 lba48=opts.lba48,
-                                max_data_gb=max_data_gb)
+                                max_data_gb=max_data_gb,
+                                arm=opts.arm)
 
     # Explicit raw-device path: operate on the FAT ourselves, bypassing the OS
     # mount and all the mount-detection / FireWire-queue machinery (the whole
@@ -3557,15 +3206,12 @@ def main():
             return cmd_ls(lib, opts.field) if lib else 1
 
         if opts.command in ("rm", "remove", "delete", "erase"):
-            lib = load_library(mount)
-            if not lib:
-                return 1
-            rc = cmd_rm(lib, mount, opts.what)
+            rc = cmd_rm(mount, opts.what)
             offer_eject(_device_for_mount(mount), rc)
             return rc
 
         if opts.command == "init":
-            itunesdb.init_ipod(mount, opts.name or "iPod")
+            card.init(MountTarget(mount), opts.name or "iPod", overwrite=True)
             print(f"Initialized iPod directory structure at {mount}")
             return 0
 

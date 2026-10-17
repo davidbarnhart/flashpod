@@ -134,35 +134,65 @@ def parse(path):
 
 def parse_bytes(buf):
     """Parse raw iTunesDB bytes into a Library (used by the raw-device path,
-    which reads the DB through the userspace FAT driver rather than a file)."""
+    which reads the DB through the userspace FAT driver rather than a file).
+
+    Raises ValueError for a database whose structure doesn't hold together
+    -- a dataset or track record missing where the headers say it is, or a
+    length running off the end. Such a DB used to parse as an EMPTY library
+    (the walk just stopped at the first unexpected bytes), and the next `add`
+    then rewrote it with only the new tracks, silently dropping every
+    existing entry (found 2026-10-16). Callers treat ValueError as a corrupt
+    database (CorruptLibrary), which offers a rebuild from the files instead.
+    The playlist dataset stays lenient: only the master playlist's name is
+    read from it."""
     if buf[0:4] != b"mhbd":
         raise ValueError("not an iTunesDB (no mhbd header)")
+    if len(buf) < 24:
+        raise ValueError("corrupt iTunesDB: %d bytes is shorter than its "
+                         "header" % len(buf))
     lib = Library()
-    lib.dbid = _u64(buf, 24)
+    lib.dbid = _u64(buf, 24) if len(buf) >= 32 else 0
     hlen = _u32(buf, 4)
     nchildren = _u32(buf, 20)
+    if not 24 <= hlen <= len(buf):
+        raise ValueError("corrupt iTunesDB: header length %d (file is %d "
+                         "bytes)" % (hlen, len(buf)))
     off = hlen
-    for _ in range(nchildren):
+    tracks_seen = False
+    for i in range(nchildren):
         if buf[off:off + 4] != b"mhsd":
-            break
+            raise ValueError("corrupt iTunesDB: dataset %d of %d missing at "
+                             "offset %d" % (i + 1, nchildren, off))
         sd_hlen, sd_tlen, sd_type = _u32(buf, off + 4), _u32(buf, off + 8), \
             _u32(buf, off + 12)
+        if sd_tlen < sd_hlen or sd_hlen < 16 or off + sd_tlen > len(buf):
+            raise ValueError("corrupt iTunesDB: dataset %d at offset %d has "
+                             "length %d (header %d, file %d bytes)"
+                             % (i + 1, off, sd_tlen, sd_hlen, len(buf)))
         if sd_type == 1:
-            _parse_tracks(buf, off + sd_hlen, lib)
+            _parse_tracks(buf, off + sd_hlen, lib, off + sd_tlen)
+            tracks_seen = True
         elif sd_type == 2:
             _parse_playlists(buf, off + sd_hlen, lib)
         off += sd_tlen
+    if not tracks_seen:
+        raise ValueError("corrupt iTunesDB: no track dataset")
     return lib
 
 
-def _parse_tracks(buf, off, lib):
+def _parse_tracks(buf, off, lib, end):
     if buf[off:off + 4] != b"mhlt":
-        return
+        raise ValueError("corrupt iTunesDB: no track list at offset %d" % off)
     hlen, ntracks = _u32(buf, off + 4), _u32(buf, off + 8)
     off += hlen
-    for _ in range(ntracks):
+    for i in range(ntracks):
         if buf[off:off + 4] != b"mhit":
-            break
+            raise ValueError("corrupt iTunesDB: track %d of %d missing at "
+                             "offset %d" % (i + 1, ntracks, off))
+        tlen = _u32(buf, off + 8)
+        if tlen < _u32(buf, off + 4) or off + tlen > end:
+            raise ValueError("corrupt iTunesDB: track %d at offset %d has "
+                             "length %d past its dataset" % (i + 1, off, tlen))
         track, off = _parse_mhit(buf, off)
         lib.tracks.append(track)
 

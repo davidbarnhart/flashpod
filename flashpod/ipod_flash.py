@@ -29,16 +29,21 @@ After the images are written the firmware region is read back and compared
 byte-for-byte to the image before the card is ejected, so a bad write is
 caught immediately.
 """
-import gzip, json, os, struct, subprocess, sys, textwrap, zipfile
+import json, os, struct, subprocess, sys, textwrap
 
 from . import fat32
+from . import layout
 from . import platform as _plat
+from .errors import VerifyFailed
+# The pure layout/firmware code moved to the library (flashpod.layout,
+# flashpod.firmware); re-exported so `ipod_flash.X` keeps working.
+from .firmware import (fixup_directories, load_firmware,  # noqa: F401
+                       validate_firmware, walk_directory, arm_firmware,
+                       aupd_of, aupd_armed)
+from .layout import (DATA_START, FW_BLOCKS, FW_START, LBA28_MAX,  # noqa: F401
+                     SECTOR, TAIL_RESERVE, build_mbr_layout,
+                     fat_sectors_per_cluster)
 
-SECTOR        = 512
-FW_START      = 63
-FW_BLOCKS     = 65536            # 32 MiB firmware partition
-DATA_START    = FW_START + FW_BLOCKS   # 65599
-LBA28_MAX     = 0x10000000       # 2^28 sectors = 128 GiB ceiling of the iPod ATA driver
 # Early iPods address at most LBA28 = 128 GiB. A card larger than that is
 # unusable: the iPod's ATA layer can't reach past 2^28 sectors, and an
 # oversized card (e.g. 256 GB in a 3G) typically makes the bridge report a
@@ -47,11 +52,6 @@ LBA28_MAX     = 0x10000000       # 2^28 sectors = 128 GiB ceiling of the iPod AT
 # a "128 GB" card is ~119 GiB — comfortably under this; the next common size
 # up, 256 GB, is ~238 GiB or garbage — well over.)
 CAPACITY_SANE_MAX = LBA28_MAX                    # 128 GiB (the LBA28 ceiling)
-# iPod disk paths (bridge or flash adapter) can report the disk smaller than
-# a card reader does — the 3G's path hides exactly 1 sector, and a partition
-# that overhangs that view makes the firmware demand a sync. Apple leaves the
-# last reader-visible sector unallocated; we leave 1 MiB for extra margin.
-TAIL_RESERVE  = 2048             # sectors left unallocated at the disk end
 
 C_RED, C_YEL, C_GRN, C_CYN, C_DIM, C_RST = (
     "\033[31m", "\033[33m", "\033[32m", "\033[36m", "\033[2m", "\033[0m")
@@ -91,176 +91,6 @@ def capacity_warning(total_sectors):
             "can produce similar bogus readings, so reseat if the card really "
             "is small enough.)" % fmt_size(total_sectors * SECTOR))
 
-# ----------------------------------------------------------------------------
-# Partition-table construction (pure, testable)
-# ----------------------------------------------------------------------------
-def build_mbr_layout(total_sectors, lba48=False, max_data_sectors=None):
-    """DOS MBR with a firmware partition (type 0x00) at sector 63 and FAT32
-    data (type 0x0B) from sector 65599, stopping TAIL_RESERVE sectors short
-    of the disk end.
-
-    Normally the data partition is capped at LBA28_MAX (128 GiB) because early
-    iPods can't address past 2^28 sectors. `lba48=True` removes that cap and
-    uses ALL remaining space — only correct on an iPod running an LBA48 patch;
-    an unpatched iPod cannot reach the extra sectors. (The MBR sector-count
-    field is 32-bit, so this still tops out at 2 TiB.)
-
-    `max_data_sectors` further caps the data partition — from a firmware's
-    optional `max_data_gb` manifest field or the `--max-data-gb` flag — for a
-    firmware that can't address the whole card, or just to make a smaller
-    partition. It binds even under `lba48`. (No firmware flashpod ships needs
-    it today: 1.0/1.0.4 were hardware-tested to use a 128 GB card in full.)
-
-    Returns (mbr_512_bytes, data_start, data_blocks).
-    """
-    data_end    = total_sectors - TAIL_RESERVE
-    if not lba48:
-        data_end = min(data_end, LBA28_MAX)
-    if max_data_sectors:
-        data_end = min(data_end, DATA_START + max_data_sectors)
-    data_blocks = data_end - DATA_START
-    if data_blocks <= 0:
-        raise ValueError("device too small for an iPod data partition")
-    mbr = bytearray(SECTOR)
-    chs = b"\xfe\xff\xff"                    # LBA-only; CHS fields are vestigial
-    def entry(off, ptype, start, count):
-        mbr[off] = 0x00
-        mbr[off+1:off+4] = chs
-        mbr[off+4] = ptype
-        mbr[off+5:off+8] = chs
-        struct.pack_into("<II", mbr, off+8, start, count)
-    entry(446, 0x00, FW_START, FW_BLOCKS)    # firmware partition
-    entry(462, 0x0b, DATA_START, data_blocks)  # FAT32 data
-    mbr[510:512] = b"\x55\xaa"
-    return bytes(mbr), DATA_START, data_blocks
-
-# ----------------------------------------------------------------------------
-# Firmware loading / validation
-# ----------------------------------------------------------------------------
-def load_firmware(path):
-    """Return install-ready firmware bytes from a raw Firmware-* image, a
-    gzipped one (.bin.gz -- what the manifest ships), or an .ipsw zip:
-    unwrap, apply the install-time directory fixups Apple's updater performs,
-    and validate. Dispatch is by magic bytes, not extension, so a
-    hand-supplied --firmware works whatever it is called."""
-    with open(path, "rb") as f:
-        head = f.read(2)
-    if head == b"PK":                          # .ipsw (a zip of Firmware-*)
-        zf = zipfile.ZipFile(path)
-        name = next(n for n in zf.namelist()
-                    if os.path.basename(n).startswith("Firmware"))
-        data = zf.read(name)
-    elif head == b"\x1f\x8b":                  # .bin.gz
-        with gzip.open(path, "rb") as f:
-            data = f.read()
-    else:                                      # raw Firmware-* image
-        data = open(path, "rb").read()
-    data = fixup_directories(data)
-    validate_firmware(data)
-    return data
-
-def walk_directory(fw, base):
-    """Yield (entry_offset, type_4cc, fields_tuple) for the 40-byte entries
-    of the firmware directory starting at `base` (up to the 10 entries the
-    format allows). fields = (id, devOffset, len, addr, entryOffset,
-    chksum, vers, loadAddr)."""
-    for off in range(base, base + 10 * 40, 40):
-        if off + 40 > len(fw) or fw[off:off+4] == b"\x00\x00\x00\x00":
-            return
-        typ = fw[off+4:off+8][::-1]
-        yield off, typ, struct.unpack_from("<8I", fw, off+8)
-
-def fixup_directories(fw):
-    """Apply the install-time fixups Apple's updater performs on the
-    firmware directory; .ipsw resources ship in "pre-install" state and
-    writing them raw leaves the iPod mid-update:
-
-    - osos loadAddr: staging value (0x048Dxxxx) -> 0xFFFFFFFF ("nothing
-      pending"); what every working installer writes (Rockbox ipodpatcher,
-      iPodLinux make_fw/make_fw2).
-    - aupd id: 0 -> 1. Per the iPodLinux wiki the id is "set to 1 for aupd
-      once flash-ROM update has been performed"; the ipsw's 0 means a
-      flash update is PENDING, so the iPod tries to flash its boot ROM on
-      every boot (progress bar -> reset on power, folder-with-! icon on
-      battery; found the hard way on a 3G, 2026-06-12).
-    - aupd loadAddr: -> its RAM address, the post-update resting state.
-
-    With these, our Gen3 output is byte-identical to a factory-installed
-    3G card's firmware image (hardware-validated same day). That claim was
-    re-tested 2026-07-16 against the reference capture and holds: the factory
-    card's slot 10 is empty and its firmware partition contains no flsh table,
-    even though its aupd payload carries one and its aupd id is 1. It is in
-    exactly the suppressed state we write -- which is *why* we match it.
-
-    What setting aupd id=1 actually suppresses: the aupd payload carries the
-    boot-ROM images and their flsh table in staging state. On boot with id=0
-    the iPod flashes them into its ROM, promotes the flsh table into main
-    directory slot 10 with loadAddr rewritten to 0xFFFFFFFF, and sets id=1.
-    (Confirmed in the 1G dump: the slot-10 table is byte-identical to the copy
-    nested in aupd except for exactly those loadAddr words, 0x04710020 ->
-    0xFFFFFFFF.) So id=1 is a CLAIM MADE TO THE DEVICE ABOUT ITS OWN HARDWARE:
-    "your ROM is already current". True and harmless for stock same-generation
-    restores, which is all flashpod does. The narrow failure mode: firmware
-    whose flsh payload is NEWER than the device's ROM will never install it,
-    silently. Two consequences follow -- a flashpod-written card never gets a
-    slot-10 flsh table (the iPod does that promotion during the flash we are
-    suppressing), and cards we write are pre-flash images by construction.
-
-    Format-2/3 images carry two directory copies (a staging table at the
-    header pointer and the live one a sector later); patch both. (Every
-    firmware flashpod ships is format 2 or 3 -- payloads sit at their
-    ABSOLUTE devOffset, which validate_firmware enforces. The 2001-era 1G
-    "format-0" images distributed with a directory at 0x4000 and payloads at
-    devOffset - 0x800 are NOT that physical layout; they must be re-laid-out
-    into a format-2 container before they will boot, and a raw one now fails
-    validation rather than producing an unbootable card.)"""
-    if fw[0x100:0x104] != b"]ih[":
-        return fw                      # not a firmware volume; let validate complain
-    fw = bytearray(fw)
-    ptr, = struct.unpack_from("<I", fw, 0x104)
-    for base in (ptr, ptr + 0x200):
-        for off, typ, (_id, devOff, length, addr, entry, ck, vers, load) \
-                in walk_directory(fw, base):
-            if typ == b"aupd":
-                struct.pack_into("<I", fw, off + 8, 1)      # update "performed"
-                struct.pack_into("<I", fw, off + 36, addr)
-            else:
-                struct.pack_into("<I", fw, off + 36, 0xFFFFFFFF)
-    return bytes(fw)
-
-def validate_firmware(fw):
-    if fw[0:4] != b"{{~~":
-        raise ValueError("not an iPod firmware image (missing STOP boot block)")
-    if fw[0x100:0x104] != b"]ih[":
-        raise ValueError("missing [hi] volume header at 0x100")
-    ptr, = struct.unpack_from("<I", fw, 0x104)
-    fmtver, = struct.unpack_from("<H", fw, 0x10a)
-    # The live directory sits one sector past the header pointer (the copy
-    # AT the pointer is a staging table with different devOffsets). In
-    # format-3 images (4G+) payloads sit one sector past their devOffset;
-    # format 2 (1G-3G) stores them at devOffset directly. The osos checksum
-    # is verified at the payload's ABSOLUTE devOffset -- THE guardrail that a
-    # written image is one the boot ROM can actually load. (A "format-0" 1G
-    # image whose payloads sit at devOffset - 0x800 fails here, as it should:
-    # the boot ROM reads devOffset absolutely and would load garbage.)
-    shift = 0x200 if fmtver == 3 else 0
-    found = False
-    for off, typ, (_id, devOff, length, addr, entry, cksum, vers, load) \
-            in walk_directory(fw, ptr + 0x200):
-        if typ == b"osos":
-            found = True
-            got = sum(fw[devOff+shift:devOff+shift+length]) & 0xFFFFFFFF
-            if got != cksum:
-                raise ValueError("osos checksum mismatch: stored 0x%08x "
-                                 "got 0x%08x" % (cksum, got))
-            if load != 0xFFFFFFFF:
-                raise ValueError("osos loadAddr 0x%08x not fixed up "
-                                 "(install-state must be 0xFFFFFFFF)" % load)
-    if not found:
-        raise ValueError("no osos image in the firmware directory")
-    if len(fw) > FW_BLOCKS * SECTOR:
-        raise ValueError("firmware (%d bytes) larger than the 32 MiB firmware partition"
-                         % len(fw))
 
 # ----------------------------------------------------------------------------
 # Device discovery / safety (Linux)
@@ -517,17 +347,40 @@ def device_label(dev):
     return name or dev
 
 
-def confirm(dev, total_sectors, assume_yes, lba48=False, max_data_sectors=None):
+#: What arming does, in the plan and the question (bridge #1231, David's design).
+ARM_EXPLAINED = (
+    "On the next start from this card ON FIREWIRE POWER, the iPod reprograms "
+    "its own flash chip with the card's disk-mode program. On battery it "
+    "shows the connect-power icon and does nothing. If power is cut during "
+    "the first part of the programming (the erases and the first ~7%), the "
+    "iPod won't start again without an external chip programmer; after "
+    "that, a failure repairs itself on the next start. Not checked: "
+    "flashpod has no dump of this iPod's chip, so it can't rehearse the "
+    "update first (openpod's tools/flash_rom_update.py can).")
+
+
+def confirm(dev, total_sectors, assume_yes, lba48=False, max_data_sectors=None,
+            do_format=True, armed=None):
     _, data_start, data_blocks = build_mbr_layout(total_sectors, lba48, max_data_sectors)
     fw_blocks = FW_BLOCKS
-    print(color("\n  PLAN — this will ERASE %s" % dev, C_RED), file=sys.stderr)
-    print("    layout      : MBR + FAT32", file=sys.stderr)
+    if do_format:
+        print(color("\n  PLAN — this will ERASE %s" % dev, C_RED), file=sys.stderr)
+        print("    layout      : MBR + FAT32", file=sys.stderr)
+    else:
+        # --no-format: only the lead-in (partition table + firmware) and the
+        # last 34 sectors are written; the data partition and its music stay.
+        print(color("\n  PLAN — this will REWRITE the firmware and partition "
+                    "table on %s; the data partition and its music are kept"
+                    % dev, C_YEL), file=sys.stderr)
+        print("    layout      : MBR (data partition kept, not formatted)",
+              file=sys.stderr)
     print("    device size : %s (%d sectors)" % (fmt_size(total_sectors*SECTOR), total_sectors),
           file=sys.stderr)
     print("    firmware     : sectors %d..%d   (%s)" %
           (FW_START, FW_START+fw_blocks-1, fmt_size(fw_blocks*SECTOR)), file=sys.stderr)
-    print("    data (FAT32) : sectors %d..%d  type 0x0B  (%s)" %
-          (data_start, data_start+data_blocks-1, fmt_size(data_blocks*SECTOR)),
+    print("    %s : sectors %d..%d  type 0x0B  (%s)" %
+          ("data (FAT32)" if do_format else "data (kept) ",
+           data_start, data_start+data_blocks-1, fmt_size(data_blocks*SECTOR)),
           file=sys.stderr)
     if lba48:
         if implausible_capacity(total_sectors):
@@ -549,6 +402,9 @@ def confirm(dev, total_sectors, assume_yes, lba48=False, max_data_sectors=None):
         print(color("    ↳ data capped at %s (--max-data-gb); the rest of the "
                     "card is left unused."
                     % fmt_size(max_data_sectors * SECTOR), C_YEL), file=sys.stderr)
+    if armed:
+        print(color("    ⚠ ARMED for a disk-mode update (%s). %s"
+                    % (armed, ARM_EXPLAINED), C_RED), file=sys.stderr)
     mps = _plat.current().device_mountpoints(dev)
     if mps:
         print(color("    mounted now : " + ", ".join("%s@%s" % m for m in mps), C_YEL),
@@ -556,7 +412,7 @@ def confirm(dev, total_sectors, assume_yes, lba48=False, max_data_sectors=None):
     if assume_yes:
         return
     print(file=sys.stderr)
-    want = "ERASE %s" % device_label(dev)
+    want = "%s %s" % ("ERASE" if do_format else "REWRITE", device_label(dev))
     got = input(color('  Type "%s" to proceed: ' % want, C_RED)).strip()
     if got != want:
         sys.exit("Confirmation did not match. Aborted.")
@@ -602,25 +458,33 @@ def write_layout(dev, fw_bytes, total_sectors, dry, do_format, lba48=False,
                  max_data_sectors=None):
     header, data_start, data_blocks = build_mbr_layout(total_sectors, lba48, max_data_sectors)
     if dry:
-        print(color("  [dry-run] would wipe signatures, write %d-byte MBR header, "
-                    "%d-byte firmware @ sector %d, pure-Python FAT32 on data"
-                    % (len(header), len(fw_bytes), FW_START),
-                    C_DIM), file=sys.stderr)
+        if do_format:
+            print(color("  [dry-run] would wipe signatures, write %d-byte MBR header, "
+                        "%d-byte firmware @ sector %d, pure-Python FAT32 on data"
+                        % (len(header), len(fw_bytes), FW_START),
+                        C_DIM), file=sys.stderr)
+        else:
+            print(color("  [dry-run] would zero sectors 0..%d and the last 34, write "
+                        "%d-byte firmware @ sector %d and a %d-byte MBR header; "
+                        "the data partition (sectors %d..%d) is left as it is"
+                        % (data_start - 1, len(fw_bytes), FW_START, len(header),
+                           data_start, data_start + data_blocks - 1),
+                        C_DIM), file=sys.stderr)
         return
     plat = _plat.current()
     # 1. kill any existing partition signatures (MBR/GPT/FAT)
     plat.wipe_signatures(dev, False)
     plat.invalidate_cached_partitions(dev)
     f = plat.open_raw(dev, "r+b")
-    # zero the leading area (old GPT/MBR region) and the tail (GPT backup)
-    f.seek(0); f.write(b"\x00" * (data_start * SECTOR))
-    f.seek(max(0, total_sectors - 34) * SECTOR); f.write(b"\x00" * (34 * SECTOR))
-    # 2. firmware image at the firmware partition's start (sector 63)
-    f.seek(FW_START * SECTOR); f.write(fw_bytes)
-    # 3. data filesystem — written BEFORE the MBR so Windows can't see a
-    #    valid partition table and auto-mount the data region mid-write
+    # 2-3. layout.write_card: zero the lead-in (old GPT/MBR region) and the
+    #    tail (GPT backup), the firmware at sector 63, then the data
+    #    filesystem -- all BEFORE the MBR, so Windows can't see a valid
+    #    partition table and auto-mount the data region mid-write. The same
+    #    sequence card.flash runs on an image.
+    done = layout.write_card(f, fw_bytes, total_sectors, lba48,
+                             max_data_sectors, do_format)
     if do_format:
-        format_data(f, dev, data_start, data_blocks)
+        report_format(dev, done["format"])
     # 4. MBR is deferred: written by flash() AFTER the before_eject callback
     #    so the post-flash init can write to the FAT32 without the volume
     #    manager blocking access (no valid MBR = no volume discovery).
@@ -628,36 +492,24 @@ def write_layout(dev, fw_bytes, total_sectors, dry, do_format, lba48=False,
     print(color("  wrote MBR partition table + firmware", C_GRN), file=sys.stderr)
     return f, header, data_start
 
-def fat_sectors_per_cluster(data_blocks):
-    """Largest Apple-style cluster size that still yields a VALID FAT32.
-    Apple uses 32 sectors (16 KiB) on real iPods, but FAT32 requires at
-    least 65525 clusters — the FAT spec derives the filesystem TYPE from
-    the cluster count, so an undersized "FAT32" is read as FAT16 by
-    spec-following code (2003 iPod firmware included) and crashes it.
-    Small cards therefore get smaller clusters (65600 keeps a safety
-    margin above the boundary)."""
-    spc = 32
-    while spc > 1 and data_blocks // spc < 65600:
-        spc //= 2
-    return spc
 
-def format_data(f, dev, data_start, data_blocks):
-    """Format the data partition FAT32 in pure Python — no mkfs, no losetup.
-    Writes the filesystem structures straight onto the device at the partition
-    offset, so this is identical on Linux, macOS, and Windows."""
-    spc = fat_sectors_per_cluster(data_blocks)
-    try:
-        geo = fat32.format_fat32(f, data_start, data_blocks, spc, label="IPOD")
-    except ValueError as e:
+def report_format(dev, fmt):
+    """Print how layout.write_card's FAT32 format went: ``fmt`` is
+    ``(geometry, sectors_per_cluster)`` or the exception it raised (then the
+    partition was left unformatted, and the flash carries on)."""
+    if isinstance(fmt, ValueError):
         print(color("  %s - skipping data format; the iPod will likely reject "
-                    "the card." % e, C_YEL), file=sys.stderr)
+                    "the card." % fmt, C_YEL), file=sys.stderr)
         return
-    except (OSError, IOError) as e:
+    if isinstance(fmt, (OSError, IOError)):
         print(color("  could not write FAT32 to %s: %s - skipping data format."
-                    % (dev, e), C_YEL), file=sys.stderr)
+                    % (dev, fmt), C_YEL), file=sys.stderr)
         return
-    print(color("  formatted data partition (FAT32, %d clusters @ %d KiB, "
-                "label 'IPOD')" % (geo["clusters"], spc * SECTOR // 1024), C_GRN),
+    geo, spc = fmt
+    cb = spc * SECTOR                 # small cards get 512-byte clusters,
+    size = ("%d KiB" % (cb // 1024)) if cb >= 1024 else ("%d bytes" % cb)
+    print(color("  formatted data partition (FAT32, %d clusters @ %s, "   # which read "0 KiB"
+                "label 'IPOD')" % (geo["clusters"], size), C_GRN),
           file=sys.stderr)
 
 def verify_firmware(dev, fw_bytes, dry):
@@ -675,22 +527,17 @@ def verify_firmware(dev, fw_bytes, dry):
     plat.flush_buffers(dev)                                   # drop cache -> read the real card
     n = len(fw_bytes)
     with plat.open_raw(dev, "rb") as f:
-        f.seek(FW_START * SECTOR)
-        off = 0
-        while off < n:
-            want = min(1 << 20, n - off)
-            chunk = f.read(want)
-            if not chunk:
+        try:
+            layout.verify_region(f, fw_bytes)
+        except VerifyFailed as e:
+            d = e.details
+            if d["reason"] == "short_read":
                 sys.exit(color("VERIFY FAILED: short read (%d of %d firmware bytes) from %s — "
-                               "do NOT use this card." % (off, n, dev), C_RED))
-            for i, b in enumerate(chunk):
-                if b != fw_bytes[off + i]:
-                    bad = off + i
-                    sys.exit(color("VERIFY FAILED at firmware byte 0x%06x (disk sector %d): card "
-                                   "0x%02x != image 0x%02x. The write did not land correctly — do "
-                                   "NOT use this card (re-seat it / try another and re-flash)."
-                                   % (bad, FW_START + bad // SECTOR, b, fw_bytes[bad]), C_RED))
-            off += len(chunk)
+                               "do NOT use this card." % (d["got"], n, dev), C_RED))
+            sys.exit(color("VERIFY FAILED at firmware byte 0x%06x (disk sector %d): card "
+                           "0x%02x != image 0x%02x. The write did not land correctly — do "
+                           "NOT use this card (re-seat it / try another and re-flash)."
+                           % (d["offset"], d["sector"], d["card"], d["image"]), C_RED))
     print(color("  verify OK: %d firmware bytes on the card match the image exactly." % n, C_GRN),
           file=sys.stderr)
 
@@ -826,9 +673,38 @@ def self_test():
                 "devOffset; LBA28 cap.", C_GRN))
 
 # ----------------------------------------------------------------------------
+def check_kept_data(plat, dev, total_sectors, dry_run, lba48=False,
+                    max_data_sectors=None):
+    """--no-format keeps the card's data partition, so the new partition
+    table must point at it exactly (layout.kept_data_problems). Refuse
+    otherwise. A dry run that can't read the card (no root) says so."""
+    try:
+        with plat.open_raw(dev, "rb") as f:
+            def read(off, n):
+                f.seek(off)
+                return f.read(n)
+            problems = layout.kept_data_problems(read, total_sectors, lba48,
+                                                 max_data_sectors)
+    except OSError as e:
+        if not dry_run:
+            sys.exit(color("could not read %s to check its data partition: %s"
+                           % (dev, e), C_RED))
+        print(color("  [dry-run] could not read %s to check that its data "
+                    "partition matches (%s); a real run checks before writing."
+                    % (dev, e.strerror or e), C_YEL), file=sys.stderr)
+        return
+    if problems:
+        sys.exit(color("--no-format keeps the data partition, but on %s:\n  %s\n"
+                       "Flashing would point the iPod at the wrong sectors. "
+                       "Flash without --no-format (erases the card) instead."
+                       % (dev, "\n  ".join(problems)), C_RED))
+    print(color("  data partition matches the planned layout; it will be kept",
+                C_GRN), file=sys.stderr)
+
+
 def flash(device=None, firmware=None,
           assume_yes=False, dry_run=False, do_format=True, before_eject=None,
-          lba48=False, max_data_gb=None):
+          lba48=False, max_data_gb=None, arm=False):
     """Flash a card end-to-end; the `ipod flash` entry point.
     Exits via sys.exit() on errors and aborted confirmations.
     `before_eject(dev, raw_fobj, data_start)` runs after the firmware verify
@@ -838,13 +714,22 @@ def flash(device=None, firmware=None,
     gets the still-open raw handle and no MBR yet, everyone else gets the
     table already written and re-read, with `raw_fobj`/`data_start` None.
     `max_data_gb` caps the data partition (manifest `max_data_gb` or the
-    `--max-data-gb` flag); None means no cap."""
+    `--max-data-gb` flag); None means no cap. `arm` leaves the disk-mode
+    update pending (firmware.arm_firmware): refused unless the firmware's
+    aupd is a known one."""
     try:
         fw = load_firmware(firmware)
     except (OSError, ValueError, StopIteration) as e:
         sys.exit(color("firmware error (%s): %s" % (firmware, e), C_RED))
     print(color("firmware OK: %s (%d bytes, structure validated)"
                 % (os.path.basename(firmware), len(fw)), C_GRN), file=sys.stderr)
+    armed = None
+    if arm:
+        try:
+            fw = arm_firmware(fw)
+        except ValueError as e:
+            sys.exit(color("can't arm: %s" % e, C_RED))
+        armed = aupd_of(fw)["known"]
 
     # An optional ceiling in decimal GB caps the data partition; a bigger card
     # is fine, we just clamp. (No firmware needs it now; --max-data-gb sets it.)
@@ -862,7 +747,18 @@ def flash(device=None, firmware=None,
         sys.exit(color("could not determine size of %s — is a card inserted? "
                        "An empty slot in a multi-slot reader still appears as "
                        "a disk, but reports size 0." % dev, C_RED))
-    confirm(dev, total_sectors, assume_yes or dry_run, lba48, max_data_sectors)
+    try:
+        build_mbr_layout(total_sectors, lba48, max_data_sectors)
+    except ValueError:
+        # this used to escape as a traceback from inside confirm()
+        sys.exit(color("%s is too small for an iPod card: %s leaves no room "
+                       "for a data partition after the %s firmware partition."
+                       % (dev, fmt_size(total_sectors * SECTOR),
+                          fmt_size(FW_BLOCKS * SECTOR)), C_RED))
+    if not do_format:
+        check_kept_data(plat, dev, total_sectors, dry_run, lba48, max_data_sectors)
+    confirm(dev, total_sectors, assume_yes or dry_run, lba48, max_data_sectors,
+            do_format, armed)
     plat.unmount_all(dev, dry_run)
     result = write_layout(dev, fw, total_sectors, dry_run, do_format, lba48, max_data_sectors)
     verify_firmware(dev, fw, dry_run)
@@ -872,8 +768,7 @@ def flash(device=None, firmware=None,
     def commit_mbr():
         """Write the deferred partition table and release the raw handle."""
         if raw_fobj:
-            raw_fobj.seek(0); raw_fobj.write(mbr_header)
-            raw_fobj.flush()
+            layout.write_mbr(raw_fobj, mbr_header)
             raw_fobj.close()
 
     # Where the init hook sits relative to the MBR is per-platform; see

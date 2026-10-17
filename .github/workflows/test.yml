@@ -148,6 +148,51 @@ jobs:
         shell: bash
         run: PYTHONPATH=. python scripts/test_post_flash_init_offer.py
 
+      # flashpod.card, the library API the emulator's web app calls: every
+      # operation on synthetic image files, checked against the CLI where
+      # both do the same thing. Linux: it uses fcntl.flock, and the tagged
+      # MP3s come from ffmpeg.
+      - name: Library API on image files (flashpod.card)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          command -v ffmpeg >/dev/null || { sudo apt-get update -q && sudo apt-get install -yq ffmpeg; }
+          PYTHONPATH=. python scripts/test_card.py
+
+      - name: A broken iTunesDB is refused, not read as empty
+        if: runner.os == 'Linux'
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_itunesdb_strict.py
+
+      - name: Re-adding after a rebuild doesn't copy untagged songs again
+        if: runner.os == 'Linux'
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_rebuild_dedup.py
+
+      - name: One place for the logic (the CLI runs flashpod.card)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_one_place.py
+
+      - name: The catalog names firmware by Apple's version
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_firmware_versions.py
+
+      - name: flash --no-format says what it does and keeps the music
+        if: runner.os == 'Linux'
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_flash_no_format.py
+
+      - name: flash --arm arms only when asked, and only a known disk-mode program
+        if: runner.os == 'Linux'
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_flash_arm.py
+
+      - name: flashpod burn checks (a file stands in for the card)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_burn.py
+
       - name: macOS backend against live diskutil
         if: runner.os == 'macOS'
         shell: bash

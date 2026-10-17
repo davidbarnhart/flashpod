@@ -66,6 +66,8 @@ sync for occasionally adding new albums later.
 
 ## Install
 
+What changed in each release: [CHANGELOG.md](CHANGELOG.md).
+
 If you already have the **pip** Python package manager (or **pipx**), install
 with a single command:
 
@@ -146,19 +148,16 @@ Which iPod are you flashing for?
 Select model: 0
 Firmware for 1st generation (newest first):
 
-  #  Version  Built       Size  Notes
-  -  -------  ----------  ----  ----------------------------------------------
-  0  1.5 *    2005-02-18  2.0M  Last stock Apple-released firmware for 1G/2G
-                                iPods
-  1  1.4      2004-04-23  1.9M  Adds 20+ EQ presets, shuffle by album, track
-                                scrubbing, Contacts/Calendar/Clock, Korean and
-                                Chinese; iTunes 4.5 compatibility
-  2  0.4      2001-12-23  0.7M  Adds Italian, Dutch, Spanish, Brazilian
-                                Portuguese, Danish, Finnish, Norwegian and
-                                Swedish; 255-character filenames; fixes low-
-                                battery sleep wake and blue-and-white Power
-                                Macintosh G3 compatibility
-  3  0.0      2001-11-01  0.7M  Initial release for the original 1G iPod
+  #  Version         Built       Size  Notes
+  -  --------------  ----------  ----  ---------------------------------------
+  0  1.6 (flashpod)  2026-10-16  2.0M  NOT AN APPLE RELEASE -- flashpod's 1.6:
+                                       Apple's 1.5 plus 23 fixes. Plays FLAC;
+                                       ...
+  1  1.5 *           2005-02-18  2.0M  Last stock Apple-released firmware for
+                                       1G/2G iPods
+  2  1.4             2004-04-23  1.9M  Adds 20+ EQ presets, shuffle by album,
+                                       ...
+  ...
 
   * recommended default
 
@@ -469,13 +468,68 @@ firmware that fits it, from the bundled catalog
 chosen image is then **downloaded from GitHub**, cached under
 `~/.cache/flashpod/`, and **verified against its SHA-256** before use; later
 flashes reuse the cached copy (no network). The images aren't bundled with
-flashpod — they're Apple's copyright, hosted as
+flashpod — they're Apple's copyright (flashpod 1.6 is built from Apple's
+1.5), hosted as
 [release assets](https://github.com/davidbarnhart/flashpod/releases/tag/firmware).
 
 The model question isn't cosmetic: firmware is not interchangeable across
 models. 2nd-generation (touch wheel) support first appeared in firmware 1.1.2,
-so the 2001 images (1G's 0.0 and 0.4) would leave a 2G unusable — asking first
+so the 2001 images (1G's 1.0 and 1.0.4) would leave a 2G unusable — asking first
 means they're never offered to one.
+
+**flashpod 1.6 (1st and 2nd generation).** The catalog's one firmware that
+isn't Apple's: Apple's last release, 1.5, with 23 fixes, built from the
+[openpod](https://github.com/davidbarnhart/openpod) project's fix folder
+(`firmware/1/1.6`). The picker marks it `(flashpod)` and NOT AN APPLE RELEASE,
+`inspect` reports it as `flashpod 1.6`, and Apple's 1.5 stays the default.
+What you gain over 1.5:
+
+- **FLAC.** FLAC files play, fast-forward and rewind land at once, and there's
+  no dropout when a track starts or while the file cache refills.
+- **Big cards.** Disks over 128 GiB work (LBA48); flash with `--lba48` to give
+  the data partition the whole card.
+- **Big libraries.** 1.5 shows zero songs once the iTunesDB passes about
+  3.8 MB (around 5,300 tracks), because of a memory leak; 1.6 fixes the leak,
+  and a track's record takes 160 bytes instead of 448. It has run on
+  31,958 songs. `flashpod add` doesn't detect 1.6 on the card yet and still
+  stops at 1.5's limit; set `FLASHPOD_DB_LIMIT=0` to add past it on a 1.6
+  card (the remaining limit is the 32,000-track playlist cap).
+- **Faster menus.** Artists, an artist and Songs open in about 2 seconds
+  instead of 4-6, and the other lists are built with less repeated work.
+- **Faster start-up.** No whole-table name searches, no listing every music
+  file at each start, no clearing free memory.
+- **Text.** A character the font lacks is drawn as `?` and sorted after every
+  letter, instead of vanishing.
+- **Shuffle Songs** leaves audiobooks out without looking up every track.
+- The iPod says it's version 1.6.
+- **Disk mode on big cards**, but not after a normal flash: FireWire disk
+  mode can see, read and write a card past 128 GiB only once the iPod's
+  flash ROM has been reprogrammed with 1.6's updater (openpod's tooling).
+  A flashpod flash leaves the ROM alone, so disk mode stays at 128 GiB as
+  on 1.5.
+
+Hardware-tested on 2026-10-16 on a 1st-generation iPod, with a 250 GB card of
+31,958 songs and a 128 GB FLAC card of about 3,000. Known limit, as on 1.5:
+Shuffle Songs doesn't start on a library near 32,000 songs. It hasn't been
+tested on a 2G; it's offered for one because 1.5, which it's built from, is.
+
+**Arming a card for a disk-mode update (`--arm`).** A 1G/2G firmware
+carries a second program, the one the iPod runs in FireWire disk mode, which
+lives in the iPod's own flash chip, not on the card. flashpod normally writes
+the card with that update marked as already done, so the chip is left alone.
+An **armed** card leaves it pending: on the next start from the card **on
+FireWire power**, the iPod reprograms its flash chip with the card's
+disk-mode program (flashpod 1.6's carries disk mode past 128 GiB). On battery
+it shows the connect-power icon and does nothing. The risk is small but real:
+if power is cut during the first part of the programming (the erases and the
+first ~7%), the iPod won't start again without an external chip programmer;
+after that, a failure repairs itself on the next start. flashpod has no dump
+of your iPod's chip, so it can't rehearse the update first (openpod's
+`tools/flash_rom_update.py` can). Only disk-mode programs flashpod knows can
+be armed: flashpod 1.6's and Apple 1.5's. An interactive flash of one of them
+asks (default no); `--arm` arms without asking, `--no-arm` never arms, and a
+non-interactive run never arms without `--arm`. `card.flash(..., arm=True)`
+does the same in the library, and `inspect` reports whether a card is armed.
 
 These early images have no low disk-size ceiling — 1.0 and 1.0.4 were tested on
 a 128 GB card in full (the broken-folder icon on such a card means the data
@@ -490,7 +544,8 @@ firmware flashpod doesn't host (or to work fully offline), pass it with
 `Firmware-*` image, a `.bin.gz`, or an Apple `.ipsw` (the format is detected
 from the file's magic bytes, not its name). To add an image to the catalog,
 upload it to the firmware release and add a manifest entry (`file`,
-`url`/`base_url`, `sha256`, `size`, `generation`, `version`, `description`, and
+`url`/`base_url`, `sha256`, `size`, `generation`, `version`, `description`,
+`maker` for anything not Apple's (the picker and `inspect` show it), and
 `build_date` if known — it can't be recovered from the file later, since git
 and release downloads both reset mtimes).
 
@@ -501,7 +556,8 @@ Options:
 | `--firmware <file>` | use a local image — raw `Firmware-*`, `.bin.gz`, or `.ipsw` (bring-your-own; no download). Default: pick from the catalog and download it |
 | `--model <id>`      | iPod model to flash for (`1G`, `2G`, `3G`, `4G`, `photo`); decides which firmware is offered. Default: ask |
 | `--yes`             | skip the typed `ERASE sdX` confirmation |
-| `--no-format`       | don't format the data partition |
+| `--arm` / `--no-arm` | arm the card for a disk-mode update, or don't (and don't ask). Without either, an interactive flash asks, defaulting to no; see below |
+| `--no-format`       | keep the data partition and its music: rewrite only the firmware and partition table. Refused unless the card's data partition already starts and ends where the new table puts it |
 | `--lba48`           | **experimental**: use the whole card for data, past the 128 GiB cap (LBA48-patched iPods only) |
 | `--max-data-gb <N>` | cap the data partition to N decimal GB (e.g. to make a smaller partition, or probe a firmware's disk-size ceiling) |
 | `--dry-run`         | show the plan only |
@@ -541,8 +597,58 @@ $ flashpod ls   --raw ipod.img
 An interactive `flash` of an image offers init and music afterwards, as it does
 for a card. The image is what an iPod emulator boots — openpod's
 `tools/ipod_emu_ui.py` reads one with `OPENPOD_DISK=ipod.img` — and it can be
-written to a real card byte for byte (`dd`), though `flashpod flash` on the
-card itself is the tested way to make one.
+written to a real card with `flashpod burn`, below.
+
+### `flashpod burn IMAGE [/dev/sdX]`
+
+Writes a card image file onto a real SD/CF card in a reader, byte for byte,
+then reads the card back to check it. Like `flash`, it erases the card, needs
+root (it elevates via sudo), and asks you to type `ERASE sdX` (`--yes` skips
+that). Leave out the device to choose from the attached removable disks.
+
+Before writing anything it refuses a target that isn't a removable whole disk
+(USB, MMC or hot-plug, per `lsblk`), a disk backing the running system, a
+FireWire disk (early iPod bridges crash on big writes), an empty reader slot,
+and a card smaller than the image; and it refuses an image with no partition
+table. The plan names the image's firmware and library and warns when the data
+partition reaches past 128 GiB (only LBA48 firmware can address that).
+`--dry-run` runs every check and writes nothing; `--no-verify` skips the
+read-back. Linux only for now.
+
+## Using flashpod as a library
+
+`flashpod.card` is the engine the CLI itself runs (every `add`, `rm`,
+`init` and `rebuild` goes through it), for programs that manage card **image
+files** (an iPod emulator's web front end, for one). It never prints,
+prompts, mounts, asks for root or touches a device: given a path, every call
+refuses anything but a regular file.
+
+```python
+from flashpod import card
+
+card.create_blank("a.img", 8 * 10**9)          # sparse
+card.flash("a.img", "iPod_1.1.5.bin.gz")        # same bytes as `flashpod flash a.img --yes`
+card.init("a.img", "My iPod")
+plan = card.plan_add("a.img", ["/music/Album"]) # what would happen; writes nothing
+report = card.add("a.img", ["/music/Album"], plan=plan,
+                  policy={"full": "fit", "ceiling": "refuse"})
+info = card.inspect("a.img")                    # layout, firmware build + fixes, FAT32, iTunesDB counts
+card.remove("a.img", ids=[52, 53])
+card.flash_firmware("a.img", "other.ipsw")      # replace the firmware, keep the music
+```
+
+Also `format_data`, `tracks`, `library`, `rebuild`, `apply_add` (copy a
+chosen subset of a plan), `open_target` (hold an image's lock across several
+calls), `firmware_catalog`,
+`fetch_firmware`, `version()` and `API_VERSION` (major.minor; a major bump
+breaks callers). Results have `to_dict()`; errors are
+`flashpod.errors.FlashpodError` subclasses with a stable `code`. Long calls
+take `progress(stage, done, total, item)` and `cancelled()`; a cancelled add
+keeps exactly the tracks already copied. Each image is locked with
+`fcntl.flock` (shared to read, exclusive to write; `CardBusy` on a conflict),
+which other programs using the same image should take too. The module's
+docstring lists which of the CLI's safety rules it keeps and which only apply
+to devices.
 
 ## Notes
 
