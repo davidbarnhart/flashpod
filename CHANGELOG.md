@@ -1,14 +1,6 @@
 # Changelog
 
-## Unreleased
-
-- `flashpod add` lifts the iTunesDB size limit on firmware with the
-  large-library fix. When a batch would pass 1.5's ~3.8 MB ceiling, it reads
-  the card's firmware (a few sectors), and on flashpod 1.6 the only limit is
-  the 32,000-track playlist cap. `FLASHPOD_DB_LIMIT=0` is no longer needed on
-  a 1.6 card. The library's plan, add and inspect report which limit applies.
-
-## 0.5.0 (2026-10-16)
+## 0.5.0 (2026-10-17)
 
 ### flashpod 1.6 firmware for the 1st and 2nd generation
 
@@ -21,8 +13,9 @@ RELEASE, and Apple's 1.5 stays the default. Over 1.5 it gives:
 - FLAC playback, with seeking that lands at once and no dropouts;
 - cards over 128 GiB (flash with `--lba48`);
 - big libraries: 1.5 shows zero songs past a ~3.8 MB iTunesDB (about 5,300
-  tracks), and 1.6 has run with 31,958 songs. `flashpod add` doesn't detect
-  1.6 yet, so set `FLASHPOD_DB_LIMIT=0` to add past 1.5's limit;
+  tracks), and 1.6 has run with 31,958 songs. `flashpod add` sees the fix on
+  the card (it reads a few sectors of firmware once a batch would pass 1.5's
+  limit) and lets the library grow to the 32,000-track playlist cap;
 - Artists, an artist and Songs open in about 2 s instead of 4-6, and start-up
   is faster;
 - characters the font lacks show as `?` instead of vanishing;
