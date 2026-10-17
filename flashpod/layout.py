@@ -152,6 +152,38 @@ def write_card(f, fw_bytes, total_sectors, lba48=False, max_data_sectors=None,
             "data_blocks": data_blocks, "format": fmt}
 
 
+def kept_data_problems(read, total_sectors, lba48=False, max_data_sectors=None):
+    """Why a flash that KEEPS the data partition (no format) would be unsafe
+    on this card; [] when it is safe. ``read(offset, n)`` reads the card.
+
+    Without a format the new partition table must point at the FAT32 that is
+    already there: the same start sector and length. Anything else would
+    send the iPod to the wrong sectors, so the caller refuses."""
+    _, data_start, data_blocks = build_mbr_layout(total_sectors, lba48,
+                                                  max_data_sectors)
+    mbr = read(0, SECTOR)
+    if len(mbr) < SECTOR or mbr[510:512] != b"\x55\xaa":
+        return ["no partition table, so no data partition to keep"]
+    data = None
+    for off in (446, 462, 478, 494):
+        if mbr[off + 4] in (0x0b, 0x0c):
+            data = struct.unpack_from("<II", mbr, off + 8)
+            break
+    if data is None:
+        return ["no FAT32 data partition (type 0x0b/0x0c) to keep"]
+    problems = []
+    if tuple(data) != (data_start, data_blocks):
+        problems.append(
+            "the data partition is at sectors %d..%d, but this flash would "
+            "put it at %d..%d" % (data[0], data[0] + data[1] - 1,
+                                  data_start, data_start + data_blocks - 1))
+    boot = read(data[0] * SECTOR, SECTOR)
+    if len(boot) < SECTOR or boot[510:512] != b"\x55\xaa" \
+            or boot[82:87] != b"FAT32":
+        problems.append("no FAT32 filesystem at sector %d" % data[0])
+    return problems
+
+
 def write_mbr(f, header):
     """Commit the partition table: the last write of a flash."""
     f.seek(0)

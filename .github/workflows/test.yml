@@ -178,6 +178,11 @@ jobs:
         shell: bash
         run: PYTHONPATH=. python scripts/test_firmware_versions.py
 
+      - name: flash --no-format says what it does and keeps the music
+        if: runner.os == 'Linux'
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_flash_no_format.py
+
       - name: flashpod burn checks (a file stands in for the card)
         if: runner.os == 'Linux'
         shell: bash

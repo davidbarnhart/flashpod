@@ -346,17 +346,28 @@ def device_label(dev):
     return name or dev
 
 
-def confirm(dev, total_sectors, assume_yes, lba48=False, max_data_sectors=None):
+def confirm(dev, total_sectors, assume_yes, lba48=False, max_data_sectors=None,
+            do_format=True):
     _, data_start, data_blocks = build_mbr_layout(total_sectors, lba48, max_data_sectors)
     fw_blocks = FW_BLOCKS
-    print(color("\n  PLAN — this will ERASE %s" % dev, C_RED), file=sys.stderr)
-    print("    layout      : MBR + FAT32", file=sys.stderr)
+    if do_format:
+        print(color("\n  PLAN — this will ERASE %s" % dev, C_RED), file=sys.stderr)
+        print("    layout      : MBR + FAT32", file=sys.stderr)
+    else:
+        # --no-format: only the lead-in (partition table + firmware) and the
+        # last 34 sectors are written; the data partition and its music stay.
+        print(color("\n  PLAN — this will REWRITE the firmware and partition "
+                    "table on %s; the data partition and its music are kept"
+                    % dev, C_YEL), file=sys.stderr)
+        print("    layout      : MBR (data partition kept, not formatted)",
+              file=sys.stderr)
     print("    device size : %s (%d sectors)" % (fmt_size(total_sectors*SECTOR), total_sectors),
           file=sys.stderr)
     print("    firmware     : sectors %d..%d   (%s)" %
           (FW_START, FW_START+fw_blocks-1, fmt_size(fw_blocks*SECTOR)), file=sys.stderr)
-    print("    data (FAT32) : sectors %d..%d  type 0x0B  (%s)" %
-          (data_start, data_start+data_blocks-1, fmt_size(data_blocks*SECTOR)),
+    print("    %s : sectors %d..%d  type 0x0B  (%s)" %
+          ("data (FAT32)" if do_format else "data (kept) ",
+           data_start, data_start+data_blocks-1, fmt_size(data_blocks*SECTOR)),
           file=sys.stderr)
     if lba48:
         if implausible_capacity(total_sectors):
@@ -385,7 +396,7 @@ def confirm(dev, total_sectors, assume_yes, lba48=False, max_data_sectors=None):
     if assume_yes:
         return
     print(file=sys.stderr)
-    want = "ERASE %s" % device_label(dev)
+    want = "%s %s" % ("ERASE" if do_format else "REWRITE", device_label(dev))
     got = input(color('  Type "%s" to proceed: ' % want, C_RED)).strip()
     if got != want:
         sys.exit("Confirmation did not match. Aborted.")
@@ -431,10 +442,18 @@ def write_layout(dev, fw_bytes, total_sectors, dry, do_format, lba48=False,
                  max_data_sectors=None):
     header, data_start, data_blocks = build_mbr_layout(total_sectors, lba48, max_data_sectors)
     if dry:
-        print(color("  [dry-run] would wipe signatures, write %d-byte MBR header, "
-                    "%d-byte firmware @ sector %d, pure-Python FAT32 on data"
-                    % (len(header), len(fw_bytes), FW_START),
-                    C_DIM), file=sys.stderr)
+        if do_format:
+            print(color("  [dry-run] would wipe signatures, write %d-byte MBR header, "
+                        "%d-byte firmware @ sector %d, pure-Python FAT32 on data"
+                        % (len(header), len(fw_bytes), FW_START),
+                        C_DIM), file=sys.stderr)
+        else:
+            print(color("  [dry-run] would zero sectors 0..%d and the last 34, write "
+                        "%d-byte firmware @ sector %d and a %d-byte MBR header; "
+                        "the data partition (sectors %d..%d) is left as it is"
+                        % (data_start - 1, len(fw_bytes), FW_START, len(header),
+                           data_start, data_start + data_blocks - 1),
+                        C_DIM), file=sys.stderr)
         return
     plat = _plat.current()
     # 1. kill any existing partition signatures (MBR/GPT/FAT)
@@ -638,6 +657,35 @@ def self_test():
                 "devOffset; LBA28 cap.", C_GRN))
 
 # ----------------------------------------------------------------------------
+def check_kept_data(plat, dev, total_sectors, dry_run, lba48=False,
+                    max_data_sectors=None):
+    """--no-format keeps the card's data partition, so the new partition
+    table must point at it exactly (layout.kept_data_problems). Refuse
+    otherwise. A dry run that can't read the card (no root) says so."""
+    try:
+        with plat.open_raw(dev, "rb") as f:
+            def read(off, n):
+                f.seek(off)
+                return f.read(n)
+            problems = layout.kept_data_problems(read, total_sectors, lba48,
+                                                 max_data_sectors)
+    except OSError as e:
+        if not dry_run:
+            sys.exit(color("could not read %s to check its data partition: %s"
+                           % (dev, e), C_RED))
+        print(color("  [dry-run] could not read %s to check that its data "
+                    "partition matches (%s); a real run checks before writing."
+                    % (dev, e.strerror or e), C_YEL), file=sys.stderr)
+        return
+    if problems:
+        sys.exit(color("--no-format keeps the data partition, but on %s:\n  %s\n"
+                       "Flashing would point the iPod at the wrong sectors. "
+                       "Flash without --no-format (erases the card) instead."
+                       % (dev, "\n  ".join(problems)), C_RED))
+    print(color("  data partition matches the planned layout; it will be kept",
+                C_GRN), file=sys.stderr)
+
+
 def flash(device=None, firmware=None,
           assume_yes=False, dry_run=False, do_format=True, before_eject=None,
           lba48=False, max_data_gb=None):
@@ -682,7 +730,10 @@ def flash(device=None, firmware=None,
                        "for a data partition after the %s firmware partition."
                        % (dev, fmt_size(total_sectors * SECTOR),
                           fmt_size(FW_BLOCKS * SECTOR)), C_RED))
-    confirm(dev, total_sectors, assume_yes or dry_run, lba48, max_data_sectors)
+    if not do_format:
+        check_kept_data(plat, dev, total_sectors, dry_run, lba48, max_data_sectors)
+    confirm(dev, total_sectors, assume_yes or dry_run, lba48, max_data_sectors,
+            do_format)
     plat.unmount_all(dev, dry_run)
     result = write_layout(dev, fw, total_sectors, dry_run, do_format, lba48, max_data_sectors)
     verify_firmware(dev, fw, dry_run)

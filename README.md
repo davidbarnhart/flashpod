@@ -501,7 +501,7 @@ Options:
 | `--firmware <file>` | use a local image — raw `Firmware-*`, `.bin.gz`, or `.ipsw` (bring-your-own; no download). Default: pick from the catalog and download it |
 | `--model <id>`      | iPod model to flash for (`1G`, `2G`, `3G`, `4G`, `photo`); decides which firmware is offered. Default: ask |
 | `--yes`             | skip the typed `ERASE sdX` confirmation |
-| `--no-format`       | don't format the data partition |
+| `--no-format`       | keep the data partition and its music: rewrite only the firmware and partition table. Refused unless the card's data partition already starts and ends where the new table puts it |
 | `--lba48`           | **experimental**: use the whole card for data, past the 128 GiB cap (LBA48-patched iPods only) |
 | `--max-data-gb <N>` | cap the data partition to N decimal GB (e.g. to make a smaller partition, or probe a firmware's disk-size ceiling) |
 | `--dry-run`         | show the plan only |

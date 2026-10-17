@@ -2959,7 +2959,9 @@ def main():
     p_fl.add_argument("--dry-run", action="store_true",
                       help="show the plan, write nothing")
     p_fl.add_argument("--no-format", action="store_true",
-                      help="don't mkfs the data partition")
+                      help="keep the data partition and its music: rewrite "
+                           "only the firmware and partition table (refused "
+                           "unless the card's data partition matches)")
     p_fl.add_argument("--lba48", action="store_true",
                       help="EXPERIMENTAL: use the whole card for data, past the "
                            "128 GiB LBA28 cap (only works on an LBA48-patched iPod)")
