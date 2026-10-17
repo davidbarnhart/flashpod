@@ -17,7 +17,9 @@ version 1.0.x), dated 2001-11-28 and 2001-12-23.
 
 Checks, on the shipped manifest through flashpod.card (no network): the three
 carry Apple's version; no entry's version is 0.x (the renumbering's mark);
-within each generation, version order agrees with build-date order.
+within each generation, version order agrees with build-date order; the
+1G releases sort 1.0 < 1.0.2 < 1.0.4 < 1.1 < ... < 1.5 by version tuple,
+and both firmware_catalog() and the CLI picker list them newest first.
 Against the manifest before the fix, 4 checks fail (3 versions, and the
 0.x scan).
 """
@@ -36,7 +38,38 @@ APPLE = {
     "d898113c4f0af7d3885e6ab14e8054e5d2efc10f050d80a46f892d13a33709cc": "1.0.4",
 }
 
+#: Every 1G release in the catalog, oldest first. 1.0.4 (2001) must sort
+#: before 1.1 and 1.4 -- the order the old 0.x names were protecting.
+ONE_G_ORDER = ["1.0", "1.0.2", "1.0.4", "1.1", "1.2", "1.2.1", "1.2.2",
+               "1.2.6", "1.3", "1.4", "1.5"]
+
 fails = []
+
+
+def vtuple(v):
+    return tuple(int(p) for p in v.split("."))
+
+
+def picker_versions():
+    """The Version column of `flashpod flash`'s firmware chooser for a 1G,
+    run in-process with a fake tty that takes the default."""
+    import builtins
+    import contextlib
+    import io
+    import json
+    from flashpod import cli
+    with open(os.path.join(ROOT, "flashpod", "firmware", "firmware.json")) as f:
+        manifest = json.load(f)
+    out = io.StringIO()
+    real_isatty, real_input = sys.stdin.isatty, builtins.input
+    sys.stdin.isatty, builtins.input = (lambda: True), (lambda *a: "")
+    try:
+        with contextlib.redirect_stdout(out):
+            cli.choose_firmware(manifest, {"id": "1G", "name": "1G"})
+    finally:
+        sys.stdin.isatty, builtins.input = real_isatty, real_input
+    rows = [ln.split() for ln in out.getvalue().splitlines()]
+    return [r[1] for r in rows if len(r) > 2 and r[0].isdigit()]
 
 
 def check(cond, what):
@@ -64,9 +97,18 @@ def main():
             groups.setdefault(e["generation"], []).append(e)
     for gen, es in sorted(groups.items()):
         by_date = [e["file"] for e in sorted(es, key=lambda e: e["build_date"])]
-        by_ver = [e["file"] for e in sorted(
-            es, key=lambda e: tuple(int(p) for p in e["version"].split(".")))]
+        by_ver = [e["file"] for e in sorted(es, key=lambda e: vtuple(e["version"]))]
         check(by_date == by_ver, "%s (%d dated)" % (gen, len(es)))
+
+    print("the 1G list runs 1.0 < 1.0.2 < 1.0.4 < 1.1 < ... < 1.5 (lead, #1204)")
+    one_g = [e["version"] for e in entries if "1G" in e.get("models", [])]
+    check(sorted(one_g, key=vtuple) == ONE_G_ORDER,
+          "version-tuple order: %s" % " < ".join(sorted(one_g, key=vtuple)))
+    check(one_g == ONE_G_ORDER[::-1],
+          "firmware_catalog() lists them newest first: %s" % ", ".join(one_g))
+    shown = picker_versions()
+    check(shown == ONE_G_ORDER[::-1],
+          "the CLI picker for a 1G shows them newest first: %s" % ", ".join(shown))
 
     print()
     if fails:
