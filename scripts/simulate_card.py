@@ -277,7 +277,8 @@ def build_answers(dev, music_dir, model="0"):
         (re.compile(r"Select firmware \[\d+\]:\s*$"),             ""),   # default
         # the optional disk-mode arming (asked for firmware with a known
         # aupd, e.g. stock 1.5): Enter takes the default, no
-        (re.compile(r"Arm the card for a disk-mode update\? \[y/N\]:\s*$"), ""),
+        (re.compile(r"Arm this card for an iPod update to disk-mode during "
+                    r"the next boot\? \[y/N\]\s*$"), ""),
         # the destructive confirmation (skipped by --yes, here for completeness)
         (re.compile(r'Type "ERASE [^"]+" to proceed:\s*$'),
          "ERASE " + os.path.basename(dev)),

@@ -347,16 +347,17 @@ def device_label(dev):
     return name or dev
 
 
-#: What arming does, in the plan and the question (bridge #1231, David's design).
-ARM_EXPLAINED = (
-    "On the next start from this card ON FIREWIRE POWER, the iPod reprograms "
-    "its own flash chip with the card's disk-mode program. On battery it "
-    "shows the connect-power icon and does nothing. If power is cut during "
-    "the first part of the programming (the erases and the first ~7%), the "
-    "iPod won't start again without an external chip programmer; after "
-    "that, a failure repairs itself on the next start. Not checked: "
-    "flashpod has no dump of this iPod's chip, so it can't rehearse the "
-    "update first (openpod's tools/flash_rom_update.py can).")
+#: The arm questions (David, 2026-10-17): a short question, then, only on a
+#: yes, the warning and a second yes. --arm skips both. The README has the
+#: details (what happens on battery, where in the update a power cut breaks
+#: it, why flashpod can't rehearse it).
+ARM_QUESTION = ("Arm this card for an iPod update to disk-mode during the "
+                "next boot? [y/N] ")
+ARM_WARNING = ("To perform the disk-mode update to your iPod, the iPod must "
+               "be plugged into FireWire and receiving power during its next "
+               "boot. Halting the disk-mode update before it completes can "
+               "leave the iPod in a permanently broken state.")
+ARM_CONFIRM = ARM_WARNING + " Continue? [y/N] "
 
 
 def confirm(dev, total_sectors, assume_yes, lba48=False, max_data_sectors=None,
@@ -404,7 +405,7 @@ def confirm(dev, total_sectors, assume_yes, lba48=False, max_data_sectors=None,
                     % fmt_size(max_data_sectors * SECTOR), C_YEL), file=sys.stderr)
     if armed:
         print(color("    ⚠ ARMED for a disk-mode update (%s). %s"
-                    % (armed, ARM_EXPLAINED), C_RED), file=sys.stderr)
+                    % (armed, ARM_WARNING), C_RED), file=sys.stderr)
     mps = _plat.current().device_mountpoints(dev)
     if mps:
         print(color("    mounted now : " + ", ".join("%s@%s" % m for m in mps), C_YEL),

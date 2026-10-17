@@ -89,8 +89,8 @@ def main():
     rc, out, _ = run_pty([sys.executable, "-m", "flashpod", "flash", cimg,
                        "--model", "1G"], env, ROOT,
                       [(r"Select firmware \[\d+\]: ", "0\n"),
-                       (r"Arm the card for a disk-mode update\? \[y/N\]: ",
-                        "\n"),
+                       (r"Arm this card for an iPod update to disk-mode "
+                        r"during the next boot\? \[y/N\] ", "\n"),
                        (r'Type "ERASE card\.img" to proceed: ',
                         "ERASE card.img\n"),
                        (r"\[Y/n\]", "n\n")])
@@ -98,7 +98,8 @@ def main():
                "")
     check("1.6 (flashpod)" in row and "NOT AN APPLE RELEASE" in row,
           "row 0 is 1.6 (flashpod), NOT AN APPLE RELEASE: %r" % row.strip())
-    check("Arm the card for a disk-mode update? [y/N]" in out
+    check("Arm this card for an iPod update to disk-mode during the next "
+          "boot? [y/N]" in out
           and "ARMED" not in out,
           "it asks whether to arm (1.6's disk-mode program is known); "
           "Enter leaves it unarmed")
