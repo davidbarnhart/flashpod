@@ -188,6 +188,11 @@ jobs:
         shell: bash
         run: PYTHONPATH=. python scripts/test_flash_arm.py
 
+      - name: add lifts the database ceiling on firmware with the library-leak fix
+        if: runner.os == 'Linux'
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_library_fix_detect.py
+
       - name: flashpod burn checks (a file stands in for the card)
         if: runner.os == 'Linux'
         shell: bash

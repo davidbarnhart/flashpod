@@ -327,8 +327,10 @@ def inspect(path):
       "free_bytes", "cluster_bytes"}`` or ``{"error": ...}`` or None
     * ``itunesdb``: ``{"state": "absent"|"corrupt"|"ok", ...}`` -- for ok:
       ``name``, ``tracks``, ``artists``, ``albums``, ``db_bytes``, and
-      ``ceiling`` (``limit`` bytes, ``headroom`` bytes; ``limit`` None when
-      FLASHPOD_DB_LIMIT=0 disables it)
+      ``ceiling``: ``kind`` "bytes" (``limit`` and ``headroom`` in bytes;
+      ``limit`` None when FLASHPOD_DB_LIMIT=0 disables it) or "tracks" when
+      the card's firmware has the library-leak fix (flashpod 1.6):
+      ``limit`` 32,000 tracks, ``headroom`` tracks
     * ``music_files``: files under iPod_Control/Music/F##; ``orphans``: of
       those, files no track points at; ``missing``: tracks whose file isn't
       there
@@ -423,12 +425,17 @@ def _inspect_library(info, tgt):
         return
     limit = library_mod._db_size_limit() or None
     ntracks, nartists, nalbums = library_mod.counts(lib)
+    ceiling = {"kind": "bytes", "limit": limit,
+               "headroom": (limit - len(raw)) if limit else None}
+    if library_mod.LIBRARY_FIX in ((info.firmware or {}).get("fixes") or []) \
+            and "FLASHPOD_DB_LIMIT" not in os.environ:
+        # the card's firmware has the library-leak fix: a track cap instead
+        cap = library_mod.IPOD_PATCHED_TRACK_LIMIT
+        ceiling = {"kind": "tracks", "limit": cap, "headroom": cap - ntracks}
     info.itunesdb = {
         "state": "ok", "name": lib.name, "tracks": ntracks,
         "artists": nartists, "albums": nalbums,
-        "db_bytes": len(raw),
-        "ceiling": {"limit": limit,
-                    "headroom": (limit - len(raw)) if limit else None}}
+        "db_bytes": len(raw), "ceiling": ceiling}
     in_db = {t.location for t in lib.tracks}
     info.orphans = sorted(on_card - in_db)
     info.missing = sorted(l for l in in_db if l and l not in on_card)
@@ -782,6 +789,11 @@ def plan_add(card, files, progress=None, cancelled=None, report=None,
                 free = tgt.free_bytes()
             except OSError as exc:
                 free_error = str(exc)
+        # while the card is open: past the byte limit this reads its firmware
+        # (memoized, so add() reuses the answer instead of reading again)
+        fixed = library_mod.library_fix_probe(tgt)
+        db = library_mod.ceiling(lib, [t for _, t in pending], fixed) \
+            if assess and pending else None
     budget = free - library_mod._ADD_HEADROOM if free is not None else None
     batch = library_mod.batch_bytes(pending)
     new_tracks = [t for _, t in pending]
@@ -791,15 +803,17 @@ def plan_add(card, files, progress=None, cancelled=None, report=None,
         warnings=warnings, batch_bytes=batch, free_bytes=free,
         free_error=free_error, budget=budget,
         cancelled=bool(cancelled and cancelled()),
-        _items=pending, _lib=lib)
+        _items=pending, _lib=lib, _fixed=fixed)
     if assess:
         space_fit = len(pending) if budget is None or batch <= budget \
             else _prefix_fit(pending, budget)
-        limit, projected, db_fit = library_mod.ceiling(lib, new_tracks) \
-            if pending else (library_mod._db_size_limit(), None, 0)
+        limit, projected, db_fit = db if db is not None \
+            else (library_mod._db_size_limit(), None, 0)
         plan.space_fit = space_fit
         plan.db = {"limit": limit or None, "projected": projected,
-                   "fit": db_fit}
+                   "fit": db_fit,
+                   "kind": db.kind if db is not None else "bytes",
+                   "library_fix": db.firmware if db is not None else None}
         plan.fits = min(space_fit, db_fit)
         plan.fits_all = plan.fits == len(pending)
         plan.fingerprint = _fingerprint(lib, new_tracks)
@@ -893,14 +907,21 @@ def add(card, files, policy=None, plan=None, progress=None, cancelled=None):
             dropped_space = len(items) - now.space_fit
             items = items[:now.space_fit]
         if items:
-            limit, projected, fit = library_mod.ceiling(
-                now._lib, [t for _, t in items])
+            db = library_mod.ceiling(now._lib, [t for _, t in items],
+                                     now._fixed)
+            limit, projected, fit = db
             if fit < len(items):
                 if pol["ceiling"] == "refuse" or (pol["ceiling"] == "fit"
                                                   and fit <= 0):
-                    raise DbCeiling("the iTunesDB would be %d bytes, past the "
-                                    "%d-byte limit" % (projected, limit),
-                                    limit=limit, projected=projected, fit=fit)
+                    if db.kind == "tracks":
+                        msg = ("the library would hold %d tracks, past the "
+                               "%d the firmware lists"
+                               % (len(now._lib.tracks) + len(items), limit))
+                    else:
+                        msg = ("the iTunesDB would be %d bytes, past the "
+                               "%d-byte limit" % (projected, limit))
+                    raise DbCeiling(msg, limit=limit, projected=projected,
+                                    fit=fit, kind=db.kind)
                 if pol["ceiling"] == "fit":
                     dropped_ceiling = len(items) - fit
                     items = items[:fit]
