@@ -612,28 +612,6 @@
   },
   {
    "append": {
-    "at": "0x28379b00",
-    "bytes": 44,
-    "sha256": "34d364e52d24c503ff15a5c33d54131053abccbb626af039aa3c64b52ab8bb65"
-   },
-   "edits": [
-    {
-     "at": "0x2807890c",
-     "image": "osos",
-     "patched": "7b040ceb"
-    }
-   ],
-   "made_for": {
-    "bytes": 3234472,
-    "image": "osos",
-    "sha256": "98251add80f99732142532814c4ad5b95ee08ab844dd988458a6fa254e1c7c97"
-   },
-   "name": "shuffle-reserve",
-   "requires": [],
-   "title": "Keep back more memory for the player when the library is large"
-  },
-  {
-   "append": {
     "at": "0x283730a4",
     "bytes": 72,
     "sha256": "eb0aa6ee390c993901b6998c43d9b58dc5a7e1d5e09a2a7d3a5419a9ae72cf2a"
@@ -921,11 +899,11 @@
   }
  ],
  "source": {
-  "fix_files": 26,
-  "fix_files_sha256": "2e0c0a5f3aeb062372aa98d704010c40979922113525bce5cdba7f6d04adcf4f",
+  "fix_files": 25,
+  "fix_files_sha256": "8ce162982790f9b4e15bc8cbb65521f64e6ab3b797e61167adf740dce1b57e60",
   "folder": "firmware/1/1.6",
-  "openpod_commit": "f2ee896685591825ebf3146c4bfc793a93c7f27d",
+  "openpod_commit": "547b97e3cf2a78f88e50faadce5659c266c0523e",
   "openpod_dirty": false,
-  "readme_firmware_sha256": "b4de0fb8c8f75582715e9f101497409fe51206a65dd8b252b066134009f31226"
+  "readme_firmware_sha256": "9ba0b7d95a9859a36cdd596bcdbd40df03181076c9cecabfc96416ccfe33edca"
  }
 }

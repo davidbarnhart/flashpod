@@ -173,7 +173,8 @@ def choose_firmware(manifest, model=None):
         # "*" marks the default; build_date comes from the manifest, not the
         # file (mtimes do not survive git or a release download), and not
         # every image has a known one.
-        ver = e["version"] + (" *" if i == default else "")
+        ver = e["version"] + (" (%s)" % e["maker"] if e.get("maker") else "") \
+            + (" *" if i == default else "")
         size = "%.1fM" % (e["size"] / (1 << 20)) if e.get("size") else ""
         rows.append([i, ver, e.get("build_date", ""), size, e["description"]])
     for ln in _fmt_table(["#", "Version", "Built", "Size", "Notes"],

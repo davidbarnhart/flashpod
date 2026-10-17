@@ -146,19 +146,16 @@ Which iPod are you flashing for?
 Select model: 0
 Firmware for 1st generation (newest first):
 
-  #  Version  Built       Size  Notes
-  -  -------  ----------  ----  ----------------------------------------------
-  0  1.5 *    2005-02-18  2.0M  Last stock Apple-released firmware for 1G/2G
-                                iPods
-  1  1.4      2004-04-23  1.9M  Adds 20+ EQ presets, shuffle by album, track
-                                scrubbing, Contacts/Calendar/Clock, Korean and
-                                Chinese; iTunes 4.5 compatibility
-  2  1.0.4    2001-12-23  0.7M  Adds Italian, Dutch, Spanish, Brazilian
-                                Portuguese, Danish, Finnish, Norwegian and
-                                Swedish; 255-character filenames; fixes low-
-                                battery sleep wake and blue-and-white Power
-                                Macintosh G3 compatibility
-  3  1.0      2001-11-01  0.7M  Initial release for the original 1G iPod
+  #  Version         Built       Size  Notes
+  -  --------------  ----------  ----  ---------------------------------------
+  0  1.6 (flashpod)  2026-10-16  2.0M  NOT AN APPLE RELEASE -- flashpod's 1.6:
+                                       Apple's 1.5 plus 22 fixes. Plays FLAC;
+                                       ...
+  1  1.5 *           2005-02-18  2.0M  Last stock Apple-released firmware for
+                                       1G/2G iPods
+  2  1.4             2004-04-23  1.9M  Adds 20+ EQ presets, shuffle by album,
+                                       ...
+  ...
 
   * recommended default
 
@@ -469,13 +466,45 @@ firmware that fits it, from the bundled catalog
 chosen image is then **downloaded from GitHub**, cached under
 `~/.cache/flashpod/`, and **verified against its SHA-256** before use; later
 flashes reuse the cached copy (no network). The images aren't bundled with
-flashpod — they're Apple's copyright, hosted as
+flashpod — they're Apple's copyright (flashpod 1.6 is built from Apple's
+1.5), hosted as
 [release assets](https://github.com/davidbarnhart/flashpod/releases/tag/firmware).
 
 The model question isn't cosmetic: firmware is not interchangeable across
 models. 2nd-generation (touch wheel) support first appeared in firmware 1.1.2,
 so the 2001 images (1G's 1.0 and 1.0.4) would leave a 2G unusable — asking first
 means they're never offered to one.
+
+**flashpod 1.6 (1st and 2nd generation).** The catalog's one firmware that
+isn't Apple's: Apple's last release, 1.5, with 22 fixes, built from the
+[openpod](https://github.com/davidbarnhart/openpod) project's fix folder
+(`firmware/1/1.6`). The picker marks it `(flashpod)` and NOT AN APPLE RELEASE,
+`inspect` reports it as `flashpod 1.6`, and Apple's 1.5 stays the default.
+What you gain over 1.5:
+
+- **FLAC.** FLAC files play, fast-forward and rewind land at once, and there's
+  no dropout when a track starts or while the file cache refills.
+- **Big cards.** Disks over 128 GiB work (LBA48); flash with `--lba48` to give
+  the data partition the whole card.
+- **Big libraries.** 1.5 shows zero songs once the iTunesDB passes about
+  3.8 MB (around 5,300 tracks), because of a memory leak; 1.6 fixes the leak,
+  and a track's record takes 160 bytes instead of 448. It has run on
+  31,958 songs. `flashpod add` doesn't detect 1.6 on the card yet and still
+  stops at 1.5's limit; set `FLASHPOD_DB_LIMIT=0` to add past it on a 1.6
+  card (the remaining limit is the 32,000-track playlist cap).
+- **Faster menus.** Artists, an artist and Songs open in about 2 seconds
+  instead of 4-6, and the other lists are built with less repeated work.
+- **Faster start-up.** No whole-table name searches, no listing every music
+  file at each start, no clearing free memory.
+- **Text.** A character the font lacks is drawn as `?` and sorted after every
+  letter, instead of vanishing.
+- **Shuffle Songs** leaves audiobooks out without looking up every track.
+- The iPod says it's version 1.6.
+
+Hardware-tested on 2026-10-16 on a 1st-generation iPod, with a 250 GB card of
+31,958 songs and a 128 GB FLAC card of about 3,000. Known limit, as on 1.5:
+Shuffle Songs doesn't start on a library near 32,000 songs. It hasn't been
+tested on a 2G; it's offered for one because 1.5, which it's built from, is.
 
 These early images have no low disk-size ceiling — 1.0 and 1.0.4 were tested on
 a 128 GB card in full (the broken-folder icon on such a card means the data
@@ -490,7 +519,8 @@ firmware flashpod doesn't host (or to work fully offline), pass it with
 `Firmware-*` image, a `.bin.gz`, or an Apple `.ipsw` (the format is detected
 from the file's magic bytes, not its name). To add an image to the catalog,
 upload it to the firmware release and add a manifest entry (`file`,
-`url`/`base_url`, `sha256`, `size`, `generation`, `version`, `description`, and
+`url`/`base_url`, `sha256`, `size`, `generation`, `version`, `description`,
+`maker` for anything not Apple's (the picker and `inspect` show it), and
 `build_date` if known — it can't be recovered from the file later, since git
 and release downloads both reset mtimes).
 

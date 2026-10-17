@@ -11,7 +11,8 @@ Flashes each stock image onto a fresh image file with card.flash and checks
 inspect() names it by its catalog version. With openpod's tools/fw_fix.py
 available it also builds three 1.6 variants into a temp dir (never into the
 openpod tree) and checks the build label, the version word, and exactly which
-fixes are reported: all 23, all but `version`, only `library-leak`.
+fixes are reported: all 22 (the catalog's flashpod 1.6), all but `version`,
+only `library-leak`. Give --openpod a checkout of the release's commit.
 """
 import argparse
 import json
@@ -54,7 +55,9 @@ def main():
     for e in local:
         f = firmware_of(tmp, e["local"], e["file"])
         check(f["present"] and f["osos"]["checksum_ok"]
-              and f["build"] == "stock " + e["version"]
+              and f["build"] == "%s %s" % (
+                  "stock" if e.get("maker", "apple") == "apple"
+                  else e["maker"], e["version"])
               and f["catalog_file"] == e["file"],
               "%s -> %s" % (e["file"], f["build"]))
         apple = {"iPod_1.0.0_": "1.0", "iPod_1.0.2_": "1.0.2",
@@ -62,6 +65,13 @@ def main():
         if apple:
             check(f["build"] == "stock " + apple,
                   "Apple's version, not the file name's: %s" % f["build"])
+        if e.get("maker") == "flashpod":
+            table = json.load(open(os.path.join(ROOT, "flashpod", "firmware",
+                                                "fixes.json")))
+            check(sorted(f["fixes"]) == sorted(x["name"] for x in table["fixes"])
+                  and len(f["fixes"]) == 22 and f["version_word_means"] == "1.6",
+                  "flashpod 1.6: all %d fixes, version word %s"
+                  % (len(f["fixes"]), f["version_word_means"]))
         if e["file"].startswith("iPod_1.1.5"):
             check(f["fixes"] == [] and f["version_word_means"] == "1.5",
                   "stock 1.5: no openpod fixes, version word 1.5")
@@ -75,7 +85,7 @@ def main():
                                             "fixes.json")))
         all_fixes = sorted(f["name"] for f in table["fixes"])
         cases = [
-            ("all", [], "openpod 1.6 release", "1.6", all_fixes),
+            ("all", [], "flashpod 1.6", "1.6", all_fixes),
             ("noversion", ["--without", "version"], "unrecognized", "1.5",
              [n for n in all_fixes if n != "version"]),
             ("libleak", ["--only", "library-leak"], "unrecognized", "1.5",

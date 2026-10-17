@@ -158,8 +158,11 @@ VERSION_WORDS = {0x01508000: "1.5", 0x01608000: "1.6"}
 #: Exact osos builds that are not stock catalog entries, by sha256 of the
 #: osos payload as installed (openpod firmware session, bridge #1083).
 KNOWN_OSOS = {
+    # the build the emulator gate passed on 2026-10-14, with shuffle-reserve;
+    # withdrawn after the 2026-10-16 hardware bisect (the catalog's 1.6 is
+    # this without it)
     "109ed777110982e2a31d7f724e4a7f78b73bef17bee90952e2c35c79f0714e21":
-        "openpod 1.6 release",
+        "openpod 1.6 gate build (withdrawn)",
 }
 
 
@@ -214,10 +217,12 @@ def describe_installed(read, catalog=None):
 
     Returns a dict: ``present`` (bool), ``reason`` when not present, else
     ``format``, ``images`` (the directory), ``osos`` (``checksum_ok``,
-    ``sha256``, ``length``, ``addr``), ``build`` (a human label: the catalog
-    version, a known openpod build, or "unrecognized"), ``catalog_file``,
-    ``version_word`` (hex) and ``version_word_means`` ("1.5"/"1.6"/None),
-    and ``fixes`` (openpod fixes found, None without a fixes table)."""
+    ``sha256``, ``length``, ``addr``), ``build`` (a human label: "stock <version>"
+    for Apple's catalog entries, "<maker> <version>" for the others such as
+    "flashpod 1.6", a known openpod build, or "unrecognized"), ``maker``
+    (the catalog entry's, else None), ``catalog_file``, ``version_word``
+    (hex) and ``version_word_means`` ("1.5"/"1.6"/None), and ``fixes``
+    (openpod fixes found, None without a fixes table)."""
     import hashlib
     if read(0, 4) != b"{{~~":
         return {"present": False, "reason": "no STOP boot block"}
@@ -258,15 +263,20 @@ def describe_installed(read, catalog=None):
     match = next((e for e in (catalog or [])
                   if e.get("osos_sha256") == digest), None)
     if match:
-        out["build"] = "stock %s" % match.get("version", "?")
+        maker = match.get("maker", "apple")
+        out["build"] = "%s %s" % ("stock" if maker == "apple" else maker,
+                                  match.get("version", "?"))
+        out["maker"] = maker
         out["catalog_file"] = match.get("file")
         out["models"] = match.get("models", [])
     elif digest in KNOWN_OSOS:
         out["build"] = KNOWN_OSOS[digest]
         out["catalog_file"] = None
+        out["maker"] = None
     else:
         out["build"] = "unrecognized"
         out["catalog_file"] = None
+        out["maker"] = None
     out["fixes"] = fixes_present(payload, osos["addr"]) \
         if osos["addr"] == PP5002_OSOS_ADDR else None
     return out

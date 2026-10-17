@@ -15,6 +15,22 @@
   ],
   "firmwares": [
     {
+      "file": "openpod_1.1.6_2026_10_16.bin.gz",
+      "sha256": "89f38060f305217ff9ad328ea514a98be7f0c37fd8996e0f11226065e9e5c2ac",
+      "osos_sha256": "fdf1372267d902b99276b1982b27bc80f1a50835fb61893870f618e291b4677a",
+      "size": 2110875,
+      "generation": "1st/2nd generation (FireWire)",
+      "models": [
+        "1G",
+        "2G"
+      ],
+      "version": "1.6",
+      "maker": "flashpod",
+      "build_date": "2026-10-16",
+      "description": "NOT AN APPLE RELEASE -- flashpod's 1.6: Apple's 1.5 plus 22 fixes. Plays FLAC; uses cards over 128 GiB; big libraries (30,000+ songs) load and stay loaded; Artists, Albums and Songs open in about 2 s instead of 4-6; faster start-up; missing characters show as ?",
+      "_note": "flashpod's own release, not Apple's (maker: flashpod; inspect reports 'flashpod 1.6'). Built from the openpod project's gen-1 fix folder: openpod main 547b97e (PR #227), firmware/1/1.6, applied to Apple's 1.5 with its tools/fw_fix.py into iPod_1.1.6.ipsw (sha256 0e73109e34ece3bfc8bb79bdda0e72e237f1ab4b8b1d7ba2a8f05053741d91ec). This asset is the deterministic gzip (scripts/extract_firmware.py gz) of the firmware file inside it (5,479,893 bytes, sha256 9ba0b7d95a9859a36cdd596bcdbd40df03181076c9cecabfc96416ccfe33edca). WHAT YOU GAIN over 1.5: FLAC playback, with seeking that lands at once and no dropout at a track's start or while the cache refills; cards over 128 GiB (LBA48) -- pair it with `flash --lba48`; a large library no longer vanishes (the memory leak behind 1.5's ~3.8 MB iTunesDB ceiling is fixed; hardware-run at 31,958 songs), and each track's record takes 160 bytes not 448; Artists, an artist and Songs open in about 2 s instead of 4-6, with the other list builds sped up; faster start-up (no full-table name searches, no rescanning every music file, no clearing free memory); characters the font lacks are drawn as ? and sort last instead of vanishing; Shuffle Songs skips audiobooks without looking up every track; the iPod reports version 1.6. HARDWARE-TESTED 2026-10-16 on a 1st-generation iPod: a 250 GB card with 31,958 songs and a 128 GB FLAC card with about 3,000. Known limit, as on Apple's 1.5: Shuffle Songs does not start on a library near 32,000 songs. Not tested on a 2G; listed for it because Apple's 1.5, which it is built from, is. build_date is the release's date; the compiled-in __DATE__ is still Apple's 'Feb 18 2005'."
+    },
+    {
       "file": "iPod_1.1.5_2005_02_18.bin.gz",
       "sha256": "0f5bab05337d65f0a3a1a573d9e241eac5c57649fd0f7b21f5f2fad6bedf92e8",
       "osos_sha256": "98251add80f99732142532814c4ad5b95ee08ab844dd988458a6fa254e1c7c97",
