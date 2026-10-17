@@ -178,25 +178,34 @@ def _fixes_table():
         return None
 
 
-def fixes_present(osos, addr, table=None):
+def fixes_present(osos, addr, table=None, aupd=None):
     """Names of the openpod fixes whose every edit and appended code are in
-    ``osos`` (loaded at ``addr``). A fix is present iff all of its osos
-    edits hold their patched bytes and its appended code hashes to its
-    sha256 (bridge #1083). aupd edits aren't checked: only osos is read."""
+    the firmware: ``osos`` loaded at ``addr``, and ``aupd`` as ``(payload,
+    addr)`` (or None, unread). A fix is present iff all of its edits hold
+    their patched bytes and its appended code hashes to its sha256 (bridge
+    #1083). A fix with an aupd edit counts only when aupd was read, so a fix
+    that lives wholly in aupd (disk-mode-large-disks) is never claimed on
+    the strength of osos alone."""
     import hashlib
     table = table if table is not None else _fixes_table()
     if not table:
         return None
+    images = {"osos": (osos, addr)}
+    if aupd is not None:
+        images["aupd"] = aupd
     found = []
     for fix in table.get("fixes", []):
         ok = True
         for e in fix["edits"]:
-            if e.get("image", "osos") != "osos":
-                continue
-            off = int(e["at"], 16) - addr
+            img = images.get(e.get("image", "osos"))
+            if img is None:
+                ok = False
+                break
+            data, base = img
+            off = int(e["at"], 16) - base
             new = bytes.fromhex(e["patched"])
-            if not (0 <= off and off + len(new) <= len(osos)) \
-                    or osos[off:off + len(new)] != new:
+            if not (0 <= off and off + len(new) <= len(data)) \
+                    or data[off:off + len(new)] != new:
                 ok = False
                 break
         ap = fix.get("append")
@@ -221,8 +230,9 @@ def describe_installed(read, catalog=None):
     for Apple's catalog entries, "<maker> <version>" for the others such as
     "flashpod 1.6", a known openpod build, or "unrecognized"), ``maker``
     (the catalog entry's, else None), ``catalog_file``, ``version_word``
-    (hex) and ``version_word_means`` ("1.5"/"1.6"/None), and ``fixes``
-    (openpod fixes found, None without a fixes table)."""
+    (hex) and ``version_word_means`` ("1.5"/"1.6"/None), ``aupd``
+    (``sha256``, ``length``, ``addr``) when there is one, and ``fixes``
+    (openpod fixes found in osos and aupd, None without a fixes table)."""
     import hashlib
     if read(0, 4) != b"{{~~":
         return {"present": False, "reason": "no STOP boot block"}
@@ -233,7 +243,7 @@ def describe_installed(read, catalog=None):
     fmtver, = struct.unpack_from("<H", hdr, 0x0a)
     shift = 0x200 if fmtver == 3 else 0
     images = []
-    osos = None
+    osos = aupd = None
     for _off, typ, f in walk_directory(read(ptr + 0x200, 10 * 40), 0):
         img = {"type": typ.decode("latin-1"), "id": f[0], "dev_offset": f[1],
                "length": f[2], "addr": f[3], "checksum": f[5],
@@ -241,6 +251,8 @@ def describe_installed(read, catalog=None):
         images.append(img)
         if typ == b"osos" and osos is None:
             osos = img
+        if typ == b"aupd" and aupd is None:
+            aupd = img
     out = {"present": True, "format": fmtver, "images": images}
     if osos is None:
         out.update(present=False, reason="no osos image in the directory")
@@ -277,6 +289,13 @@ def describe_installed(read, catalog=None):
         out["build"] = "unrecognized"
         out["catalog_file"] = None
         out["maker"] = None
-    out["fixes"] = fixes_present(payload, osos["addr"]) \
+    aupd_code = None
+    if aupd is not None and 0 < aupd["length"] <= FW_BLOCKS * SECTOR:
+        blob = read(aupd["dev_offset"] + shift, aupd["length"])
+        if len(blob) == aupd["length"]:
+            aupd_code = (blob, aupd["addr"])
+            out["aupd"] = {"sha256": hashlib.sha256(blob).hexdigest(),
+                           "length": aupd["length"], "addr": aupd["addr"]}
+    out["fixes"] = fixes_present(payload, osos["addr"], aupd=aupd_code) \
         if osos["addr"] == PP5002_OSOS_ADDR else None
     return out

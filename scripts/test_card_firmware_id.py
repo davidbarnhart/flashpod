@@ -11,7 +11,7 @@ Flashes each stock image onto a fresh image file with card.flash and checks
 inspect() names it by its catalog version. With openpod's tools/fw_fix.py
 available it also builds three 1.6 variants into a temp dir (never into the
 openpod tree) and checks the build label, the version word, and exactly which
-fixes are reported: all 22 (the catalog's flashpod 1.6), all but `version`,
+fixes are reported: all 23 (the catalog's flashpod 1.6), all but `version`,
 only `library-leak`. Give --openpod a checkout of the release's commit.
 """
 import argparse
@@ -69,7 +69,7 @@ def main():
             table = json.load(open(os.path.join(ROOT, "flashpod", "firmware",
                                                 "fixes.json")))
             check(sorted(f["fixes"]) == sorted(x["name"] for x in table["fixes"])
-                  and len(f["fixes"]) == 22 and f["version_word_means"] == "1.6",
+                  and len(f["fixes"]) == 23 and f["version_word_means"] == "1.6",
                   "flashpod 1.6: all %d fixes, version word %s"
                   % (len(f["fixes"]), f["version_word_means"]))
         if e["file"].startswith("iPod_1.1.5"):

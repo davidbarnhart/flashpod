@@ -176,9 +176,19 @@ def main():
             "sha256": hashlib.sha256(blob[:-1] + b"?").hexdigest()}},
     ]}
     found = firmware.fixes_present(bytes(osos), addr, table)
-    check(found == ["edit-only", "with-code", "aupd-only"],
+    check(found == ["edit-only", "with-code"],
           "present: edit match, code hash match; absent: an edit or the "
-          "appended code one byte off (%r)" % found)
+          "appended code one byte off, and an aupd fix with aupd unread (%r)"
+          % found)
+    aupd_addr = 0x28100000
+    found = firmware.fixes_present(bytes(osos), addr, table,
+                                   aupd=(b"\xff" + b"\0" * 15, aupd_addr))
+    check("aupd-only" not in found, "an aupd fix is absent when aupd lacks its bytes at its address")
+    table["fixes"][3]["edits"][0]["at"] = hex(aupd_addr)
+    found = firmware.fixes_present(bytes(osos), addr, table,
+                                   aupd=(b"\xff" + b"\0" * 15, aupd_addr))
+    check(found == ["edit-only", "with-code", "aupd-only"],
+          "an aupd fix is present when aupd holds its bytes (%r)" % found)
 
     print("init")
     r = card.init(img, "Synth Pod")

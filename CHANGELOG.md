@@ -5,7 +5,7 @@
 ### flashpod 1.6 firmware for the 1st and 2nd generation
 
 The firmware catalog has its first firmware that isn't Apple's: **flashpod
-1.6**, Apple's last release (1.5) with 22 fixes, built from the
+1.6**, Apple's last release (1.5) with 23 fixes, built from the
 [openpod](https://github.com/davidbarnhart/openpod) project's fix folder.
 `flashpod flash` offers it above 1.5, marked `(flashpod)` and NOT AN APPLE
 RELEASE, and Apple's 1.5 stays the default. Over 1.5 it gives:
@@ -17,7 +17,9 @@ RELEASE, and Apple's 1.5 stays the default. Over 1.5 it gives:
   1.6 yet, so set `FLASHPOD_DB_LIMIT=0` to add past 1.5's limit;
 - Artists, an artist and Songs open in about 2 s instead of 4-6, and start-up
   is faster;
-- characters the font lacks show as `?` instead of vanishing.
+- characters the font lacks show as `?` instead of vanishing;
+- FireWire disk mode past 128 GiB, but only once the iPod's flash ROM has been
+  reprogrammed with openpod's tooling; a flashpod flash doesn't do that.
 
 It was tested on a real 1st-generation iPod with a 250 GB card of 31,958 songs
 and a 128 GB FLAC card. Known limit, as on 1.5: Shuffle Songs doesn't start on
