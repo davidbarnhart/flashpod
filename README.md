@@ -153,12 +153,12 @@ Firmware for 1st generation (newest first):
   1  1.4      2004-04-23  1.9M  Adds 20+ EQ presets, shuffle by album, track
                                 scrubbing, Contacts/Calendar/Clock, Korean and
                                 Chinese; iTunes 4.5 compatibility
-  2  0.4      2001-12-23  0.7M  Adds Italian, Dutch, Spanish, Brazilian
+  2  1.0.4    2001-12-23  0.7M  Adds Italian, Dutch, Spanish, Brazilian
                                 Portuguese, Danish, Finnish, Norwegian and
                                 Swedish; 255-character filenames; fixes low-
                                 battery sleep wake and blue-and-white Power
                                 Macintosh G3 compatibility
-  3  0.0      2001-11-01  0.7M  Initial release for the original 1G iPod
+  3  1.0      2001-11-01  0.7M  Initial release for the original 1G iPod
 
   * recommended default
 
@@ -474,7 +474,7 @@ flashpod — they're Apple's copyright, hosted as
 
 The model question isn't cosmetic: firmware is not interchangeable across
 models. 2nd-generation (touch wheel) support first appeared in firmware 1.1.2,
-so the 2001 images (1G's 0.0 and 0.4) would leave a 2G unusable — asking first
+so the 2001 images (1G's 1.0 and 1.0.4) would leave a 2G unusable — asking first
 means they're never offered to one.
 
 These early images have no low disk-size ceiling — 1.0 and 1.0.4 were tested on

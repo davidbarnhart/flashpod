@@ -57,6 +57,11 @@ def main():
               and f["build"] == "stock " + e["version"]
               and f["catalog_file"] == e["file"],
               "%s -> %s" % (e["file"], f["build"]))
+        apple = {"iPod_1.0.0_": "1.0", "iPod_1.0.2_": "1.0.2",
+                 "iPod_1.0.4_": "1.0.4"}.get(e["file"][:11])
+        if apple:
+            check(f["build"] == "stock " + apple,
+                  "Apple's version, not the file name's: %s" % f["build"])
         if e["file"].startswith("iPod_1.1.5"):
             check(f["fixes"] == [] and f["version_word_means"] == "1.5",
                   "stock 1.5: no openpod fixes, version word 1.5")

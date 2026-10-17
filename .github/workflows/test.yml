@@ -174,6 +174,10 @@ jobs:
         shell: bash
         run: PYTHONPATH=. python scripts/test_one_place.py
 
+      - name: The catalog names firmware by Apple's version
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_firmware_versions.py
+
       - name: flashpod burn checks (a file stands in for the card)
         if: runner.os == 'Linux'
         shell: bash
