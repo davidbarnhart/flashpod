@@ -224,8 +224,10 @@ def _download(url, dst, total=None):
 def ask_arm(firmware):
     """Whether to arm the card for a disk-mode update, asked only on a
     terminal and only when the firmware carries a disk-mode program flashpod
-    knows (firmware.KNOWN_AUPD). Defaults to no; a non-interactive run never
-    arms without --arm (bridge #1231, David's design)."""
+    knows (firmware.KNOWN_AUPD): a short question, then, on a yes, the
+    warning and a second question. Arms only on two yeses; each defaults to
+    no. A non-interactive run never arms without --arm, which skips both
+    (bridge #1231 and David, 2026-10-17)."""
     if not sys.stdin.isatty():
         return False
     try:
@@ -234,15 +236,15 @@ def ask_arm(firmware):
         return False                     # flash() reports a bad image itself
     if not info or not info["known"]:
         return False
-    print("\nThis firmware carries a disk-mode program flashpod can arm "
-          "(%s).\nArming is optional. %s\n" % (info["known"],
-                                                ipod_flash.ARM_EXPLAINED))
-    try:
-        ans = input("Arm the card for a disk-mode update? [y/N]: ")
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return False
-    return ans.strip().lower() in ("y", "yes")
+    for prompt in (ipod_flash.ARM_QUESTION, ipod_flash.ARM_CONFIRM):
+        try:
+            ans = input("\n" + prompt)
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return False
+        if ans.strip().lower() not in ("y", "yes"):
+            return False
+    return True
 
 
 def ensure_firmware(entry, base_url):

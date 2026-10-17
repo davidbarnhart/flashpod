@@ -16,9 +16,12 @@ program's sha256, so its hash is added to KNOWN_AUPD for the run and the CLI
 is run in-process (fake terminal and answers); a second synthetic program,
 not added, stands for an unknown one. Checked, reading both directories off
 the card:
-  * --arm, or "y" at the question: armed (id 0 in both);
-  * Enter (the default), "n", --no-arm, or no terminal: not armed (id 1 in
-    both), and with --no-arm or no terminal the question isn't asked;
+  * --arm (no questions), or "y" at both questions: armed (id 0 in both).
+    The first question is short; only a yes brings the second, which
+    carries the warning (David, 2026-10-17);
+  * Enter (the default) or "n" at either question, --no-arm, or no
+    terminal: not armed (id 1 in both), and with --no-arm or no terminal
+    nothing is asked;
   * an unknown program is never offered, and --arm with one, or with no
     program at all, is refused with the card unchanged;
   * the plan says ARMED and what that means; a dry run writes nothing;
@@ -43,7 +46,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 
 import synth_fixtures as synth  # noqa: E402
-from flashpod import card, cli, firmware, layout, platform  # noqa: E402
+from flashpod import card, cli, firmware, ipod_flash, layout, platform  # noqa: E402
 
 fails = []
 
@@ -97,7 +100,9 @@ def run(argv, tty=True, answers=()):
     finally:
         (sys.argv, sys.stdout, sys.stderr, sys.stdin.isatty,
          builtins.input) = saved
-    return rc, out.getvalue(), [a for a in asked if "Arm the card" in a]
+    return rc, out.getvalue(), [a for a in asked
+                                if a.strip() in (ipod_flash.ARM_QUESTION.strip(),
+                                                 ipod_flash.ARM_CONFIRM.strip())]
 
 
 def main():
@@ -126,18 +131,33 @@ def main():
     check(rc == 0 and armed(img) is True and not q,
           "--arm: armed in both directories, no question (rc %r)" % rc)
     check("ARMED for a disk-mode update (synthetic test)" in out
-          and "ON FIREWIRE POWER" in out and "external chip programmer" in out,
-          "the plan says ARMED and what it means")
+          and ipod_flash.ARM_WARNING in out,
+          "the plan says ARMED, with the warning")
     armed_img = img
-    for answer, want, what in (("y", True, "'y' at the question"),
-                               ("", False, "Enter (default no)"),
-                               ("n", False, "'n'")):
-        img = blank("q%s.img" % (answer or "enter"))
+    question = ipod_flash.ARM_QUESTION.strip()
+    confirm = ipod_flash.ARM_CONFIRM.strip()
+    for answers, want, what in (
+            (["y", "y"], True, "'y' then 'y'"),
+            (["y", "n"], False, "'y' then 'n'"),
+            (["y", ""], False, "'y' then Enter (default no)"),
+            ([""], False, "Enter at the question (default no)"),
+            (["n"], False, "'n' at the question")):
+        img = blank("q%s.img" % "-".join(a or "enter" for a in answers))
         rc, out, q = run(["flash", img, "--firmware", fw_known, "--yes"],
-                         answers=[answer])
-        check(rc == 0 and len(q) == 1 and "[y/N]" in q[0]
-              and armed(img) is want,
-              "%s: asked once, armed=%s" % (what, armed(img)))
+                         answers=answers)
+        asked = [a.strip() for a in q]
+        expect = [question, confirm][:2 if answers[0] == "y" else 1]
+        check(rc == 0 and asked == expect and armed(img) is want,
+              "%s: asked %d, armed=%s" % (what, len(asked), armed(img)))
+        if answers == ["y", "y"]:
+            check(ipod_flash.ARM_WARNING in confirm
+                  and "plugged into FireWire" in confirm
+                  and "permanently broken" in confirm
+                  and confirm.endswith("Continue? [y/N]"),
+                  "the second question carries the warning")
+            check("disk-mode program flashpod can arm" not in out
+                  and "external chip programmer" not in out,
+                  "no wall of text before the question")
     unarmed_img = img
     img = blank("noarm.img")
     rc, out, q = run(["flash", img, "--firmware", fw_known, "--yes",

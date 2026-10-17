@@ -29,7 +29,8 @@ a library near 32,000 songs. It hasn't been tested on a 2G. See the README.
 
 Optionally, a flash can leave the card's disk-mode update pending, so that on
 its next start on FireWire power the iPod reprograms its own flash chip from
-the card. An interactive flash asks (default no); `--arm` arms without asking
+the card. An interactive flash asks, then warns and asks again (each
+defaulting to no); `--arm` arms without asking
 and `--no-arm` never arms. Only flashpod 1.6's and Apple 1.5's disk-mode
 programs can be armed. A power cut early in the programming leaves an iPod
 that needs an external chip programmer; the README explains the risk.

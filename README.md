@@ -527,7 +527,11 @@ after that, a failure repairs itself on the next start. flashpod has no dump
 of your iPod's chip, so it can't rehearse the update first (openpod's
 `tools/flash_rom_update.py` can). Only disk-mode programs flashpod knows can
 be armed: flashpod 1.6's and Apple 1.5's. An interactive flash of one of them
-asks (default no); `--arm` arms without asking, `--no-arm` never arms, and a
+asks "Arm this card for an iPod update to disk-mode during the next boot?
+[y/N]"; only a yes brings the warning (FireWire power during the next boot;
+halting the update can leave the iPod permanently broken) and a second
+"Continue? [y/N]", and the card is armed only on both yeses. `--arm` arms
+without asking either, `--no-arm` never arms, and a
 non-interactive run never arms without `--arm`. `card.flash(..., arm=True)`
 does the same in the library, and `inspect` reports whether a card is armed.
 
