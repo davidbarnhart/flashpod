@@ -66,6 +66,8 @@ sync for occasionally adding new albums later.
 
 ## Install
 
+What changed in each release: [CHANGELOG.md](CHANGELOG.md).
+
 If you already have the **pip** Python package manager (or **pipx**), install
 with a single command:
 
