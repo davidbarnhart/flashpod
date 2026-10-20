@@ -345,6 +345,9 @@ def writers(par, tmp, images, fw_cache):
 
 # -- M3: init, add, remove, rebuild, plan_add --------------------------------
 SEED3, NOW3 = 777, 1760100000
+# M3 ran on mutagen's tags handed over as JSON; since M4 the Rust side reads
+# the files itself. --python-tags brings the old way back.
+PYTHON_TAGS = False
 
 
 def _audio_fields(audio, size):
@@ -393,6 +396,146 @@ def card_tags(img):
     return out
 
 
+class _Timeout(Exception):
+    pass
+
+
+def _py_tags(read):
+    """read() -> (audio, size) through mutagen, as make_track sees it: the
+    per-file form, with a time limit (mutagen loops forever on one MP4
+    shape)."""
+    import signal
+
+    def alarm(*_):
+        raise _Timeout()
+    old = signal.signal(signal.SIGALRM, alarm)
+    signal.alarm(5)
+    try:
+        audio, size = read()
+        return {"unrecognized": True} if audio is None \
+            else _audio_fields(audio, size)
+    except _Timeout:
+        return {"timeout": True}
+    except Exception as exc:                       # noqa: BLE001 (as make_track)
+        return {"error": str(exc)}
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+
+
+def _too_big(fields):
+    a = fields.get("audio") or {}
+    return any(isinstance(a.get(k), int) and abs(a[k]) >= 1 << 63
+               for k in ("bitrate", "sample_rate"))
+
+
+def compare_tags(par, what, labels, py, rs, named):
+    """Per file: the same outcome (tags / unreadable / not audio), and for
+    tags every field equal. An unreadable file's message is mutagen's own
+    text on one side and the port's on the other: not compared (named)."""
+    bad = 0
+    for path, label in labels:
+        a, b = py[path], rs[path]
+        if "timeout" in a and "error" in b:
+            named["mutagen never returns (Rust: unreadable)"] = \
+                named.get("mutagen never returns (Rust: unreadable)", 0) + 1
+            continue
+        if _too_big(a) and "error" in b:
+            named["a number past 2**63 (Python's DB write then fails)"] = \
+                named.get("a number past 2**63 (Python's DB write then fails)", 0) + 1
+            continue
+        if label.startswith("Ogg") and "error" in b:
+            named["an Ogg file (not read by the port)"] = \
+                named.get("an Ogg file (not read by the port)", 0) + 1
+            continue
+        ka, kb = sorted(a), sorted(b)
+        if ka != kb:
+            par.fails.append("%s %s: Python %r, Rust %r" % (what, label, a, b))
+            bad += 1
+            continue
+        if "audio" in a:
+            if par.compare("%s %s" % (what, label), a["audio"], b["audio"]):
+                bad += 1
+        else:
+            par.checked += 1
+            if "error" in a:
+                named["unreadable: message not compared"] = \
+                    named.get("unreadable: message not compared", 0) + 1
+    return bad
+
+
+def tag_files(par, tmp, n_damaged):
+    """M4: every corpus file and n damaged copies through mutagen (via
+    tracks.read_audio) and through the Rust reader; the same files on a card,
+    read lazily off the FAT by both (the rebuild path)."""
+    import mutagen
+    import tag_corpus
+    from flashpod import tracks
+    named = {}
+    files = tag_corpus.build(os.path.join(tmp, "tags"))
+    made = open(os.path.join(RUST, "flashpod-core", "src", "tags",
+                             "tables.rs")).readline()
+    print("tags: %d synthetic files, mutagen %s%s"
+          % (len(files), mutagen.version_string,
+             "" if "mutagen %s," % mutagen.version_string in made else
+             " (the port follows the mutagen in tables.rs: %s)"
+             % made.split("mutagen ")[1].split(",")[0]))
+
+    def run(what, items):
+        py = {p: _py_tags(lambda p=p: (tracks.read_audio(p), os.path.getsize(p)))
+              for _, p in items}
+        rs = {}
+        for i in range(0, len(items), 400):
+            _, part = par.rust("tags", *[p for _, p in items[i:i + 400]])
+            rs.update(part)
+        labels = [(p, lab) for lab, p in items]
+        bad = compare_tags(par, what, labels, py, rs, named)
+        kinds = {}
+        for v in py.values():
+            k = sorted(v)[0]
+            kinds[k] = kinds.get(k, 0) + 1
+        print("  %s %d files, %d differ (Python: %s)"
+              % ("ok  " if not bad else "FAIL", len(items), bad,
+                 ", ".join("%d %s" % (n, k) for k, n in sorted(kinds.items()))))
+    run("tags", files)
+
+    print("tags on a card (read off the FAT, as a rebuild does)")
+    img = os.path.join(tmp, "tags.img")
+    card.create_blank(img, 128 << 20)
+    card.flash(img, synth.write_firmware(os.path.join(tmp, "tagfw.bin")))
+    card.init(img)
+    names = {}
+    with card.open_target(img, write=True) as c:
+        fs = c.target().fs
+        for i, (label, p) in enumerate(files):
+            rel = "iPod_Control/Music/F%02d/t%03d%s" % (
+                i % 50, i, os.path.splitext(p)[1])
+            fs.write_file(rel, open(p, "rb").read())
+            names[rel] = label
+    py = {}
+    with card.open_target(img) as c:
+        tgt = c.target()
+        for rel, _loc in tgt.iter_music_files():
+            fh = tgt.fs.open_file(rel)
+            py[rel] = _py_tags(lambda fh=fh, rel=rel: (
+                tracks.read_audio_stream(fh, os.path.splitext(rel)[1]), fh.size))
+    _, rs = par.rust("card-tags", img)
+    labels = [(rel, names[rel]) for rel in sorted(py)]
+    if sorted(py) != sorted(rs):
+        par.fails.append("card-tags: Python files %d, Rust files %d"
+                         % (len(py), len(rs)))
+    bad = compare_tags(par, "card-tags", labels, py, rs, named)
+    print("  %s %d files, %d differ" % ("ok  " if not bad else "FAIL",
+                                        len(labels), bad))
+    os.unlink(img)
+
+    print("tags: %d damaged copies (seeded)" % n_damaged)
+    run("damaged", tag_corpus.damaged(files, os.path.join(tmp, "dmg"),
+                                      n_damaged))
+    for k, v in sorted(named.items()):
+        print("  NAMED %s: %d" % (k, v))
+
+
 def library_ops(par, tmp, images, fw_cache):
     from flashpod import library as library_mod
     print("library: init, add, plan_add, remove, rebuild")
@@ -411,7 +554,7 @@ def library_ops(par, tmp, images, fw_cache):
         for d in (a, b):
             subprocess.run(["cp", "--sparse=always", start, d], check=True)
         args = [x if x != "@" else b for x in rust_args]
-        if tags is not None:
+        if tags is not None and PYTHON_TAGS:
             tp = os.path.join(w, "%d-tags.json" % n[0])
             json.dump(tags, open(tp, "w"))
             args += ["--tags", tp]
@@ -591,6 +734,28 @@ def library_ops(par, tmp, images, fw_cache):
          lambda a: card.rebuild(a, name="Re", save=False),
          ["rebuild", "@", "--name", "Re", "--no-save"], tags=card_tags(mcard))
 
+    # every format at once: the tag corpus files Python reads (an .aac makes
+    # Python's add fail, and Rust doesn't read Ogg), added, then rebuilt
+    import tag_corpus
+    from flashpod import tracks
+    readable = []
+    for label, p in tag_corpus.build(os.path.join(w, "tagc")):
+        r = _py_tags(lambda p=p: (tracks.read_audio(p), os.path.getsize(p)))
+        if ("audio" in r or "unrecognized" in r) and not p.endswith(".aac") \
+                and "Ogg" not in label and not _too_big(r):
+            readable.append(p)
+    big = os.path.join(w, "tags-card.img")
+    card.create_blank(big, 256 << 20)
+    card.flash(big, synth.write_firmware(os.path.join(w, "fw2.bin")))
+    with entropy.deterministic(SEED3, NOW3):
+        card.init(big)
+    case("add %d files of every format" % len(readable), big,
+         lambda a: card.add(a, readable), ["add", "@"] + readable)
+    with entropy.deterministic(SEED3, NOW3):
+        card.add(big, readable)
+    case("rebuild a card of every format", big, lambda a: card.rebuild(a),
+         ["rebuild", "@"])
+
 
 class TracksResult(object):
     """card.tracks returns a plain dict; give it the to_dict() the
@@ -751,12 +916,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--firmware-cache", default=os.path.expanduser(
         "~/.cache/flashpod/firmware"))
+    ap.add_argument("--damaged", type=int, default=3000,
+                    help="damaged audio files to compare (M4)")
+    ap.add_argument("--python-tags", action="store_true",
+                    help="give the Rust side mutagen's tags (M3's way)")
+    ap.add_argument("--tags-only", action="store_true",
+                    help="only the tag comparison (M4)")
     ap.add_argument("--keep", action="store_true",
                     help="keep the corpus directory (it is kept anyway on a "
                          "mismatch)")
     opts = ap.parse_args()
+    global PYTHON_TAGS
+    PYTHON_TAGS = opts.python_tags
     par = Parity(build())
     tmp = tempfile.mkdtemp(prefix="fp-parity-")
+    if opts.tags_only:
+        tag_files(par, tmp, opts.damaged)
+        return finish(par, tmp, opts)
 
     print("negative check: an altered field is reported")
     images = corpus(tmp, opts.firmware_cache)
@@ -827,7 +1003,11 @@ def main():
 
     writers(par, tmp, images, opts.firmware_cache)
     library_ops(par, tmp, images, opts.firmware_cache)
+    tag_files(par, tmp, opts.damaged)
+    return finish(par, tmp, opts)
 
+
+def finish(par, tmp, opts):
     print()
     for call, keys in sorted(par.pending.items()):
         print("PENDING %s: %s" % (call, ", ".join(sorted(keys))))

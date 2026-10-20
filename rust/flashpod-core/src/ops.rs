@@ -372,7 +372,8 @@ pub fn add(dev: &mut dyn BlockDevice, files: &[String], full: &str, ceiling_pol:
 }
 
 /// card.rebuild: the library rebuilt from the music files on the card (tags
-/// from `src`, keyed by the file's path on the card), saved unless !save.
+/// read by `src` from each file, read lazily off the card), saved unless
+/// !save. A file that can't be opened or read is skipped with a message.
 pub fn rebuild(dev: &mut dyn BlockDevice, name: &str, save: bool, src: &mut dyn TagSource, ent: &mut Entropy)
     -> Result<Value, Error>
 {
@@ -382,8 +383,22 @@ pub fn rebuild(dev: &mut dyn BlockDevice, name: &str, save: bool, src: &mut dyn 
     let mut skipped = Vec::new();
     let mut located: Vec<(String, Track)> = Vec::new();
     for (relpath, location) in files {
-        let size = fs.resolve(&relpath).map_err(os_err)?.map(|e| e.size).unwrap_or(0) as u64;
-        match src.read(&relpath) {
+        // target.read_track_file: open_file (None for a missing file or a
+        // directory), then the tags through the lazy file
+        let entry = match fs.resolve(&relpath) {
+            Ok(Some(e)) if e.attr & crate::fat::ATTR_DIRECTORY == 0 => e,
+            Ok(_) => continue,
+            Err(e) => {
+                skipped.push(format!("skipping {}: {}", relpath, e));
+                continue;
+            }
+        };
+        let size = entry.size as u64;
+        let result = match crate::tags::FatFile::open(&mut fs, entry.first_cluster, size) {
+            Ok(mut file) => src.read_stream(&relpath, &mut file),
+            Err(e) => library::TagResult::Unreadable(e),
+        };
+        match result {
             library::TagResult::Unreadable(e) => skipped.push(format!("skipping {}: {}", relpath, e)),
             library::TagResult::Unrecognized => {}
             library::TagResult::Audio(a) => {

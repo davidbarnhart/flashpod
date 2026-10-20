@@ -160,6 +160,12 @@ impl<'a> Fat32<'a> {
         self.data_start + (c as u64 - 2) * self.sectors_per_cluster as u64
     }
 
+    /// fatfs.read_cluster
+    pub fn read_cluster(&mut self, c: u32) -> Result<Vec<u8>, String> {
+        let lba = self.cluster_lba(c);
+        self.sec.read(lba, self.sectors_per_cluster as u64)
+    }
+
     /// fatfs.read_chain: the clusters are read as the chain is walked, so a
     /// short read can come before a loop is found -- same order as Python.
     pub fn read_chain(&mut self, start: u32) -> Result<Vec<u8>, String> {

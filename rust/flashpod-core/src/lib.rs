@@ -17,6 +17,7 @@ pub mod itunesdb;
 pub mod layout;
 pub mod library;
 pub mod ops;
+pub mod tags;
 pub mod text;
 
 pub use block::BlockDevice;

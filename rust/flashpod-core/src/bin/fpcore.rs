@@ -8,8 +8,10 @@
 //!   fpcore flash PATH FW [--lba48] [--max-data-gb N] [--no-format] [--arm]
 //!   fpcore flash-firmware PATH FW
 //!   fpcore init PATH [--name N] [--overwrite] | remove PATH WHAT...
-//!   fpcore plan-add|add PATH --tags JSON [--no-expand] [--no-assess] [--full fit] [--ceiling fit|force] FILES...
-//!   fpcore rebuild PATH --tags JSON [--name N] [--no-save]
+//!   fpcore plan-add|add PATH [--tags JSON] [--no-expand] [--no-assess] [--full fit] [--ceiling fit|force] FILES...
+//!   fpcore rebuild PATH [--tags JSON] [--name N] [--no-save]
+//!   fpcore tags FILE... | card-tags IMAGE   (what make_track reads, per file)
+//! (tags come from the Rust reader; --tags JSON supplies Python's instead)
 //! (FLASHPOD_SEED / FLASHPOD_NOW: the id seed and clock)
 //!   fpcore splitmix SEED COUNT
 //!   fpcore entropy SEED COUNT
@@ -17,6 +19,7 @@
 use flashpod_core::block::FileDevice;
 use flashpod_core::card;
 use flashpod_core::entropy::SplitMix64;
+use flashpod_core::library::{TagResult, TagSource};
 
 /// card._firmware_bytes(path): load, unwrap, fix up, validate.
 fn read_firmware(path: &str) -> Result<Vec<u8>, flashpod_core::Error> {
@@ -115,6 +118,23 @@ impl flashpod_core::library::TagSource for JsonTags {
     }
 }
 
+/// --tags JSON (Python's tags) or the Rust reader
+fn tag_source(args: &[String]) -> Box<dyn TagSource> {
+    match flag_value(args, "--tags") {
+        Some(p) => Box::new(JsonTags::load(&p)),
+        None => Box::new(flashpod_core::tags::FileTags),
+    }
+}
+
+/// the harness's per-file form: {"audio": {...}} | {"error": ...} | {"unrecognized": true}
+fn tag_json(r: TagResult) -> serde_json::Value {
+    match r {
+        TagResult::Audio(a) => serde_json::json!({"audio": a}),
+        TagResult::Unreadable(e) => serde_json::json!({"error": e}),
+        TagResult::Unrecognized => serde_json::json!({"unrecognized": true}),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let out = match args.first().map(String::as_str) {
@@ -173,15 +193,15 @@ fn main() {
         Some("remove") if args.len() >= 2 => FileDevice::open_image(&args[1], true)
             .and_then(|mut dev| flashpod_core::ops::remove(&mut dev, &args[2..], &mut entropy())),
         Some("plan-add") | Some("add") if args.len() >= 2 => {
-            let tags = JsonTags::load(&flag_value(&args, "--tags").expect("--tags"));
             let files = positional(&args[2..], &["--tags", "--full", "--ceiling"]);
-            let mut src = tags;
+            let mut src = tag_source(&args);
+            let src = src.as_mut();
             let mut ent = entropy();
             let expand = !args.iter().any(|a| a == "--no-expand");
             let assess = !args.iter().any(|a| a == "--no-assess");
             if args[0] == "plan-add" {
                 FileDevice::open_image(&args[1], false).and_then(|mut dev| {
-                    flashpod_core::ops::plan_add(&mut dev, &files, &mut src, &mut ent, options(), expand, assess)
+                    flashpod_core::ops::plan_add(&mut dev, &files, src, &mut ent, options(), expand, assess)
                         .map(|p| p.json)
                 })
             } else {
@@ -189,17 +209,40 @@ fn main() {
                 let ceil = flag_value(&args, "--ceiling").unwrap_or_else(|| "refuse".into());
                 let mut read = |p: &str| std::fs::read(p);
                 FileDevice::open_image(&args[1], true).and_then(|mut dev| {
-                    flashpod_core::ops::add(&mut dev, &files, &full, &ceil, &mut src, &mut read, &mut ent, options())
+                    flashpod_core::ops::add(&mut dev, &files, &full, &ceil, src, &mut read, &mut ent, options())
                 })
             }
         }
         Some("rebuild") if args.len() >= 2 => {
-            let mut src = JsonTags::load(&flag_value(&args, "--tags").expect("--tags"));
+            let mut src = tag_source(&args);
             let name = flag_value(&args, "--name").unwrap_or_else(|| "iPod".into());
             let save = !args.iter().any(|a| a == "--no-save");
             FileDevice::open_image(&args[1], true)
-                .and_then(|mut dev| flashpod_core::ops::rebuild(&mut dev, &name, save, &mut src, &mut entropy()))
+                .and_then(|mut dev| flashpod_core::ops::rebuild(&mut dev, &name, save, src.as_mut(), &mut entropy()))
         }
+        Some("tags") => {
+            let mut out = serde_json::Map::new();
+            for p in &args[1..] {
+                out.insert(p.clone(), tag_json(flashpod_core::tags::FileTags.read(p)));
+            }
+            Ok(serde_json::Value::Object(out))
+        }
+        Some("card-tags") if args.len() == 2 => FileDevice::open_image(&args[1], false).and_then(|mut dev| {
+            let mut fs = flashpod_core::ops::open_fat(&mut dev)?;
+            let mut out = serde_json::Map::new();
+            for (relpath, _) in fs.music_files().map_err(|e| flashpod_core::Error::new(flashpod_core::ErrorKind::NotACard, e))? {
+                let r = match fs.resolve(&relpath) {
+                    Ok(Some(e)) => match flashpod_core::tags::FatFile::open(&mut fs, e.first_cluster, e.size as u64) {
+                        Ok(mut f) => flashpod_core::tags::audio_info(&relpath, &mut f),
+                        Err(e) => TagResult::Unreadable(e),
+                    },
+                    Ok(None) => continue,
+                    Err(e) => TagResult::Unreadable(e),
+                };
+                out.insert(relpath, tag_json(r));
+            }
+            Ok(serde_json::Value::Object(out))
+        }),
         Some("entropy") if args.len() == 3 => {
             // the calls flashpod makes, in a fixed pattern: getrandbits(64),
             // randrange(10**6), choice over 7 items

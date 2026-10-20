@@ -15,7 +15,7 @@ pub const AUDIO_EXTS: [&str; 8] = [".mp3", ".m4a", ".m4b", ".aac", ".wav", ".aif
 
 /// What tracks._track_from_audio takes from a file: the tags (as
 /// tracks.first() returns them) and the stream info.
-#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
 pub struct AudioInfo {
     pub title: Option<String>,
     pub artist: Option<String>,
@@ -42,6 +42,12 @@ pub enum TagResult {
 
 pub trait TagSource {
     fn read(&mut self, path: &str) -> TagResult;
+    /// A file on the card (a rebuild), read through `file`; by default
+    /// looked up by its path like `read`.
+    fn read_stream(&mut self, path: &str, file: &mut dyn crate::tags::ReadAt) -> TagResult {
+        let _ = file;
+        self.read(path)
+    }
 }
 
 /// os.path.splitext: (root, ext); a leading dot doesn't start an extension.
