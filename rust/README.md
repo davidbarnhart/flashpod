@@ -52,5 +52,13 @@ python3 scripts/rust_parity.py
   `.ipsw`), bad firmware of every kind, too-small and just-too-small
   cards, a 140 GiB card with and without `--lba48`, flashing over music,
   foreign layouts. Images are compared byte for byte (sparse-aware).
-- Next, M3: the iTunesDB writer, `init`, `add`, `remove`, `rebuild`,
-  `plan_add` (with fixture tags until M4 brings tag reading).
+- M3 (the library): done. The FAT32 write path (allocation, chains,
+  directory slots, 8.3 and long names, directory growth, FSInfo), the
+  iTunesDB writer, and `init`, `plan_add`, `add` (full and ceiling
+  policies, the 1.6 track cap), `remove` and `rebuild` make the same bytes
+  and the same results as the Python library. Ids and "now" come from an
+  `Entropy` and are drawn where Python draws them, parser and size
+  projections included. Tags still come from the caller (`TagSource`):
+  the harness hands Rust what mutagen read.
+- Next, M4: reading tags in Rust (MP3/ID3, FLAC, M4A, WAV, AIFF), compared
+  file by file with mutagen.

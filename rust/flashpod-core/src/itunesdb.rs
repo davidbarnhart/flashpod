@@ -1,6 +1,7 @@
 //! iTunesDB reading: itunesdb.parse_bytes, with the same strict structure
 //! checks and messages (inspect reports a corrupt DB's message).
 
+use crate::entropy::Entropy;
 use crate::text::{slice, u32_at, u64_at, utf16le_replace};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -13,10 +14,15 @@ pub const MHOD_GENRE: u32 = 5;
 pub const MHOD_FILETYPE: u32 = 6;
 pub const MHOD_COMPOSER: u32 = 12;
 pub const MHOD_PLAYLIST_POS: u32 = 100;
+pub const MAC_EPOCH_OFFSET: i64 = 2_082_844_800;
+pub const MARKER_MP3: [u8; 4] = *b"\x00MP3";
+pub const MARKER_FLAC: [u8; 4] = *b"\x00FLA";
 const STR_MHODS: [u32; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 12];
 
 #[derive(Debug, Clone, Default)]
 pub struct Track {
+    pub time_added: u32,
+    pub marker: [u8; 4],
     pub id: u32,
     pub size: u32,
     pub tracklen: u32,
@@ -41,6 +47,17 @@ pub struct Library {
     pub dbid: u64,
 }
 
+impl Library {
+    /// itunesdb.Library(name): one id draw.
+    pub fn new(name: &str, ent: &mut Entropy) -> Self {
+        Library { name: name.to_string(), tracks: Vec::new(), dbid: ent.rng.getrandbits(64) }
+    }
+
+    pub fn next_track_id(&self) -> u32 {
+        self.tracks.iter().map(|t| t.id).max().unwrap_or(51) + 1
+    }
+}
+
 /// card.track_dict.
 #[derive(Debug, Serialize)]
 pub struct TrackDict {
@@ -61,6 +78,12 @@ pub struct TrackDict {
 }
 
 impl Track {
+    /// itunesdb.Track(): "now" for time added, then one id draw.
+    pub fn new(ent: &mut Entropy) -> Self {
+        let time_added = (ent.now + MAC_EPOCH_OFFSET) as u32;
+        Track { time_added, marker: MARKER_MP3, dbid: ent.rng.getrandbits(64), ..Default::default() }
+    }
+
     pub fn to_dict(&self) -> TrackDict {
         TrackDict {
             id: self.id,
@@ -115,11 +138,15 @@ fn take_str(m: &mut HashMap<u32, Mhod>, k: u32) -> Option<String> {
     }
 }
 
-fn parse_mhit(buf: &[u8], off: usize) -> Result<(Track, usize), String> {
+fn parse_mhit(buf: &[u8], off: usize, ent: &mut Entropy) -> Result<(Track, usize), String> {
     let hlen = u32_at(buf, off + 4)? as usize;
     let tlen = u32_at(buf, off + 8)? as usize;
     let nmhod = u32_at(buf, off + 12)?;
+    let fresh = Track::new(ent); // Python's Track() draws an id here
     let mut t = Track {
+        time_added: fresh.time_added,
+        marker: fresh.marker,
+        dbid: fresh.dbid,
         id: u32_at(buf, off + 16)?,
         size: u32_at(buf, off + 36)?,
         tracklen: u32_at(buf, off + 40)?,
@@ -129,6 +156,7 @@ fn parse_mhit(buf: &[u8], off: usize) -> Result<(Track, usize), String> {
         samplerate: u32_at(buf, off + 60)? >> 16,
         ..Default::default()
     };
+    // the parser keeps Track()'s marker and time added (it reads neither)
     if hlen >= 104 {
         t.dbid = u64_at(buf, off + 96)?;
     }
@@ -145,17 +173,20 @@ fn parse_mhit(buf: &[u8], off: usize) -> Result<(Track, usize), String> {
 
 /// itunesdb.parse_bytes. Err is the ValueError / struct.error message.
 pub fn parse_bytes(buf: &[u8]) -> Result<Library, String> {
+    parse_bytes_with(buf, &mut Entropy::new(0, 0))
+}
+
+/// parse_bytes, making Python's id draws (one for the Library, one per
+/// track) from `ent`.
+pub fn parse_bytes_with(buf: &[u8], ent: &mut Entropy) -> Result<Library, String> {
     if slice(buf, 0, 4) != b"mhbd" {
         return Err("not an iTunesDB (no mhbd header)".into());
     }
     if buf.len() < 24 {
         return Err(format!("corrupt iTunesDB: {} bytes is shorter than its header", buf.len()));
     }
-    let mut lib = Library {
-        name: "iPod".into(),
-        tracks: Vec::new(),
-        dbid: if buf.len() >= 32 { u64_at(buf, 24)? } else { 0 },
-    };
+    let mut lib = Library::new("iPod", ent);
+    lib.dbid = if buf.len() >= 32 { u64_at(buf, 24)? } else { 0 };
     let hlen = u32_at(buf, 4)? as usize;
     let nchildren = u32_at(buf, 20)?;
     if !(24 <= hlen && hlen <= buf.len()) {
@@ -177,7 +208,7 @@ pub fn parse_bytes(buf: &[u8]) -> Result<Library, String> {
             ));
         }
         if sd_type == 1 {
-            parse_tracks(buf, off + sd_hlen, &mut lib, off + sd_tlen)?;
+            parse_tracks(buf, off + sd_hlen, &mut lib, off + sd_tlen, ent)?;
             tracks_seen = true;
         } else if sd_type == 2 {
             parse_playlists(buf, off + sd_hlen, &mut lib)?;
@@ -190,7 +221,7 @@ pub fn parse_bytes(buf: &[u8]) -> Result<Library, String> {
     Ok(lib)
 }
 
-fn parse_tracks(buf: &[u8], mut off: usize, lib: &mut Library, end: usize) -> Result<(), String> {
+fn parse_tracks(buf: &[u8], mut off: usize, lib: &mut Library, end: usize, ent: &mut Entropy) -> Result<(), String> {
     if slice(buf, off, off + 4) != b"mhlt" {
         return Err(format!("corrupt iTunesDB: no track list at offset {}", off));
     }
@@ -205,7 +236,7 @@ fn parse_tracks(buf: &[u8], mut off: usize, lib: &mut Library, end: usize) -> Re
         if tlen < u32_at(buf, off + 4)? as usize || off + tlen > end {
             return Err(format!("corrupt iTunesDB: track {} at offset {} has length {} past its dataset", i + 1, off, tlen));
         }
-        let (t, next) = parse_mhit(buf, off)?;
+        let (t, next) = parse_mhit(buf, off, ent)?;
         lib.tracks.push(t);
         off = next;
     }
@@ -236,4 +267,135 @@ fn parse_playlists(buf: &[u8], mut off: usize, lib: &mut Library) -> Result<(), 
         off += p_tlen;
     }
     Ok(())
+}
+
+
+// ---------------------------------------------------------------------------
+// Writing: itunesdb.serialize, the old two-dataset format.
+// ---------------------------------------------------------------------------
+fn mk_string_mhod(typ: u32, text: &str) -> Vec<u8> {
+    let data: Vec<u8> = text.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let mut out = b"mhod".to_vec();
+    for v in [24u32, 24 + 16 + data.len() as u32, typ, 0, 0, 1, data.len() as u32, 0, 0] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.extend_from_slice(&data);
+    out
+}
+
+fn mk_pos_mhod(position: u32) -> Vec<u8> {
+    let mut out = b"mhod".to_vec();
+    for v in [24u32, 24 + 20, MHOD_PLAYLIST_POS, 0, 0, position, 0, 0, 0, 0] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
+fn put(b: &mut [u8], off: usize, v: u32) {
+    b[off..off + 4].copy_from_slice(&v.to_le_bytes());
+}
+
+fn mk_mhit(t: &Track) -> Vec<u8> {
+    let mut mhods = Vec::new();
+    let mut n = 0u32;
+    for (typ, val) in [(MHOD_TITLE, &t.title), (MHOD_LOCATION, &t.location), (MHOD_ALBUM, &t.album),
+                       (MHOD_ARTIST, &t.artist), (MHOD_GENRE, &t.genre), (MHOD_FILETYPE, &t.filetype),
+                       (MHOD_COMPOSER, &t.composer)] {
+        if let Some(v) = val.as_deref().filter(|v| !v.is_empty()) {
+            mhods.extend(mk_string_mhod(typ, v));
+            n += 1;
+        }
+    }
+    const HLEN: usize = 156;
+    let mut h = vec![0u8; HLEN];
+    h[0..4].copy_from_slice(b"mhit");
+    put(&mut h, 4, HLEN as u32);
+    put(&mut h, 8, (HLEN + mhods.len()) as u32);
+    put(&mut h, 12, n);
+    put(&mut h, 16, t.id);
+    put(&mut h, 20, 1);
+    h[24..28].copy_from_slice(&t.marker);
+    put(&mut h, 32, t.time_added);
+    put(&mut h, 36, t.size);
+    put(&mut h, 40, t.tracklen);
+    put(&mut h, 44, t.track_nr);
+    put(&mut h, 52, t.year);
+    put(&mut h, 56, t.bitrate);
+    put(&mut h, 60, (t.samplerate & 0xFFFF) << 16);
+    put(&mut h, 88, t.time_added);
+    h[96..104].copy_from_slice(&t.dbid.to_le_bytes());
+    h[104] = 1;
+    h.extend(mhods);
+    h
+}
+
+fn mk_mhyp(name: &str, ids: &[u32], master: bool, ent: &mut Entropy) -> Vec<u8> {
+    let mhods = mk_string_mhod(MHOD_TITLE, name);
+    let now = (ent.now + MAC_EPOCH_OFFSET) as u32;
+    let mut items = Vec::new();
+    for (k, &tid) in ids.iter().enumerate() {
+        let pos = k as u32 + 1;
+        let pm = mk_pos_mhod(pos);
+        let mut item = b"mhip".to_vec();
+        for v in [76u32, 76 + pm.len() as u32, 1, 0, pos, tid, now] {
+            item.extend_from_slice(&v.to_le_bytes());
+        }
+        item.resize(76, 0);
+        item.extend(pm);
+        items.extend(item);
+    }
+    const HLEN: usize = 108;
+    let mut h = vec![0u8; HLEN];
+    h[0..4].copy_from_slice(b"mhyp");
+    put(&mut h, 4, HLEN as u32);
+    put(&mut h, 8, (HLEN + mhods.len() + items.len()) as u32);
+    put(&mut h, 12, 1);
+    put(&mut h, 16, ids.len() as u32);
+    put(&mut h, 20, master as u32);
+    put(&mut h, 24, now);
+    h[28..36].copy_from_slice(&ent.rng.getrandbits(64).to_le_bytes());
+    h.extend(mhods);
+    h.extend(items);
+    h
+}
+
+fn mk_mhsd(sd_type: u32, payload: &[u8]) -> Vec<u8> {
+    let mut out = b"mhsd".to_vec();
+    for v in [96u32, 96 + payload.len() as u32, sd_type] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.resize(96, 0);
+    out.extend_from_slice(payload);
+    out
+}
+
+/// itunesdb.serialize (one id draw, for the master playlist).
+pub fn serialize(lib: &Library, ent: &mut Entropy) -> Vec<u8> {
+    let tracks: Vec<u8> = lib.tracks.iter().flat_map(mk_mhit).collect();
+    let mut mhlt = b"mhlt".to_vec();
+    mhlt.extend_from_slice(&92u32.to_le_bytes());
+    mhlt.extend_from_slice(&(lib.tracks.len() as u32).to_le_bytes());
+    mhlt.resize(92, 0);
+    mhlt.extend(tracks);
+    let sd1 = mk_mhsd(1, &mhlt);
+    let ids: Vec<u32> = lib.tracks.iter().map(|t| t.id).collect();
+    let mpl = mk_mhyp(&lib.name, &ids, true, ent);
+    let mut mhlp = b"mhlp".to_vec();
+    mhlp.extend_from_slice(&92u32.to_le_bytes());
+    mhlp.extend_from_slice(&1u32.to_le_bytes());
+    mhlp.resize(92, 0);
+    mhlp.extend(mpl);
+    let sd2 = mk_mhsd(2, &mhlp);
+    const HLEN: usize = 104;
+    let mut h = vec![0u8; HLEN];
+    h[0..4].copy_from_slice(b"mhbd");
+    put(&mut h, 4, HLEN as u32);
+    put(&mut h, 8, (HLEN + sd1.len() + sd2.len()) as u32);
+    put(&mut h, 12, 1);
+    put(&mut h, 16, 0x0b);
+    put(&mut h, 20, 2);
+    h[24..32].copy_from_slice(&lib.dbid.to_le_bytes());
+    h.extend(sd1);
+    h.extend(sd2);
+    h
 }

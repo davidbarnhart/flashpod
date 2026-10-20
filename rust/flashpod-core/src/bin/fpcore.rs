@@ -7,6 +7,10 @@
 //!   fpcore min-card-bytes | create-blank PATH SIZE | format-data PATH
 //!   fpcore flash PATH FW [--lba48] [--max-data-gb N] [--no-format] [--arm]
 //!   fpcore flash-firmware PATH FW
+//!   fpcore init PATH [--name N] [--overwrite] | remove PATH WHAT...
+//!   fpcore plan-add|add PATH --tags JSON [--no-expand] [--no-assess] [--full fit] [--ceiling fit|force] FILES...
+//!   fpcore rebuild PATH --tags JSON [--name N] [--no-save]
+//! (FLASHPOD_SEED / FLASHPOD_NOW: the id seed and clock)
 //!   fpcore splitmix SEED COUNT
 //!   fpcore entropy SEED COUNT
 
@@ -43,6 +47,10 @@ fn create_blank(path: &str, size: u64) -> Result<serde_json::Value, flashpod_cor
 /// FLASHPOD_DB_LIMIT, read as library._db_size_limit does.
 fn options() -> flashpod_core::inspect::Options {
     let mut o = flashpod_core::inspect::Options::default();
+    // parity harness only: a smaller stock limit without "the user set it"
+    if let Some(n) = std::env::var("FLASHPOD_PARITY_STOCK_LIMIT").ok().and_then(|v| v.parse().ok()) {
+        o.db_limit = n;
+    }
     if let Ok(v) = std::env::var("FLASHPOD_DB_LIMIT") {
         o.db_limit_set = true;
         if let Ok(n) = v.trim().parse::<i64>() {
@@ -50,6 +58,61 @@ fn options() -> flashpod_core::inspect::Options {
         }
     }
     o
+}
+
+/// FLASHPOD_SEED and FLASHPOD_NOW (the parity harness sets both);
+/// otherwise a seed and "now" from the clock.
+fn entropy() -> flashpod_core::entropy::Entropy {
+    let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
+    let seed = std::env::var("FLASHPOD_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(clock.as_nanos() as u64);
+    let now = std::env::var("FLASHPOD_NOW").ok().and_then(|v| v.parse().ok()).unwrap_or(clock.as_secs() as i64);
+    flashpod_core::entropy::Entropy::new(seed, now)
+}
+
+fn flag_value(args: &[String], flag: &str) -> Option<String> {
+    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1).cloned())
+}
+
+/// The arguments that aren't flags (or a flag's value).
+fn positional(args: &[String], with_value: &[&str]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if with_value.contains(&args[i].as_str()) {
+            i += 2;
+            continue;
+        }
+        if !args[i].starts_with("--") {
+            out.push(args[i].clone());
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Tags read by the Python library (mutagen), handed over as JSON:
+/// {path: {"audio": {...}} | {"error": "..."} | {"unrecognized": true}}.
+struct JsonTags(serde_json::Map<String, serde_json::Value>);
+
+impl JsonTags {
+    fn load(path: &str) -> Self {
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(path).expect("tags file")).expect("tags JSON");
+        JsonTags(v.as_object().cloned().unwrap_or_default())
+    }
+}
+
+impl flashpod_core::library::TagSource for JsonTags {
+    fn read(&mut self, path: &str) -> flashpod_core::library::TagResult {
+        use flashpod_core::library::TagResult;
+        match self.0.get(path) {
+            Some(v) if v.get("audio").is_some() => {
+                TagResult::Audio(serde_json::from_value(v["audio"].clone()).expect("audio fields"))
+            }
+            Some(v) if v.get("error").is_some() => TagResult::Unreadable(v["error"].as_str().unwrap_or("").into()),
+            Some(_) => TagResult::Unrecognized,
+            None => TagResult::Unreadable(format!("no tags supplied for {}", path)),
+        }
+    }
 }
 
 fn main() {
@@ -101,6 +164,42 @@ fn main() {
         Some("format-data") if args.len() == 2 => FileDevice::open_image(&args[1], true)
             .and_then(|mut dev| card::format_data(&mut dev))
             .map(|r| serde_json::to_value(r).unwrap()),
+        Some("init") if args.len() >= 2 => {
+            let name = flag_value(&args, "--name").unwrap_or_else(|| "iPod".into());
+            let overwrite = args.iter().any(|a| a == "--overwrite");
+            FileDevice::open_image(&args[1], true)
+                .and_then(|mut dev| flashpod_core::ops::init(&mut dev, &name, overwrite, &mut entropy()))
+        }
+        Some("remove") if args.len() >= 2 => FileDevice::open_image(&args[1], true)
+            .and_then(|mut dev| flashpod_core::ops::remove(&mut dev, &args[2..], &mut entropy())),
+        Some("plan-add") | Some("add") if args.len() >= 2 => {
+            let tags = JsonTags::load(&flag_value(&args, "--tags").expect("--tags"));
+            let files = positional(&args[2..], &["--tags", "--full", "--ceiling"]);
+            let mut src = tags;
+            let mut ent = entropy();
+            let expand = !args.iter().any(|a| a == "--no-expand");
+            let assess = !args.iter().any(|a| a == "--no-assess");
+            if args[0] == "plan-add" {
+                FileDevice::open_image(&args[1], false).and_then(|mut dev| {
+                    flashpod_core::ops::plan_add(&mut dev, &files, &mut src, &mut ent, options(), expand, assess)
+                        .map(|p| p.json)
+                })
+            } else {
+                let full = flag_value(&args, "--full").unwrap_or_else(|| "stop".into());
+                let ceil = flag_value(&args, "--ceiling").unwrap_or_else(|| "refuse".into());
+                let mut read = |p: &str| std::fs::read(p);
+                FileDevice::open_image(&args[1], true).and_then(|mut dev| {
+                    flashpod_core::ops::add(&mut dev, &files, &full, &ceil, &mut src, &mut read, &mut ent, options())
+                })
+            }
+        }
+        Some("rebuild") if args.len() >= 2 => {
+            let mut src = JsonTags::load(&flag_value(&args, "--tags").expect("--tags"));
+            let name = flag_value(&args, "--name").unwrap_or_else(|| "iPod".into());
+            let save = !args.iter().any(|a| a == "--no-save");
+            FileDevice::open_image(&args[1], true)
+                .and_then(|mut dev| flashpod_core::ops::rebuild(&mut dev, &name, save, &mut src, &mut entropy()))
+        }
         Some("entropy") if args.len() == 3 => {
             // the calls flashpod makes, in a fixed pattern: getrandbits(64),
             // randrange(10**6), choice over 7 items

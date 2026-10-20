@@ -61,3 +61,18 @@ mod tests {
         assert_eq!(r.next_u64(), 0x06c45d188009454f);
     }
 }
+
+/// What flashpod/entropy.py's deterministic mode provides: the id source
+/// and "now". Every call that makes ids takes one, so a caller (and the
+/// parity harness) controls them; the draws happen in the Python library's
+/// order.
+pub struct Entropy {
+    pub rng: SplitMix64,
+    pub now: i64,
+}
+
+impl Entropy {
+    pub fn new(seed: u64, now: i64) -> Self {
+        Entropy { rng: SplitMix64::new(seed), now }
+    }
+}

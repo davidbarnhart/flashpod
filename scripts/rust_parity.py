@@ -80,6 +80,12 @@ class Parity(object):
 
     def compare(self, what, py, rs, record=True):
         """Mismatched field names (also recorded as failures)."""
+        if not (isinstance(py, dict) and isinstance(rs, dict)):
+            bad = [] if py == rs else ["Python %r, Rust %r" % (py, rs)]
+            if record:
+                self.checked += 0 if bad else 1
+                self.fails.extend("%s: %s" % (what, b) for b in bad)
+            return bad
         bad = []
         for k, v in rs.items():
             if k not in py:
@@ -95,7 +101,7 @@ class Parity(object):
                 self.fails.append("%s: %s" % (what, b))
         return bad
 
-    def call(self, what, py_fn, *rust_args, rename=None):
+    def call(self, what, py_fn, *rust_args, rename=None, ignore=()):
         """Run py_fn() and fpcore *rust_args; compare result or error.
         ``rename=(rust_path, python_path)``: the two sides worked on their
         own copies, so the Rust copy's path is read as the Python one's."""
@@ -107,6 +113,9 @@ class Parity(object):
         if rename:
             rs = json.loads(json.dumps(rs).replace(json.dumps(rename[0])[1:-1],
                                                    json.dumps(rename[1])[1:-1]))
+        for k in ignore:                     # timings: never equal
+            if py[0] == "ok" and isinstance(py[1], dict):
+                py[1].pop(k, None)
         rs = ("ok", rs) if rc == 0 else ("err", rs)
         if py[0] != rs[0]:
             self.fails.append("%s: Python %s %r, Rust %s %r"
@@ -332,6 +341,236 @@ def writers(par, tmp, images, fw_cache):
         f.truncate(96 << 20)
     case("format_data, partition too small for FAT32", narrow,
          lambda a: card.format_data(a), ["format-data", "@"])
+
+
+# -- M3: init, add, remove, rebuild, plan_add --------------------------------
+SEED3, NOW3 = 777, 1760100000
+
+
+def _audio_fields(audio, size):
+    from flashpod.tracks import first
+    tags = audio.tags or {}
+    info = audio.info
+    return {"audio": {
+        "title": first(tags, "title"), "artist": first(tags, "artist"),
+        "album": first(tags, "album"), "genre": first(tags, "genre"),
+        "composer": first(tags, "composer"),
+        "tracknumber": first(tags, "tracknumber"), "date": first(tags, "date"),
+        "length": info.length, "bitrate": getattr(info, "bitrate", 0) or 0,
+        "sample_rate": getattr(info, "sample_rate", 0) or 0, "size": size}}
+
+
+def source_tags(files):
+    """What make_track reads from each file, for the Rust side."""
+    from flashpod import tracks
+    out = {}
+    for p in tracks.expand(files, report=lambda m: None):
+        try:
+            audio = tracks.read_audio(p)
+        except Exception as exc:                   # noqa: BLE001 (as make_track)
+            out[p] = {"error": str(exc)}
+            continue
+        out[p] = {"unrecognized": True} if audio is None \
+            else _audio_fields(audio, os.path.getsize(p))
+    return out
+
+
+def card_tags(img):
+    """What a rebuild reads from each music file on the card."""
+    from flashpod import tracks
+    out = {}
+    with card.open_target(img) as c:
+        tgt = c.target()
+        for relpath, _loc in tgt.iter_music_files():
+            try:
+                fh = tgt.fs.open_file(relpath)
+                audio = tracks.read_audio_stream(fh, os.path.splitext(relpath)[1])
+            except (OSError, ValueError) as exc:
+                out[relpath] = {"error": str(exc)}
+                continue
+            out[relpath] = {"unrecognized": True} if audio is None \
+                else _audio_fields(audio, fh.size)
+    return out
+
+
+def library_ops(par, tmp, images, fw_cache):
+    from flashpod import library as library_mod
+    print("library: init, add, plan_add, remove, rebuild")
+    w = os.path.join(tmp, "m3")
+    os.makedirs(w)
+    n = [0]
+    music = os.path.join(tmp, "music")
+    umusic = os.path.join(tmp, "umusic")
+    env = dict(FLASHPOD_SEED=str(SEED3), FLASHPOD_NOW=str(NOW3))
+
+    def case(what, start, py_fn, rust_args, tags=None, rust_env=None,
+             py_setup=None, py_teardown=None):
+        n[0] += 1
+        a = os.path.join(w, "%d-py.img" % n[0])
+        b = os.path.join(w, "%d-rs.img" % n[0])
+        for d in (a, b):
+            subprocess.run(["cp", "--sparse=always", start, d], check=True)
+        args = [x if x != "@" else b for x in rust_args]
+        if tags is not None:
+            tp = os.path.join(w, "%d-tags.json" % n[0])
+            json.dump(tags, open(tp, "w"))
+            args += ["--tags", tp]
+        saved = dict(os.environ)
+        os.environ.update(env)
+        os.environ.update(rust_env or {})
+        before = len(par.fails)
+        try:
+            if py_setup:
+                py_setup()
+
+            def run_py():
+                with entropy.deterministic(SEED3, NOW3):
+                    return wrap(py_fn(a))
+            par.call(what, run_py, *args, rename=(b, a), ignore=("seconds",))
+        finally:
+            if py_teardown:
+                py_teardown()
+            os.environ.clear()
+            os.environ.update(saved)
+        diff = same_image(a, b)
+        if diff:
+            par.fails.append("%s: images differ (%s)" % (what, diff))
+        else:
+            par.checked += 1
+        print("  %s %s" % ("ok  " if len(par.fails) == before else "FAIL", what))
+        os.unlink(a)
+        os.unlink(b)
+
+    def wrap(v):
+        return v if hasattr(v, "to_dict") else Plain(v)
+
+    flashed = dict(images)["flashed"]
+    inited = dict(images)["init, no music"]
+    mcard = dict(images)["init + music"]
+    ucard = dict(images)["non-ASCII tags"]
+    corrupt = dict(images)["damaged iTunesDB"]
+    nodb = dict(images)["no iTunesDB, music files"]
+    nofree = dict(images)["no FSInfo free count"]
+    blank = dict(images)["blank"]
+
+    # init
+    case("init", flashed, lambda a: card.init(a), ["init", "@"])
+    case("init with a non-ASCII name", flashed,
+         lambda a: card.init(a, "Bibliothèque ß 音楽"),
+         ["init", "@", "--name", "Bibliothèque ß 音楽"])
+    case("init a card that has a DB", inited, lambda a: card.init(a),
+         ["init", "@"])
+    case("init a card with a damaged DB", corrupt, lambda a: card.init(a),
+         ["init", "@"])
+    case("init --overwrite over music", mcard,
+         lambda a: card.init(a, overwrite=True), ["init", "@", "--overwrite"])
+    case("init a blank card", blank, lambda a: card.init(a), ["init", "@"])
+
+    # add / plan_add
+    t_music = source_tags([music])
+    t_umusic = source_tags([umusic])
+    alpha = os.path.join(music, "Alpha Band")
+    one = sorted(t_music)[0]
+    case("plan_add a folder", inited, lambda a: card.plan_add(a, [music]),
+         ["plan-add", "@", music], tags=t_music)
+    case("plan_add, no assessment", mcard,
+         lambda a: card.plan_add(a, [music], assess=False),
+         ["plan-add", "@", music, "--no-assess"], tags=t_music)
+    case("add a folder", inited, lambda a: card.add(a, [music]),
+         ["add", "@", music], tags=t_music)
+    case("add it again (all duplicates)", mcard, lambda a: card.add(a, [music]),
+         ["add", "@", music], tags=t_music)
+    case("add one file", inited, lambda a: card.add(a, [one]),
+         ["add", "@", one], tags=t_music)
+    case("add non-ASCII tags", mcard, lambda a: card.add(a, [umusic]),
+         ["add", "@", umusic], tags=t_umusic)
+    case("add without an FSInfo count", nofree, lambda a: card.add(a, [umusic]),
+         ["add", "@", umusic], tags=t_umusic)
+    case("add to a card without a DB", nodb, lambda a: card.add(a, [alpha]),
+         ["add", "@", alpha], tags=t_music)
+    case("add to a damaged DB", corrupt, lambda a: card.add(a, [alpha]),
+         ["add", "@", alpha], tags=t_music)
+    empty = os.path.join(w, "empty-dir")
+    os.makedirs(empty)
+    case("add a folder with no audio", inited, lambda a: card.add(a, [empty]),
+         ["add", "@", empty], tags={})
+    limit = str(len(library_mod.itunesdb.serialize(card.library(inited))) + 500)
+    for pol in ("refuse", "fit", "force"):
+        case("add past FLASHPOD_DB_LIMIT, ceiling %s" % pol, inited,
+             lambda a, pol=pol: card.add(a, [music], policy={"ceiling": pol}),
+             ["add", "@", music, "--ceiling", pol], tags=t_music,
+             rust_env={"FLASHPOD_DB_LIMIT": limit},
+             py_setup=lambda: os.environ.__setitem__("FLASHPOD_DB_LIMIT", limit))
+    big = os.path.join(w, "big.wav")              # past a minimum card's space
+    synth._wav(big, 30, 440, rate=44100)
+    small = os.path.join(w, "small.img")
+    card.create_blank(small, card.min_card_bytes())
+    card.flash(small, synth.write_firmware(os.path.join(w, "fw.bin")))
+    with entropy.deterministic(SEED3, NOW3):
+        card.init(small)
+    bigs = [big] + [os.path.join(w, "big%d.wav" % i) for i in range(2, 30)]
+    for i, p in enumerate(bigs[1:], 2):
+        synth._wav(p, 30, 440 + i, rate=44100)
+    t_big = source_tags(bigs)
+    for full in ("stop", "fit"):
+        case("add past the free space, full %s" % full, small,
+             lambda a, full=full: card.add(a, bigs, policy={"full": full}),
+             ["add", "@"] + bigs + ["--full", full], tags=t_big)
+    f16 = [x for x in glob.glob(os.path.join(fw_cache, "flashpod_1.1.6*.bin.gz"))]
+    if f16:
+        c16 = os.path.join(w, "c16.img")
+        card.create_blank(c16, 96 << 20)
+        card.flash(c16, f16[0])
+        with entropy.deterministic(SEED3, NOW3):
+            card.init(c16)
+        stock = len(library_mod.itunesdb.serialize(card.library(c16))) + 500
+        old = library_mod.IPOD_DB_SIZE_LIMIT, library_mod.IPOD_PATCHED_TRACK_LIMIT
+
+        def shrink():
+            library_mod.IPOD_DB_SIZE_LIMIT = stock
+
+        def restore():
+            library_mod.IPOD_DB_SIZE_LIMIT = old[0]
+        case("add past the stock limit on flashpod 1.6 (track cap)", c16,
+             lambda a: card.add(a, [music]), ["add", "@", music], tags=t_music,
+             rust_env={"FLASHPOD_PARITY_STOCK_LIMIT": str(stock)},
+             py_setup=shrink, py_teardown=restore)
+
+    # remove
+    ids = [str(t["id"]) for t in card.tracks(mcard)["tracks"]]
+    artist = card.tracks(mcard)["tracks"][0]["artist"]
+    album = next(t["album"] for t in reversed(card.tracks(mcard)["tracks"])
+                 if t["album"])
+    case("remove by id", mcard, lambda a: card.remove(a, what=ids[:2]),
+         ["remove", "@"] + ids[:2])
+    case("remove an artist (other case)", mcard,
+         lambda a: card.remove(a, what=["artist", artist.upper()]),
+         ["remove", "@", "artist", artist.upper()])
+    case("remove an album", mcard,
+         lambda a: card.remove(a, what=["album"] + album.split()),
+         ["remove", "@", "album"] + album.split())
+    case("remove a missing id", mcard, lambda a: card.remove(a, what=["9999"]),
+         ["remove", "@", "9999"])
+    case("remove non-ids", mcard, lambda a: card.remove(a, what=["x1"]),
+         ["remove", "@", "x1"])
+    case("remove an unknown artist", mcard,
+         lambda a: card.remove(a, what=["artist", "Nobody"]),
+         ["remove", "@", "artist", "Nobody"])
+    case("remove artist with no name", mcard,
+         lambda a: card.remove(a, what=["artist"]), ["remove", "@", "artist"])
+    case("remove on a card without a DB", nodb,
+         lambda a: card.remove(a, what=["52"]), ["remove", "@", "52"])
+    case("remove on a damaged DB", corrupt,
+         lambda a: card.remove(a, what=["52"]), ["remove", "@", "52"])
+
+    # rebuild
+    for name, start in (("a card with music", mcard), ("no DB", nodb),
+                        ("non-ASCII tags", ucard), ("a damaged DB", corrupt)):
+        case("rebuild %s" % name, start, lambda a: card.rebuild(a),
+             ["rebuild", "@"], tags=card_tags(start))
+    case("rebuild --no-save, named", mcard,
+         lambda a: card.rebuild(a, name="Re", save=False),
+         ["rebuild", "@", "--name", "Re", "--no-save"], tags=card_tags(mcard))
 
 
 class TracksResult(object):
@@ -568,6 +807,7 @@ def main():
                                    else "FAIL", name))
 
     writers(par, tmp, images, opts.firmware_cache)
+    library_ops(par, tmp, images, opts.firmware_cache)
 
     print()
     for call, keys in sorted(par.pending.items()):

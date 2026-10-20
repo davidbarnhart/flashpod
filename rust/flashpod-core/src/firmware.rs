@@ -398,3 +398,38 @@ pub fn arm_firmware(fw: &[u8]) -> Result<Vec<u8>, String> {
     }
     Ok(out)
 }
+
+/// firmware.fix_on_card: does the firmware read by `read(offset, n)` carry
+/// fix `name`? None when it can't be told (no firmware volume, no osos, no
+/// such fix in the table, or a read failed).
+pub fn fix_on_card(read: &mut dyn FnMut(u64, usize) -> Option<Vec<u8>>, name: &str) -> Option<bool> {
+    let table = fixes_table()?;
+    let fix = table.get("fixes")?.as_array()?.iter().find(|f| f["name"] == name)?.clone();
+    if read(0, 4)? != b"{{~~" {
+        return None;
+    }
+    let hdr = read(0x100, 0x10)?;
+    if hdr.len() < 0x0c || &hdr[0..4] != b"]ih[" {
+        return None;
+    }
+    let ptr = u32::from_le_bytes(hdr[4..8].try_into().unwrap()) as u64;
+    let fmtver = u16::from_le_bytes(hdr[0x0a..0x0c].try_into().unwrap());
+    let shift = if fmtver == 3 { 0x200 } else { 0 };
+    let dir = read(ptr + 0x200, 400)?;
+    let mut osos: Option<(Vec<u8>, u32)> = None;
+    let mut aupd: Option<(Vec<u8>, u32)> = None;
+    for (_o, typ, f) in walk_directory(&dir, 0) {
+        if f[2] as u64 > FW_BLOCKS * SECTOR {
+            continue;
+        }
+        if &typ == b"osos" && osos.is_none() {
+            osos = Some((read(f[1] as u64 + shift, f[2] as usize)?, f[3]));
+        } else if &typ == b"aupd" && aupd.is_none() {
+            aupd = Some((read(f[1] as u64 + shift, f[2] as usize)?, f[3]));
+        }
+    }
+    let (o, addr) = osos?;
+    let one = serde_json::json!({"fixes": [fix]});
+    let found = fixes_present(&o, addr, &one, aupd.as_ref().map(|(b, a)| (b.as_slice(), *a)));
+    Some(found.iter().any(|n| n == name))
+}
