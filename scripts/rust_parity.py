@@ -536,6 +536,25 @@ def library_ops(par, tmp, images, fw_cache):
              rust_env={"FLASHPOD_PARITY_STOCK_LIMIT": str(stock)},
              py_setup=shrink, py_teardown=restore)
 
+    # a FLAC track through later saves (its marker and time added kept)
+    flac = os.path.join(w, "song.flac")
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "sine=frequency=500:duration=1", "-metadata",
+                    "title=A FLAC song", flac], check=True,
+                   stdin=subprocess.DEVNULL)
+    fcard = os.path.join(w, "flac.img")
+    subprocess.run(["cp", "--sparse=always", inited, fcard], check=True)
+    with entropy.deterministic(5, 1600000000):
+        card.add(fcard, [flac])
+    case("add after a FLAC track", fcard, lambda a: card.add(a, [alpha]),
+         ["add", "@", alpha], tags=t_music)
+    fid = str(card.tracks(fcard)["tracks"][0]["id"])
+    with entropy.deterministic(6, 1600000000):
+        card.add(fcard, [alpha])
+    keep = [str(t["id"]) for t in card.tracks(fcard)["tracks"] if str(t["id"]) != fid]
+    case("remove beside a FLAC track", fcard,
+         lambda a: card.remove(a, what=keep[:1]), ["remove", "@"] + keep[:1])
+
     # remove
     ids = [str(t["id"]) for t in card.tracks(mcard)["tracks"]]
     artist = card.tracks(mcard)["tracks"][0]["artist"]

@@ -115,6 +115,16 @@ def _parse_mhit(buf, off):
     t.year = _u32(buf, off + 52)
     t.bitrate = _u32(buf, off + 56)
     t.samplerate = _u32(buf, off + 60) >> 16
+    # The type marker and time added, where _mk_mhit writes them. They used
+    # to be left at Track()'s defaults, so every save after a load turned
+    # FLAC tracks into "\0MP3" ones and dated every track "now" (2026-10-20).
+    # A time added of 0 (another writer's DB may hold that there) stays now.
+    if hlen >= 28:
+        t.marker = bytes(buf[off + 24:off + 28])
+    if hlen >= 92:
+        added = _u32(buf, off + 88)
+        if added:
+            t.time_added = added
     if hlen >= 104:
         t.dbid = _u64(buf, off + 96)
     mhods, _ = _parse_mhods(buf, off + hlen, nmhod)

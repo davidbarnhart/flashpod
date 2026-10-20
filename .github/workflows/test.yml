@@ -193,6 +193,11 @@ jobs:
         shell: bash
         run: PYTHONPATH=. python scripts/test_library_fix_detect.py
 
+      - name: a track's type marker and time added survive a load and save
+        if: runner.os == 'Linux'
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_itunesdb_roundtrip.py
+
       - name: Rust port (rust/flashpod-core) builds, tests, builds for wasm, matches Python
         if: runner.os == 'Linux'
         shell: bash

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- FLAC tracks keep their type through later changes. Reading the iTunesDB
+  ignored each track's type marker and time added, so every save after a
+  load (any `add`, `rm` or `rebuild`) rewrote the FLAC tracks already on
+  the card as MP3 ones and dated every track "now". Both are now read back.
+
 ## 0.5.0 (2026-10-17)
 
 ### flashpod 1.6 firmware for the 1st and 2nd generation

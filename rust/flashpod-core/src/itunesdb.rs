@@ -156,7 +156,19 @@ fn parse_mhit(buf: &[u8], off: usize, ent: &mut Entropy) -> Result<(Track, usize
         samplerate: u32_at(buf, off + 60)? >> 16,
         ..Default::default()
     };
-    // the parser keeps Track()'s marker and time added (it reads neither)
+    // the type marker and time added, where mk_mhit writes them (a time
+    // added of 0, as another writer's DB may hold, stays "now")
+    if hlen >= 28 {
+        if let Ok(m) = <[u8; 4]>::try_from(slice(buf, off + 24, off + 28)) {
+            t.marker = m;
+        }
+    }
+    if hlen >= 92 {
+        let added = u32_at(buf, off + 88)?;
+        if added != 0 {
+            t.time_added = added;
+        }
+    }
     if hlen >= 104 {
         t.dbid = u64_at(buf, off + 96)?;
     }
