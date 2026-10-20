@@ -253,3 +253,148 @@ pub fn describe_installed(read: &mut dyn FnMut(i64, usize) -> Vec<u8>, catalog: 
     out.insert("fixes".into(), fixes);
     Value::Object(out)
 }
+
+// ---------------------------------------------------------------------------
+// Loading firmware for a flash: firmware.load_firmware, fixup_directories,
+// validate_firmware, arm_firmware. Err strings are the Python ValueError
+// messages (card wraps them as FirmwareInvalid "firmware error: ...").
+// ---------------------------------------------------------------------------
+
+/// The Firmware-* image inside raw bytes / a .bin.gz / an .ipsw (zip),
+/// by magic bytes, as load_firmware does (before the fix-ups).
+pub fn unwrap_container(data: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    if data.starts_with(b"PK") {
+        let mut zf = zip::ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| e.to_string())?;
+        let name = zf
+            .file_names()
+            .find(|n| n.rsplit('/').next().unwrap_or("").starts_with("Firmware"))
+            .map(String::from)
+            .ok_or_else(String::new)?; // Python: StopIteration, whose str() is ""
+        let mut f = zf.by_name(&name).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        f.read_to_end(&mut out).map_err(|e| e.to_string())?;
+        Ok(out)
+    } else if data.starts_with(b"\x1f\x8b") {
+        let mut out = Vec::new();
+        flate2::read::MultiGzDecoder::new(data).read_to_end(&mut out).map_err(|e| e.to_string())?;
+        Ok(out)
+    } else {
+        Ok(data.to_vec())
+    }
+}
+
+fn ptr_of(fw: &[u8]) -> usize {
+    u32::from_le_bytes(fw[0x104..0x108].try_into().unwrap()) as usize
+}
+
+/// firmware.fixup_directories: osos-and-others load address to 0xFFFFFFFF,
+/// aupd id 1 ("performed") and its load address its RAM address, in both
+/// directories. Not a firmware volume: unchanged.
+pub fn fixup_directories(fw: &[u8]) -> Vec<u8> {
+    let mut fw = fw.to_vec();
+    if fw.len() < 0x108 || &fw[0x100..0x104] != b"]ih[" {
+        return fw;
+    }
+    let ptr = ptr_of(&fw);
+    for base in [ptr, ptr + 0x200] {
+        for (off, typ, f) in walk_directory(&fw.clone(), base) {
+            if &typ == b"aupd" {
+                fw[off + 8..off + 12].copy_from_slice(&1u32.to_le_bytes());
+                fw[off + 36..off + 40].copy_from_slice(&f[3].to_le_bytes());
+            } else {
+                fw[off + 36..off + 40].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+            }
+        }
+    }
+    fw
+}
+
+/// firmware.validate_firmware.
+pub fn validate_firmware(fw: &[u8]) -> Result<(), String> {
+    if fw.len() < 4 || &fw[0..4] != b"{{~~" {
+        return Err("not an iPod firmware image (missing STOP boot block)".into());
+    }
+    if fw.len() < 0x104 || &fw[0x100..0x104] != b"]ih[" {
+        return Err("missing [hi] volume header at 0x100".into());
+    }
+    let ptr = ptr_of(fw);
+    let fmtver = u16::from_le_bytes(fw[0x10a..0x10c].try_into().unwrap());
+    let shift = if fmtver == 3 { 0x200 } else { 0 };
+    let mut found = false;
+    for (_off, typ, f) in walk_directory(fw, ptr + 0x200) {
+        if &typ == b"osos" {
+            found = true;
+            let (dev, len, cksum, load) = (f[1] as usize, f[2] as usize, f[5], f[7]);
+            let got: u64 = crate::text::slice(fw, dev + shift, dev + shift + len).iter().map(|&b| b as u64).sum();
+            let got = (got & 0xFFFF_FFFF) as u32;
+            if got != cksum {
+                return Err(format!("osos checksum mismatch: stored 0x{:08x} got 0x{:08x}", cksum, got));
+            }
+            if load != 0xFFFF_FFFF {
+                return Err(format!("osos loadAddr 0x{:08x} not fixed up (install-state must be 0xFFFFFFFF)", load));
+            }
+        }
+    }
+    if !found {
+        return Err("no osos image in the firmware directory".into());
+    }
+    if fw.len() as u64 > FW_BLOCKS * SECTOR {
+        return Err(format!("firmware ({} bytes) larger than the 32 MiB firmware partition", fw.len()));
+    }
+    Ok(())
+}
+
+/// firmware.load_firmware on bytes: unwrap, fix up, validate.
+pub fn load_firmware(data: &[u8]) -> Result<Vec<u8>, String> {
+    let fw = fixup_directories(&unwrap_container(data)?);
+    validate_firmware(&fw)?;
+    Ok(fw)
+}
+
+/// firmware.aupd_of: (sha256, known label) of the live directory's aupd.
+pub fn aupd_of(fw: &[u8]) -> Option<(String, Option<&'static str>)> {
+    if fw.len() < 0x10c || &fw[0x100..0x104] != b"]ih[" {
+        return None;
+    }
+    let ptr = ptr_of(fw);
+    let fmtver = u16::from_le_bytes(fw[0x10a..0x10c].try_into().unwrap());
+    let shift = if fmtver == 3 { 0x200 } else { 0 };
+    for (_o, typ, f) in walk_directory(fw, ptr + 0x200) {
+        if &typ == b"aupd" {
+            let blob = crate::text::slice(fw, f[1] as usize + shift, f[1] as usize + shift + f[2] as usize);
+            if blob.len() != f[2] as usize {
+                return None;
+            }
+            let d = sha256_hex(blob);
+            let k = known_aupd(&d);
+            return Some((d, k));
+        }
+    }
+    None
+}
+
+/// firmware.arm_firmware: the aupd id back to 0 in both directories,
+/// refused unless the program is a known one.
+pub fn arm_firmware(fw: &[u8]) -> Result<Vec<u8>, String> {
+    let (sha, known) = aupd_of(fw).ok_or("this firmware has no disk-mode program (aupd) to arm")?;
+    if known.is_none() {
+        return Err(format!(
+            "this firmware's disk-mode program (aupd sha256 {}) isn't one flashpod knows is safe to arm", sha));
+    }
+    let mut out = fw.to_vec();
+    let ptr = ptr_of(fw);
+    let mut n = 0;
+    for base in [ptr, ptr + 0x200] {
+        for (off, typ, _f) in walk_directory(fw, base) {
+            if &typ == b"aupd" {
+                out[off + 8..off + 12].copy_from_slice(&0u32.to_le_bytes());
+                n += 1;
+            }
+        }
+    }
+    if n != 2 {
+        return Err(format!("expected an aupd entry in both directories, found {}", n));
+    }
+    Ok(out)
+}

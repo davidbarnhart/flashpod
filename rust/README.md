@@ -44,5 +44,13 @@ python3 scripts/rust_parity.py
   cases. Python's casefold, latin-1 and UTF-16 "replace" decoding,
   `rstrip` and struct error messages are reproduced where the output
   depends on them (`text.rs`).
-- Next, M2: layout, FAT32 format and writing, `create_blank`, `flash`,
-  `flash_firmware`, `format_data`, compared byte for byte.
+- M2 (writers): done. `min_card_bytes`, `create_blank`, `flash` (with
+  `--lba48`, `--max-data-gb`, `--no-format`, `--arm`), `flash_firmware` and
+  `format_data` write the same bytes as the Python library, and refuse the
+  same things with the same errors (message and details): firmware raw,
+  `.bin.gz` and `.ipsw` (synthetic, six real catalog images, the real 1.6
+  `.ipsw`), bad firmware of every kind, too-small and just-too-small
+  cards, a 140 GiB card with and without `--lba48`, flashing over music,
+  foreign layouts. Images are compared byte for byte (sparse-aware).
+- Next, M3: the iTunesDB writer, `init`, `add`, `remove`, `rebuild`,
+  `plan_add` (with fixture tags until M4 brings tag reading).

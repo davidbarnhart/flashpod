@@ -13,8 +13,11 @@ implementations, and compares:
     `to_dict()` field. Fields Rust doesn't produce yet are listed as PENDING,
     never counted as passing; a field Rust produces that Python doesn't is a
     failure;
-  * errors: the same stable `code` and `details.reason` (messages may
-    differ where Python quotes an OS error);
+  * errors: the same `code`, `details` and message (except a message
+    quoting an OS error, "[Errno ...]");
+  * writes (create_blank, flash, flash_firmware, format_data): the same
+    result or error, and the same bytes in the image -- every region either
+    image holds data in (sparse-aware, for the 140 GiB card);
   * the id source: Python's flashpod.entropy.SplitMix64 against Rust's, raw
     outputs and the getrandbits / randrange / choice calls flashpod makes.
 
@@ -92,31 +95,243 @@ class Parity(object):
                 self.fails.append("%s: %s" % (what, b))
         return bad
 
-    def call(self, what, py_fn, *rust_args):
-        """Run py_fn() and fpcore *rust_args; compare result or error."""
+    def call(self, what, py_fn, *rust_args, rename=None):
+        """Run py_fn() and fpcore *rust_args; compare result or error.
+        ``rename=(rust_path, python_path)``: the two sides worked on their
+        own copies, so the Rust copy's path is read as the Python one's."""
         try:
             py = ("ok", py_fn().to_dict())
         except card.FlashpodError as e:
             py = ("err", e.to_dict())
         rc, rs = self.rust(*rust_args)
+        if rename:
+            rs = json.loads(json.dumps(rs).replace(json.dumps(rename[0])[1:-1],
+                                                   json.dumps(rename[1])[1:-1]))
         rs = ("ok", rs) if rc == 0 else ("err", rs)
         if py[0] != rs[0]:
             self.fails.append("%s: Python %s %r, Rust %s %r"
                               % (what, py[0], py[1], rs[0], rs[1]))
         elif py[0] == "err":
-            for k in ("code",):
+            # the whole error: code, message, details -- except where Python
+            # quotes an OS error ("[Errno 2] ..."), which no port can match
+            keys = ["code", "details"]
+            if "[Errno" not in py[1]["message"]:
+                keys.append("message")
+            for k in keys:
                 if py[1][k] != rs[1][k]:
                     self.fails.append("%s: error %s Python %r, Rust %r"
                                       % (what, k, py[1][k], rs[1][k]))
-            pr = py[1]["details"].get("reason")
-            rr = rs[1]["details"].get("reason")
-            if pr != rr:
-                self.fails.append("%s: error reason Python %r, Rust %r"
-                                  % (what, pr, rr))
-            self.checked += 2
+            self.checked += len(keys)
         else:
             self.compare(what, py[1], rs[1])
         return py, rs
+
+
+# -- M2: the writers, compared byte for byte ------------------------------
+SEEK_DATA, SEEK_HOLE = getattr(os, "SEEK_DATA", 3), getattr(os, "SEEK_HOLE", 4)
+
+
+def _extents(path):
+    """(start, end) of the regions holding data (sparse-aware)."""
+    out, size = [], os.path.getsize(path)
+    with open(path, "rb") as f:
+        fd, off = f.fileno(), 0
+        while off < size:
+            try:
+                start = os.lseek(fd, off, SEEK_DATA)
+            except OSError:
+                break
+            end = os.lseek(fd, start, SEEK_HOLE)
+            out.append((start, end))
+            off = end
+    return out
+
+
+def same_image(a, b):
+    """None if images a and b hold the same bytes, else where they differ."""
+    if os.path.getsize(a) != os.path.getsize(b):
+        return "sizes %d and %d" % (os.path.getsize(a), os.path.getsize(b))
+    spans = sorted(_extents(a) + _extents(b))
+    with open(a, "rb") as fa, open(b, "rb") as fb:
+        for start, end in spans:
+            off = start
+            while off < end:
+                n = min(1 << 22, end - off)
+                fa.seek(off)
+                fb.seek(off)
+                x, y = fa.read(n), fb.read(n)
+                if x != y:
+                    i = next(k for k in range(len(x)) if x[k] != y[k])
+                    return "first difference at byte %d" % (off + i)
+                off += n
+    return None
+
+
+class Plain(object):
+    def __init__(self, v):
+        self.v = v
+
+    def to_dict(self):
+        return self.v
+
+
+def writers(par, tmp, images, fw_cache):
+    import gzip
+    import zipfile
+    print("writers: min_card_bytes, create_blank, flash, flash_firmware, "
+          "format_data")
+    w = os.path.join(tmp, "w")
+    os.makedirs(w)
+    rc, rs = par.rust("min-card-bytes")
+    if rs != card.min_card_bytes():
+        par.fails.append("min_card_bytes: Python %d, Rust %r"
+                         % (card.min_card_bytes(), rs))
+    else:
+        par.checked += 1
+    n = [0]
+
+    def pair(start):
+        """Two copies of a starting image (or of nothing)."""
+        n[0] += 1
+        a = os.path.join(w, "%d-py.img" % n[0])
+        b = os.path.join(w, "%d-rs.img" % n[0])
+        if start is not None:
+            for d in (a, b):
+                subprocess.run(["cp", "--sparse=always", start, d], check=True)
+        return a, b
+
+    def case(what, start, py_fn, rust_args):
+        a, b = pair(start)
+        before = len(par.fails)
+        par.call(what, lambda: py_fn(a), *[x if x != "@" else b
+                                           for x in rust_args], rename=(b, a))
+        if os.path.exists(a) or os.path.exists(b):
+            if os.path.exists(a) != os.path.exists(b):
+                par.fails.append("%s: the image exists on one side only" % what)
+            else:
+                diff = same_image(a, b)
+                if diff:
+                    par.fails.append("%s: images differ (%s)" % (what, diff))
+                else:
+                    par.checked += 1
+        print("  %s %s" % ("ok  " if len(par.fails) == before else "FAIL", what))
+        for p in (a, b):
+            if os.path.exists(p):
+                os.unlink(p)
+
+    blank = dict(images)["blank"]
+    music = dict(images)["init + music"]
+    foreign = dict(images)["foreign layout"]
+    mn = card.min_card_bytes()
+    for size, what in ((96 << 20, "96 MiB"), ((96 << 20) + 100, "96 MiB + 100"),
+                       (mn, "the minimum"), (mn - 512, "one sector short")):
+        case("create_blank %s" % what, None,
+             lambda a, size=size: card.create_blank(a, size),
+             ["create-blank", "@", str(size)])
+    case("create_blank on an existing file", blank,
+         lambda a: card.create_blank(a, 96 << 20),
+         ["create-blank", "@", str(96 << 20)])
+
+    # firmware in every container, good and bad
+    raw = synth.firmware_bytes()
+    fws = {"raw": raw}
+    p = os.path.join(w, "fw.bin.gz")
+    with gzip.open(p, "wb") as f:
+        f.write(raw)
+    fws["gz"] = p
+    p = os.path.join(w, "fw.ipsw")
+    with zipfile.ZipFile(p, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("Firmware-1.1.5", raw)
+        z.writestr("manifest.plist", "<plist/>")
+    fws["ipsw"] = p
+    p = os.path.join(w, "nofw.zip")
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("readme.txt", "no firmware here")
+    fws["zip without Firmware"] = p
+    fws["bad checksum"] = synth.firmware_bytes(bad_checksum=True)
+    fws["not firmware"] = b"hello" * 1000
+    fws["over 32 MiB"] = synth.firmware_bytes(
+        payload=synth.osos_payload(length=33 << 20))
+    for name in list(fws):
+        if isinstance(fws[name], bytes):
+            p = os.path.join(w, "fw-%s.bin" % name.replace(" ", "_"))
+            open(p, "wb").write(fws[name])
+            fws[name] = p
+    real = sorted(glob.glob(os.path.join(fw_cache, "*.bin.gz")))
+    picks = [x for x in real if any(k in x for k in (
+        "flashpod_1.1.6", "iPod_1.1.5", "iPod_1.0.0", "iPod_2.2.3",
+        "iPod_4.3.1.1", "iPod_5.1.2.1"))]
+    for x in picks:
+        fws[os.path.basename(x)] = x
+    ipsw16 = os.path.expanduser(os.environ.get("FLASHPOD_PARITY_IPSW", ""))
+    if ipsw16 and os.path.exists(ipsw16):
+        fws["real .ipsw"] = ipsw16
+    for name, path in fws.items():
+        case("flash, firmware %s" % name, blank,
+             lambda a, path=path: card.flash(a, path), ["flash", "@", path])
+
+    fw = fws["raw"]
+    case("flash --no-format", blank, lambda a: card.flash(a, fw, format=False),
+         ["flash", "@", fw, "--no-format"])
+    case("flash --max-data-gb 0.05", blank,
+         lambda a: card.flash(a, fw, max_data_gb=0.05),
+         ["flash", "@", fw, "--max-data-gb", "0.05"])
+    case("flash over a card with music", music, lambda a: card.flash(a, fw),
+         ["flash", "@", fw])
+    small = os.path.join(w, "small.img")
+    with open(small, "wb") as f:
+        f.truncate(10 << 20)
+    case("flash a 10 MiB image (too small)", small,
+         lambda a: card.flash(a, fw), ["flash", "@", fw])
+    tiny = os.path.join(w, "tiny-data.img")    # a data partition, no FAT32 room
+    with open(tiny, "wb") as f:
+        f.truncate(mn - 64 * 512)
+    case("flash just under the minimum", tiny, lambda a: card.flash(a, fw),
+         ["flash", "@", fw])
+    case("flash --no-format just under the minimum", tiny,
+         lambda a: card.flash(a, fw, format=False),
+         ["flash", "@", fw, "--no-format"])
+    big = os.path.join(w, "big.img")
+    with open(big, "wb") as f:
+        f.truncate(140 << 30)
+    case("flash --lba48, 140 GiB", big, lambda a: card.flash(a, fw, lba48=True),
+         ["flash", "@", fw, "--lba48"])
+    case("flash, 140 GiB (LBA28 cap)", big, lambda a: card.flash(a, fw),
+         ["flash", "@", fw])
+    case("flash --arm, no disk-mode program", blank,
+         lambda a: card.flash(a, fw, arm=True), ["flash", "@", fw, "--arm"])
+    if "flashpod_1.1.6_2026_10_16.bin.gz" in fws:
+        f16 = fws["flashpod_1.1.6_2026_10_16.bin.gz"]
+        case("flash --arm, flashpod 1.6", blank,
+             lambda a: card.flash(a, f16, arm=True), ["flash", "@", f16, "--arm"])
+        case("flash_firmware 1.6 onto a card with music", music,
+             lambda a: card.flash_firmware(a, f16), ["flash-firmware", "@", f16])
+    case("flash_firmware onto a card with music", music,
+         lambda a: card.flash_firmware(a, fws["gz"]),
+         ["flash-firmware", "@", fws["gz"]])
+    case("flash_firmware onto a foreign layout", foreign,
+         lambda a: card.flash_firmware(a, fw), ["flash-firmware", "@", fw])
+    case("flash_firmware onto a blank card", blank,
+         lambda a: card.flash_firmware(a, fw), ["flash-firmware", "@", fw])
+    case("flash_firmware, bad firmware", music,
+         lambda a: card.flash_firmware(a, fws["bad checksum"]),
+         ["flash-firmware", "@", fws["bad checksum"]])
+    case("format_data on a card with music", music, lambda a: card.format_data(a),
+         ["format-data", "@"])
+    case("format_data on a foreign layout", foreign,
+         lambda a: card.format_data(a), ["format-data", "@"])
+    case("format_data on a blank card", blank, lambda a: card.format_data(a),
+         ["format-data", "@"])
+    narrow = os.path.join(w, "narrow.img")      # FAT partition too small
+    mbr = bytearray(512)
+    struct.pack_into("<BBBBBBBBII", mbr, 446 + 16, 0, 0, 0, 0, 0x0b, 0, 0, 0,
+                     65599, 50000)
+    mbr[510:512] = b"\x55\xaa"
+    with open(narrow, "wb") as f:
+        f.write(mbr)
+        f.truncate(96 << 20)
+    case("format_data, partition too small for FAT32", narrow,
+         lambda a: card.format_data(a), ["format-data", "@"])
 
 
 class TracksResult(object):
@@ -351,6 +566,8 @@ def main():
                  "inspect", path)
         print("  %s %s (error)" % ("ok  " if len(par.fails) == before
                                    else "FAIL", name))
+
+    writers(par, tmp, images, opts.firmware_cache)
 
     print()
     for call, keys in sorted(par.pending.items()):

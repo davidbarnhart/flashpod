@@ -68,3 +68,82 @@ pub fn layout_facts(parts: &[Partition], size: u64) -> (Option<Partition>, Optio
     }
     (fw, data, problems)
 }
+
+
+/// layout.build_mbr_layout: (MBR sector, data start, data sectors);
+/// Err when the device is too small for a data partition.
+pub fn build_mbr_layout(total: u64, lba48: bool, max_data_sectors: Option<u64>)
+    -> Result<([u8; 512], u64, u64), String>
+{
+    let mut data_end = total as i64 - TAIL_RESERVE as i64;
+    if !lba48 {
+        data_end = data_end.min(LBA28_MAX as i64);
+    }
+    if let Some(m) = max_data_sectors.filter(|&m| m > 0) {
+        data_end = data_end.min((DATA_START + m) as i64);
+    }
+    let blocks = data_end - DATA_START as i64;
+    if blocks <= 0 {
+        return Err("device too small for an iPod data partition".into());
+    }
+    let mut mbr = [0u8; 512];
+    let entry = |mbr: &mut [u8; 512], off: usize, ptype: u8, start: u64, count: u64| {
+        mbr[off] = 0;
+        mbr[off + 1..off + 4].copy_from_slice(b"\xfe\xff\xff");
+        mbr[off + 4] = ptype;
+        mbr[off + 5..off + 8].copy_from_slice(b"\xfe\xff\xff");
+        mbr[off + 8..off + 12].copy_from_slice(&(start as u32).to_le_bytes());
+        mbr[off + 12..off + 16].copy_from_slice(&(count as u32).to_le_bytes());
+    };
+    entry(&mut mbr, 446, 0x00, FW_START, FW_BLOCKS);
+    entry(&mut mbr, 462, 0x0b, DATA_START, blocks as u64);
+    mbr[510] = 0x55;
+    mbr[511] = 0xaa;
+    Ok((mbr, DATA_START, blocks as u64))
+}
+
+/// layout.fat_sectors_per_cluster.
+pub fn fat_sectors_per_cluster(data_blocks: u64) -> u64 {
+    let mut spc = 32;
+    while spc > 1 && data_blocks / spc < 65600 {
+        spc /= 2;
+    }
+    spc
+}
+
+/// layout.write_layout_body: zero the lead-in and the last 34 sectors,
+/// then the firmware at sector 63.
+pub fn write_layout_body(dev: &mut dyn crate::BlockDevice, fw: &[u8], total: u64, data_start: u64)
+    -> std::io::Result<()>
+{
+    crate::fat32fmt::write_zeros(dev, 0, data_start * SECTOR)?;
+    let tail = total.saturating_sub(34);
+    crate::fat32fmt::write_zeros(dev, tail * SECTOR, 34 * SECTOR)?;
+    dev.write_at(FW_START * SECTOR, fw)
+}
+
+/// layout.verify_region: Err(VerifyFailed) with its details.
+pub fn verify_region(dev: &mut dyn crate::BlockDevice, fw: &[u8]) -> Result<(), crate::Error> {
+    use crate::error::{Error, ErrorKind};
+    let n = fw.len();
+    let mut off = 0usize;
+    while off < n {
+        let want = (1usize << 20).min(n - off);
+        let chunk = dev.read_vec(FW_START * SECTOR + off as u64, want)?;
+        if chunk.is_empty() {
+            return Err(Error::new(ErrorKind::VerifyFailed, "short read")
+                .detail("reason", "short_read").detail("got", off).detail("want", n));
+        }
+        for (i, &b) in chunk.iter().enumerate() {
+            if b != fw[off + i] {
+                let bad = off + i;
+                return Err(Error::new(ErrorKind::VerifyFailed, "mismatch")
+                    .detail("reason", "mismatch").detail("offset", bad)
+                    .detail("sector", FW_START + bad as u64 / SECTOR)
+                    .detail("card", b).detail("image", fw[bad]));
+            }
+        }
+        off += chunk.len();
+    }
+    Ok(())
+}

@@ -6,9 +6,11 @@
 //! codes. Parity is proved by `scripts/rust_parity.py` in the flashpod repo.
 
 pub mod block;
+pub mod card;
 pub mod entropy;
 pub mod error;
 pub mod fat;
+pub mod fat32fmt;
 pub mod firmware;
 pub mod inspect;
 pub mod itunesdb;
