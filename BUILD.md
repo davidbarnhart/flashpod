@@ -166,7 +166,7 @@ no `--firmware`. See "Self-contained builds" above.
    ```sh
    python3.6 - <<'EOF'
    import urllib.request as u
-   u.urlretrieve("https://github.com/davidbarnhart/flashpod/archive/refs/tags/v0.5.1.tar.gz","src.tgz")
+   u.urlretrieve("https://github.com/davidbarnhart/flashpod/archive/refs/tags/v0.5.2.tar.gz","src.tgz")
    EOF
    tar xf src.tgz
    python3.6 - <<'EOF'
@@ -211,7 +211,7 @@ no `--firmware`. See "Self-contained builds" above.
 7. **Attach it to the release** from any machine with `gh` (gh won't run on
    10.8 — copy the tarball off via a share/USB):
    ```sh
-   gh release upload v0.5.1 flashpod-macos-vintage-no-internet.tar.gz
+   gh release upload v0.5.2 flashpod-macos-vintage-no-internet.tar.gz
    ```
 
 > If you're forced onto a newer PyInstaller, you'd need a `codesign` no-op
