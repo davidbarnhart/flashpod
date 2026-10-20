@@ -6,9 +6,8 @@
 //! wins the sniffing, ID3v1 merged under ID3v2, `(17)Rock` genres, TYER/TDAT
 //! turned into a date, the MPEG length from a Xing/VBRI header or the file
 //! size, FLAC's bitrate from the audio bytes, MP4 `gnre`, and the cases where
-//! mutagen raises (the file is then "unreadable"). WAV and AIFF tags come back
-//! as raw ID3 frames that flashpod's key lookup never matches, so those files
-//! take their title from the file name, as in Python.
+//! mutagen raises (the file is then "unreadable"). WAV and AIFF tags are a
+//! plain ID3 tag, read with EasyID3's getters as tracks.easy_tags does.
 //!
 //! Formats: MP3 (EasyMP3), FLAC, MP4/M4A (EasyMP4), AAC (ADTS/ADIF), AIFF,
 //! WAVE. A file whose sniffing picks another mutagen format (Ogg, APE, ...)

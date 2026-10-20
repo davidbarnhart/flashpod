@@ -160,7 +160,8 @@ class RawTarget:
                 progress(nr, total, relpath)
             try:
                 t = self.read_track_file(relpath)
-            except (OSError, ValueError) as exc:
+            except Exception as exc:  # noqa: BLE001 -- mutagen raises its own
+                # errors too; skip the file, as make_track does on an add
                 t = None
                 if report:
                     report(f"skipping {relpath}: {exc}")

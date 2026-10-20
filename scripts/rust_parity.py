@@ -101,7 +101,7 @@ class Parity(object):
                 self.fails.append("%s: %s" % (what, b))
         return bad
 
-    def call(self, what, py_fn, *rust_args, rename=None, ignore=()):
+    def call(self, what, py_fn, *rust_args, rename=None, ignore=(), norm=None):
         """Run py_fn() and fpcore *rust_args; compare result or error.
         ``rename=(rust_path, python_path)``: the two sides worked on their
         own copies, so the Rust copy's path is read as the Python one's."""
@@ -117,6 +117,8 @@ class Parity(object):
             if py[0] == "ok" and isinstance(py[1], dict):
                 py[1].pop(k, None)
         rs = ("ok", rs) if rc == 0 else ("err", rs)
+        if norm and py[0] == rs[0] == "ok":
+            py, rs = ("ok", norm(py[1])), ("ok", norm(rs[1]))
         if py[0] != rs[0]:
             self.fails.append("%s: Python %s %r, Rust %s %r"
                               % (what, py[0], py[1], rs[0], rs[1]))
@@ -351,8 +353,8 @@ PYTHON_TAGS = False
 
 
 def _audio_fields(audio, size):
-    from flashpod.tracks import first
-    tags = audio.tags or {}
+    from flashpod.tracks import easy_tags, first
+    tags = easy_tags(audio)
     info = audio.info
     return {"audio": {
         "title": first(tags, "title"), "artist": first(tags, "artist"),
@@ -547,7 +549,7 @@ def library_ops(par, tmp, images, fw_cache):
     env = dict(FLASHPOD_SEED=str(SEED3), FLASHPOD_NOW=str(NOW3))
 
     def case(what, start, py_fn, rust_args, tags=None, rust_env=None,
-             py_setup=None, py_teardown=None):
+             py_setup=None, py_teardown=None, norm=None):
         n[0] += 1
         a = os.path.join(w, "%d-py.img" % n[0])
         b = os.path.join(w, "%d-rs.img" % n[0])
@@ -569,7 +571,8 @@ def library_ops(par, tmp, images, fw_cache):
             def run_py():
                 with entropy.deterministic(SEED3, NOW3):
                     return wrap(py_fn(a))
-            par.call(what, run_py, *args, rename=(b, a), ignore=("seconds",))
+            par.call(what, run_py, *args, rename=(b, a), ignore=("seconds",),
+                     norm=norm)
         finally:
             if py_teardown:
                 py_teardown()
@@ -734,14 +737,14 @@ def library_ops(par, tmp, images, fw_cache):
          lambda a: card.rebuild(a, name="Re", save=False),
          ["rebuild", "@", "--name", "Re", "--no-save"], tags=card_tags(mcard))
 
-    # every format at once: the tag corpus files Python reads (an .aac makes
-    # Python's add fail, and Rust doesn't read Ogg), added, then rebuilt
+    # every format at once: the tag corpus files Python reads (Rust doesn't
+    # read Ogg), added, then rebuilt
     import tag_corpus
     from flashpod import tracks
     readable = []
     for label, p in tag_corpus.build(os.path.join(w, "tagc")):
         r = _py_tags(lambda p=p: (tracks.read_audio(p), os.path.getsize(p)))
-        if ("audio" in r or "unrecognized" in r) and not p.endswith(".aac") \
+        if ("audio" in r or "unrecognized" in r) \
                 and "Ogg" not in label and not _too_big(r):
             readable.append(p)
     big = os.path.join(w, "tags-card.img")
@@ -755,6 +758,23 @@ def library_ops(par, tmp, images, fw_cache):
         card.add(big, readable)
     case("rebuild a card of every format", big, lambda a: card.rebuild(a),
          ["rebuild", "@"])
+
+    # a rebuild past files mutagen can't read: skipped and named (0.5.2);
+    # the reason after "skipping PATH:" is mutagen's text on one side
+    unreadable = [p for label, p in tag_corpus.build(os.path.join(w, "tagc2"))
+                  if "error" in _py_tags(lambda p=p: (tracks.read_audio(p),
+                                                       os.path.getsize(p)))][:12]
+    with card.open_target(big, write=True) as c:
+        for i, p in enumerate(unreadable):
+            c.target().fs.write_file("iPod_Control/Music/F07/bad%02d%s" % (
+                i, os.path.splitext(p)[1]), open(p, "rb").read())
+
+    def reasons_cut(d):
+        d = dict(d)
+        d["skipped"] = [m.split(": ", 1)[0] for m in d.get("skipped", [])]
+        return d
+    case("rebuild past %d unreadable files" % len(unreadable), big,
+         lambda a: card.rebuild(a), ["rebuild", "@"], norm=reasons_cut)
 
 
 class TracksResult(object):

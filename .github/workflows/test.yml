@@ -198,6 +198,11 @@ jobs:
         shell: bash
         run: PYTHONPATH=. python scripts/test_itunesdb_roundtrip.py
 
+      - name: .aac files add, WAV/AIFF keep their tags, rebuild skips a bad file
+        if: runner.os == 'Linux'
+        shell: bash
+        run: PYTHONPATH=. python scripts/test_tag_fixes.py
+
       - name: Rust port (rust/flashpod-core) builds, tests, builds for wasm, matches Python
         if: runner.os == 'Linux'
         shell: bash

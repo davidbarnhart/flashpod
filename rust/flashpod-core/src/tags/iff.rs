@@ -1,6 +1,6 @@
 //! mutagen.aiff.AIFF and mutagen.wave.WAVE over the IFF chunk reader. Their
-//! tags are plain ID3 frames (not EasyID3), which flashpod's key lookup never
-//! matches: the ID3 chunk is read only for the errors it can raise.
+//! tags are a plain ID3 tag in an 'ID3 '/'id3 ' chunk, which flashpod reads
+//! with EasyID3's getters (tracks.easy_tags, since 0.5.2).
 
 use super::{err, id3, pytext, EasyTags, Loaded, PyFile, Stream, TagError, R};
 
@@ -103,14 +103,22 @@ fn fatal_or(e: ChunkErr, msg: &str) -> TagError {
     }
 }
 
-/// The ID3 chunk's tag, read for its errors. `find` gives its data offset,
-/// None for ID3NoHeaderError.
-fn id3_chunk(f: &mut PyFile, at: Option<u64>) -> R<()> {
-    if let Some(off) = at {
-        f.seek(off);
-        id3::load(f)?;
+/// The ID3 chunk's tag at `at` (None: no chunk, ID3NoHeaderError).
+fn id3_chunk(f: &mut PyFile, at: Option<u64>) -> R<Option<id3::Id3Tags>> {
+    match at {
+        Some(off) => {
+            f.seek(off);
+            id3::load(f)
+        }
+        None => Ok(None),
     }
-    Ok(())
+}
+
+fn easy(tags: &Option<id3::Id3Tags>) -> R<EasyTags> {
+    match tags {
+        Some(t) => t.easy(),
+        None => Ok(EasyTags::default()),
+    }
 }
 
 /// read_float: the 80-bit sample rate; Err for an overflow
@@ -148,7 +156,7 @@ pub fn load_aiff(f: &mut PyFile) -> R<Loaded> {
         Err(ChunkErr::Invalid) => None,
         Err(ChunkErr::Fatal(e)) => return Err(e),
     };
-    id3_chunk(f, at)?;
+    let tags = id3_chunk(f, at)?;
     // AIFFInfo
     let r = root(f, false).map_err(|e| fatal_or(e, "Invalid chunk"))?;
     let comm = match subchunks(f, &r, false)?.into_iter().find(|c| c.id == "COMM") {
@@ -179,7 +187,7 @@ pub fn load_aiff(f: &mut PyFile) -> R<Loaded> {
     if bitrate > i64::MAX as i128 || bitrate < i64::MIN as i128 {
         return err("bitrate out of range for the Rust port");
     }
-    Ok(Loaded { tags: EasyTags::default(), length, bitrate: bitrate as i64, sample_rate: rate })
+    Ok(Loaded { tags: easy(&tags)?, length, bitrate: bitrate as i64, sample_rate: rate })
 }
 
 /// _WaveFile: the root's chunks, with the first 'ID3' renamed 'id3'
@@ -225,6 +233,6 @@ pub fn load_wave(f: &mut PyFile) -> R<Loaded> {
         Err(ChunkErr::Invalid) => None,
         Err(ChunkErr::Fatal(e)) => return Err(e),
     };
-    id3_chunk(f, at)?;
-    Ok(Loaded { tags: EasyTags::default(), length, bitrate, sample_rate: rate })
+    let tags = id3_chunk(f, at)?;
+    Ok(Loaded { tags: easy(&tags)?, length, bitrate, sample_rate: rate })
 }

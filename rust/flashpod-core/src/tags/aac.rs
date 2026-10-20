@@ -1,8 +1,8 @@
 //! mutagen.aac.AAC: an ADTS stream (its first frames give the rate and the
 //! bitrate, the file size the length) or an ADIF header. No tags.
 //!
-//! mutagen's ADTS bitrate is a float (Python's flashpod then fails to write
-//! the database); it is always a whole number, so it fits the i64 here.
+//! mutagen's ADTS bitrate is a float of a whole number; flashpod takes its
+//! int() (since 0.5.2), so it fits the i64 here.
 
 use super::bits::{BitErr, BitReader};
 use super::{err, EasyTags, Loaded, PyFile, Stream, R};

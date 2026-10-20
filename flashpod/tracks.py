@@ -10,6 +10,7 @@ import os
 import sys
 
 import mutagen
+from mutagen.id3 import ID3
 try:
     from mutagen.mp3 import EasyMP3            # mutagen >= ~1.20
 except ImportError:                            # older layouts
@@ -22,6 +23,39 @@ def first(tags, key):
     if isinstance(val, list):
         val = val[0] if val else None
     return str(val) if val else None
+
+
+# EasyID3's keys for the ones flashpod reads, over a plain ID3 tag.
+_ID3_TEXT = {"title": "TIT2", "artist": "TPE1", "album": "TALB",
+             "composer": "TCOM", "tracknumber": "TRCK"}
+
+
+class _ID3Keys(object):
+    """What EasyID3 would give for flashpod's keys, over the plain ID3 tag
+    mutagen hands back for WAV and AIFF even with easy=True (whose frame-id
+    keys no "title" lookup matches, so those files used to lose their tags).
+    Same getters as mutagen.easyid3."""
+
+    def __init__(self, id3):
+        self.id3 = id3
+
+    def get(self, key):
+        try:
+            if key == "genre":
+                return self.id3["TCON"].genres
+            if key == "date":
+                return [stamp.text for stamp in self.id3["TDRC"].text]
+            return list(self.id3[_ID3_TEXT[key]])
+        except KeyError:
+            return None
+
+
+def easy_tags(audio):
+    """A loaded file's tags with EasyID3/Vorbis/EasyMP4-style keys ({} when
+    it has none)."""
+    if isinstance(audio.tags, ID3):
+        return _ID3Keys(audio.tags)
+    return audio.tags or {}
 
 
 AUDIO_EXTS = {".mp3", ".m4a", ".m4b", ".aac", ".wav", ".aif", ".aiff", ".flac"}
@@ -100,7 +134,7 @@ def _track_from_audio(audio, fallback_title, size, ext=None):
     fallback title (used when untagged), and the file's byte size. Shared by
     make_track (tags from a path) and the rebuild path (tags from bytes). The
     unique track id is assigned by the caller at commit time, not here."""
-    tags = audio.tags or {}
+    tags = easy_tags(audio)
     t = itunesdb.Track()
     t.title = first(tags, "title") or fallback_title
     t.artist = first(tags, "artist")
@@ -125,7 +159,9 @@ def _track_from_audio(audio, fallback_title, size, ext=None):
     bitrate = getattr(info, "bitrate", 0)
     if not bitrate and info.length:
         bitrate = int(size * 8 / info.length)
-    t.bitrate = bitrate // 1000
+    # int(): mutagen's ADTS (.aac) bitrate is a float, which the database
+    # writer can't pack (adding an .aac used to fail outright)
+    t.bitrate = int(bitrate) // 1000
     t.samplerate = getattr(info, "sample_rate", 0)
     t.size = size
     return t
