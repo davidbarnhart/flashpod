@@ -8,8 +8,12 @@
 pub mod block;
 pub mod entropy;
 pub mod error;
+pub mod fat;
+pub mod firmware;
 pub mod inspect;
+pub mod itunesdb;
 pub mod layout;
+pub mod text;
 
 pub use block::BlockDevice;
 pub use error::{Error, ErrorKind};

@@ -38,7 +38,6 @@ import hashlib
 import io
 import os
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -109,7 +108,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--asset", default=None)
     opts = ap.parse_args()
-    tmp = tempfile.mkdtemp(prefix="fp-arm-")
+    tmp = synth.scratch_dir("fp-arm-")
     known = bytes(range(256)) * 64
     unknown = bytes(reversed(range(256))) * 64
     firmware.KNOWN_AUPD[hashlib.sha256(known).hexdigest()] = "synthetic test"

@@ -119,6 +119,17 @@ class Parity(object):
         return py, rs
 
 
+class TracksResult(object):
+    """card.tracks returns a plain dict; give it the to_dict() the
+    comparison expects."""
+
+    def __init__(self, d):
+        self.d = d
+
+    def to_dict(self):
+        return self.d
+
+
 def corpus(tmp, fw_cache):
     """(name, path) of card images, all made with the Python library in
     deterministic mode (same bytes every run)."""
@@ -171,6 +182,36 @@ def corpus(tmp, fw_cache):
         card.create_blank(p, 130 << 30)
         card.flash(p, fw, lba48=True)
         out.append(("130 GiB, --lba48", p))
+        p = img("inited.img")                # an empty library
+        shutil.copy(img("flashed.img"), p)
+        card.init(p)
+        out.append(("init, no music", p))
+        p = img("unicode.img")               # non-ASCII tags and names
+        shutil.copy(img("flashed.img"), p)
+        card.init(p, name="Bibliothèque ß 音楽")
+        card.add(p, [unicode_music(os.path.join(tmp, "umusic"))])
+        out.append(("non-ASCII tags", p))
+        p = img("corrupt.img")               # garbage after the DB's magic
+        shutil.copy(img("music.img"), p)
+        corrupt_db(p)
+        out.append(("damaged iTunesDB", p))
+        p = img("nodb.img")                  # iPod_Control, no iTunesDB
+        shutil.copy(img("music.img"), p)
+        with card.open_target(p, write=True) as c:
+            c.target().fs.remove(card.DB_PATH)
+        out.append(("no iTunesDB, music files", p))
+        p = img("orphan.img")                # a file no track points at,
+        shutil.copy(img("music.img"), p)     # a track whose file is gone
+        loc = card.tracks(p)["tracks"][0]["location"]
+        with card.open_target(p, write=True) as c:
+            fs = c.target().fs
+            fs.write_file("iPod_Control/Music/F00/stray.mp3", b"\xff" * 3000)
+            fs.remove(loc.lstrip(":").replace(":", "/"))
+        out.append(("orphan + missing", p))
+        p = img("nofree.img")                # FSInfo without a free count
+        shutil.copy(img("music.img"), p)
+        no_free_count(p)
+        out.append(("no FSInfo free count", p))
         for path in sorted(glob.glob(os.path.join(fw_cache, "*.bin.gz")))[:30]:
             name = os.path.basename(path)
             p = img("fw-" + name + ".img")
@@ -181,7 +222,56 @@ def corpus(tmp, fw_cache):
                 os.unlink(p)
                 continue
             out.append(("firmware " + name, p))
+            if name.startswith("flashpod_1.1.6"):
+                q = img("fw16-music.img")    # the library-fix ceiling
+                shutil.copy(p, q)
+                card.init(q)
+                card.add(q, [music])
+                out.append(("flashpod 1.6 + music", q))
+                q = img("fw16-armed.img")
+                card.create_blank(q, 96 << 20)
+                card.flash(q, path, arm=True)
+                out.append(("flashpod 1.6, armed", q))
     return out
+
+
+def unicode_music(root):
+    """A few synthetic MP3s with non-ASCII tags (ffmpeg)."""
+    os.makedirs(root)
+    songs = [("Café Tacvba", "Ré", "Él"), ("Straße", "Großes Album", "Fuß"),
+             ("坂本龍一", "音楽図鑑", "Tibetan Dance"), ("İstanbul", "Ölüm", "Şarkı")]
+    for i, (artist, album, title) in enumerate(songs):
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
+                        "-i", "sine=frequency=%d:duration=1" % (300 + 50 * i),
+                        "-ac", "1", "-ar", "22050", "-b:a", "32k",
+                        "-metadata", "artist=" + artist,
+                        "-metadata", "album=" + album,
+                        "-metadata", "title=" + title,
+                        os.path.join(root, "u%d.mp3" % i)], check=True)
+    return root
+
+
+def corrupt_db(path):
+    """Overwrite the bytes after every "mhbd" magic in the data area."""
+    with open(path, "r+b") as f:
+        data = f.read()
+        i = data.find(b"mhbd", 65599 * 512)
+        while i >= 0:
+            f.seek(i + 4)
+            f.write(b"\xff\xfe" * 40)
+            i = data.find(b"mhbd", i + 4)
+
+
+def no_free_count(path):
+    """Set the FSInfo free-cluster count to 0xFFFFFFFF ("unknown")."""
+    with open(path, "r+b") as f:
+        mbr = f.read(512)
+        start = struct.unpack_from("<I", mbr, 462 + 8)[0]
+        f.seek(start * 512)
+        boot = f.read(512)
+        fsinfo = struct.unpack_from("<H", boot, 48)[0]
+        f.seek((start + fsinfo) * 512 + 488)
+        f.write(b"\xff\xff\xff\xff")
 
 
 def main():
@@ -189,7 +279,8 @@ def main():
     ap.add_argument("--firmware-cache", default=os.path.expanduser(
         "~/.cache/flashpod/firmware"))
     ap.add_argument("--keep", action="store_true",
-                    help="keep the corpus directory")
+                    help="keep the corpus directory (it is kept anyway on a "
+                         "mismatch)")
     opts = ap.parse_args()
     par = Parity(build())
     tmp = tempfile.mkdtemp(prefix="fp-parity-")
@@ -230,6 +321,29 @@ def main():
                  "inspect", path)
         print("  %s %s" % ("ok  " if len(par.fails) == before else "FAIL",
                            name))
+    print("inspect with FLASHPOD_DB_LIMIT set")
+    for value in ("0", "1000", "junk"):
+        os.environ["FLASHPOD_DB_LIMIT"] = value
+        for name, path in images:
+            if "music" in name or "1.6" in name:
+                before = len(par.fails)
+                par.call("inspect %s (limit %s)" % (name, value),
+                         lambda: card.inspect(path), "inspect", path)
+                print("  %s %s, FLASHPOD_DB_LIMIT=%s"
+                      % ("ok  " if len(par.fails) == before else "FAIL",
+                         name, value))
+    del os.environ["FLASHPOD_DB_LIMIT"]
+
+    print("tracks")
+    for name, path in images:
+        if os.path.getsize(path) < 512 or name in ("foreign layout",):
+            continue                         # Python raises a bare OSError
+        before = len(par.fails)
+        par.call("tracks %s" % name, lambda: TracksResult(card.tracks(path)),
+                 "tracks", path)
+        print("  %s %s" % ("ok  " if len(par.fails) == before else "FAIL",
+                           name))
+
     for name, path in (("a missing path", os.path.join(tmp, "nope.img")),
                        ("a directory", tmp)):
         before = len(par.fails)
@@ -241,10 +355,10 @@ def main():
     print()
     for call, keys in sorted(par.pending.items()):
         print("PENDING %s: %s" % (call, ", ".join(sorted(keys))))
-    if not opts.keep:
-        shutil.rmtree(tmp, ignore_errors=True)
-    else:
+    if opts.keep or par.fails:
         print("corpus kept in %s" % tmp)
+    else:
+        shutil.rmtree(tmp, ignore_errors=True)
     if par.fails:
         print("\n%d MISMATCHES" % len(par.fails))
         for f in par.fails:

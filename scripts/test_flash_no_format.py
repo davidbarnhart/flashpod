@@ -29,7 +29,6 @@ import hashlib
 import os
 import subprocess
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -74,7 +73,7 @@ def data_region(img):
 
 
 def main():
-    tmp = tempfile.mkdtemp(prefix="fp-noformat-")
+    tmp = synth.scratch_dir("fp-noformat-")
     fw = synth.write_firmware(os.path.join(tmp, "fw.bin"))
     fw2 = synth.write_firmware(os.path.join(tmp, "fw2.bin"), seed=2)
     music = synth.make_music(os.path.join(tmp, "music"))

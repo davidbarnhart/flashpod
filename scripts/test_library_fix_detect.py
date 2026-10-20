@@ -29,11 +29,9 @@ With --asset also: a card flashed with the real flashpod 1.6 has the fix,
 and Apple's 1.5 (from the cache, if there) doesn't.
 """
 import argparse
-import builtins
 import io
 import os
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -41,7 +39,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 
 import synth_fixtures as synth  # noqa: E402
-from flashpod import card, cli, firmware, layout, library, platform  # noqa: E402
+from flashpod import card, cli, firmware, library, platform  # noqa: E402
 from flashpod.target import MountTarget, firmware_reader  # noqa: E402
 
 fails = []
@@ -102,7 +100,7 @@ def main():
     ap.add_argument("--asset", default=None)
     opts = ap.parse_args()
     os.environ.pop("FLASHPOD_DB_LIMIT", None)
-    tmp = tempfile.mkdtemp(prefix="fp-libfix-")
+    tmp = synth.scratch_dir("fp-libfix-")
     music = synth.make_music(os.path.join(tmp, "music"))
     alpha = os.path.join(music, "Alpha Band")
     beta = os.path.join(music, "Beta Group", "Only Album", "03 Third.mp3")

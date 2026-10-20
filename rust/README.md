@@ -34,6 +34,15 @@ python3 scripts/rust_parity.py
 ## Progress
 
 - M0: harness, entropy, block device, error codes. Done.
-- M1 (read-only): `inspect`'s layout fields (size, partitions, layout_ok,
-  problems, past_128gib) match on every card in the corpus. Firmware,
-  filesystem and iTunesDB fields: pending.
+- M1 (read-only): done. `inspect` (layout, firmware identification
+  including openpod fixes and the disk-mode arm state, FAT32, the iTunesDB
+  with its ceiling, music files, orphans, missing) and `tracks` match the
+  Python library field for field on the whole corpus: 43 cards (edge cases,
+  non-ASCII tags, a damaged DB, missing/orphaned files, an unknown FSInfo
+  count, a 130 GiB card, flashpod 1.6 with music and armed, and every
+  cached catalog firmware), FLASHPOD_DB_LIMIT variants, and the error
+  cases. Python's casefold, latin-1 and UTF-16 "replace" decoding,
+  `rstrip` and struct error messages are reproduced where the output
+  depends on them (`text.rs`).
+- Next, M2: layout, FAT32 format and writing, `create_blank`, `flash`,
+  `flash_firmware`, `format_data`, compared byte for byte.

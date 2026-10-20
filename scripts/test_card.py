@@ -17,7 +17,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -84,7 +83,7 @@ def refused_unchanged(exc_type, img, fn, *a, **kw):
 
 
 def main():
-    tmp = tempfile.mkdtemp(prefix="fp-card-")
+    tmp = synth.scratch_dir("fp-card-")
     music = synth.make_music(os.path.join(tmp, "music"))
     fw = synth.write_firmware(os.path.join(tmp, "fw.bin"))
     fw2 = synth.write_firmware(os.path.join(tmp, "fw2.bin"), seed=7,

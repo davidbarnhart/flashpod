@@ -19,10 +19,11 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import synth_fixtures as synth  # noqa: E402
 from flashpod import card  # noqa: E402
 
 fails = []
@@ -45,7 +46,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--openpod", default=os.path.expanduser("~/source/openpod-gen1"))
     opts = ap.parse_args()
-    tmp = tempfile.mkdtemp(prefix="fp-fwid-")
+    tmp = synth.scratch_dir("fp-fwid-")
     entries = card.firmware_catalog()
     local = [e for e in entries if e["local"]]
     if not local:

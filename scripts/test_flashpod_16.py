@@ -21,12 +21,13 @@ import hashlib
 import os
 import shutil
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
+
+import synth_fixtures as synth  # noqa: E402
 
 fails = []
 
@@ -49,7 +50,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--asset", required=True)
     opts = ap.parse_args()
-    tmp = tempfile.mkdtemp(prefix="fp-16-")
+    tmp = synth.scratch_dir("fp-16-")
     cache = os.path.join(tmp, "xdg")
     os.makedirs(os.path.join(cache, "flashpod", "firmware"))
     os.environ["XDG_CACHE_HOME"] = cache

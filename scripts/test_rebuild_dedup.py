@@ -19,7 +19,6 @@ Against the tree before the fix the first check fails (1 track re-added).
 import os
 import subprocess
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -47,7 +46,7 @@ def fresh(tmp, name, fw):
 
 
 def main():
-    tmp = tempfile.mkdtemp(prefix="fp-rebuild-")
+    tmp = synth.scratch_dir("fp-rebuild-")
     fw = synth.write_firmware(os.path.join(tmp, "fw.bin"))
     music = synth.make_music(os.path.join(tmp, "music"))
     tagged = os.path.join(music, "Alpha Band", "First Album", "01 Opening.mp3")
