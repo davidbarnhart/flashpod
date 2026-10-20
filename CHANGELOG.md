@@ -1,11 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.5.2 (2026-10-20)
+
+- `.aac` files can be added. Adding one failed with "required argument is
+  not an integer" (and took the rest of the batch with it).
+- WAV and AIFF files keep their tags. Their title, artist, album, genre,
+  composer, track number and year were ignored: the title was the file name
+  and the rest empty. Files added with earlier versions keep the old entries
+  until a `flashpod rebuild`, which re-reads every file's tags.
+- `flashpod rebuild` skips a file on the card it can't read and names it,
+  as `add` does, instead of stopping with an error.
+
+## 0.5.1 (2026-10-20)
 
 - FLAC tracks keep their type through later changes. Reading the iTunesDB
   ignored each track's type marker and time added, so every save after a
   load (any `add`, `rm` or `rebuild`) rewrote the FLAC tracks already on
   the card as MP3 ones and dated every track "now". Both are now read back.
+  A card already changed by 0.5.0 or earlier still has MP3 markers on its
+  older FLAC tracks; `flashpod rebuild` re-derives each track's type from
+  its file and restores them (it also renumbers the tracks).
 
 ## 0.5.0 (2026-10-17)
 
