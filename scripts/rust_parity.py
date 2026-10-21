@@ -62,6 +62,25 @@ def build():
     return os.path.join(RUST, "target", "release", "fpcore")
 
 
+def build_wasm(tmp):
+    """The wasm build of flashpod_core::api (rust/wasm-check) and a wrapper
+    that runs it under Node with fpcore run's arguments; None without node."""
+    import shutil as _sh
+    node = _sh.which("node")
+    if not node:
+        return None
+    subprocess.run([cargo(), "build", "--release", "-q", "-p", "wasm-check",
+                    "--target", "wasm32-unknown-unknown"], cwd=RUST, check=True)
+    wasm = os.path.join(RUST, "target", "wasm32-unknown-unknown", "release",
+                        "wasm_check.wasm")
+    runner = os.path.join(tmp, "fpcore-wasm")
+    with open(runner, "w") as f:
+        f.write('#!/bin/sh\nshift\nexec "%s" "%s" "%s" "$@"\n'
+                % (node, os.path.join(HERE, "wasm_check.mjs"), wasm))
+    os.chmod(runner, 0o755)
+    return runner, os.path.getsize(wasm)
+
+
 class Parity(object):
     def __init__(self, fpcore):
         self.fpcore = fpcore
@@ -555,7 +574,7 @@ def library_ops(par, tmp, images, fw_cache):
         b = os.path.join(w, "%d-rs.img" % n[0])
         for d in (a, b):
             subprocess.run(["cp", "--sparse=always", start, d], check=True)
-        args = [x if x != "@" else b for x in rust_args]
+        args = [x.replace("@CARD@", b) if x != "@" else b for x in rust_args]
         if tags is not None and PYTHON_TAGS:
             tp = os.path.join(w, "%d-tags.json" % n[0])
             json.dump(tags, open(tp, "w"))
@@ -701,6 +720,102 @@ def library_ops(par, tmp, images, fw_cache):
     case("remove beside a FLAC track", fcard,
          lambda a: card.remove(a, what=keep[:1]), ["remove", "@"] + keep[:1])
 
+    # progress and cancel (M5): the same events, and a cancelled add saves
+    # exactly the tracks already copied, on both sides
+    def recorded(fn, cancel_after=None):
+        def run(a):
+            events, files = [], [0]
+
+            def progress(stage, done, total, item):
+                if stage in ("tags", "copy"):
+                    files[0] += 1
+                events.append([stage, done, total, item])
+
+            def cancelled():
+                return cancel_after is not None and files[0] >= cancel_after
+            d = fn(a, progress, cancelled).to_dict()
+            d["events"] = events
+            return Plain(d)
+        return run
+    nmusic = len(source_tags([music]))
+    ids_m = [str(t["id"]) for t in card.tracks(mcard)["tracks"]]
+    case("add with progress", inited,
+         recorded(lambda a, p, c: card.add(a, [music], progress=p, cancelled=c)),
+         ["add", "@", music, "--events"])
+    for k in (1, 3, nmusic + 1, nmusic + 3, 99):
+        case("add cancelled after %d files announced" % k, inited,
+             recorded(lambda a, p, c: card.add(a, [music], progress=p, cancelled=c), k),
+             ["add", "@", music, "--events", "--cancel-after", str(k)])
+    case("plan_add with progress", mcard,
+         recorded(lambda a, p, c: card.plan_add(a, [music], progress=p, cancelled=c)),
+         ["plan-add", "@", music, "--events"])
+    case("plan_add cancelled", inited,
+         recorded(lambda a, p, c: card.plan_add(a, [music], progress=p, cancelled=c), 2),
+         ["plan-add", "@", music, "--events", "--cancel-after", "2"])
+    case("rebuild with progress", mcard,
+         recorded(lambda a, p, c: card.rebuild(a, progress=p)),
+         ["rebuild", "@", "--events"])
+
+    # the JSON command API (flashpod_core::api, what emupod's app calls),
+    # natively through fpcore run and again in the wasm build under Node
+    def api(**cmd):
+        return json.dumps(dict(cmd, seed=SEED3, now=NOW3))
+    # a browser host has no folders to walk: it passes the files themselves
+    from flashpod import tracks as _tracks
+    mfiles = _tracks.expand([music], report=lambda m: None)
+    wasm = build_wasm(w)
+    print("  wasm build: %s" % ("%d bytes" % wasm[1] if wasm else
+                                "SKIPPED (no node)"))
+    native_case = case
+
+    def case(what, start, py_fn, rust_args, **kw):        # noqa: F811
+        native_case(what, start, py_fn, rust_args, **kw)
+        if wasm and rust_args[0] == "run":
+            saved_fpcore = par.fpcore
+            par.fpcore = wasm[0]
+            try:
+                native_case(what + " (wasm)", start, py_fn, rust_args, **kw)
+            finally:
+                par.fpcore = saved_fpcore
+    apifw = synth.write_firmware(os.path.join(w, "apifw.bin"))
+    case("api init", flashed, lambda a: card.init(a), ["run", "@", api(op="init")])
+    case("api add", inited,
+         recorded(lambda a, p, c: card.add(a, [music], progress=p, cancelled=c)),
+         ["run", "@", api(op="add", files=mfiles), "--events"])
+    case("api add, cancelled", inited,
+         recorded(lambda a, p, c: card.add(a, [music], progress=p, cancelled=c), 8),
+         ["run", "@", api(op="add", files=mfiles), "--events", "--cancel-after", "8"])
+    case("api add past the free space, fit", small,
+         lambda a: card.add(a, bigs, policy={"full": "fit"}),
+         ["run", "@", api(op="add", files=bigs, full="fit")])
+    case("api plan_add", mcard, lambda a: card.plan_add(a, [music]),
+         ["run", "@", api(op="plan_add", files=mfiles)])
+    case("api remove", mcard, lambda a: card.remove(a, what=ids_m[:1]),
+         ["run", "@", api(op="remove", what=ids_m[:1])])
+    case("api remove, no match", mcard, lambda a: card.remove(a, what=["artist", "Nobody"]),
+         ["run", "@", api(op="remove", what=["artist", "Nobody"])])
+    case("api rebuild", mcard, lambda a: card.rebuild(a), ["run", "@", api(op="rebuild")])
+    case("api inspect", mcard, lambda a: card.inspect(a),
+         ["run", "@", api(op="inspect", path="@CARD@")])
+    case("api tracks", mcard, lambda a: TracksResult(card.tracks(a)),
+         ["run", "@", api(op="tracks")])
+    case("api flash", blank, lambda a: card.flash(a, apifw),
+         ["run", "@", api(op="flash"), "--blob", apifw])
+    case("api flash --no-format --arm (refused: synthetic aupd)", flashed,
+         lambda a: card.flash(a, apifw, format=False, arm=True),
+         ["run", "@", api(op="flash", format=False, arm=True), "--blob", apifw])
+    case("api flash_firmware", flashed, lambda a: card.flash_firmware(a, apifw),
+         ["run", "@", api(op="flash_firmware"), "--blob", apifw])
+    case("api format_data", mcard, lambda a: card.format_data(a),
+         ["run", "@", api(op="format_data")])
+    notfw = one                                   # an MP3, not firmware
+    case("api flash, not firmware", blank, lambda a: card.flash(a, notfw),
+         ["run", "@", api(op="flash"), "--blob", notfw])
+    case("api min_card_bytes", blank, lambda a: Plain(card.min_card_bytes()),
+         ["run", "@", api(op="min_card_bytes")])
+
+    case = native_case
+
     # remove
     ids = [str(t["id"]) for t in card.tracks(mcard)["tracks"]]
     artist = card.tracks(mcard)["tracks"][0]["artist"]
@@ -752,12 +867,23 @@ def library_ops(par, tmp, images, fw_cache):
     card.flash(big, synth.write_firmware(os.path.join(w, "fw2.bin")))
     with entropy.deterministic(SEED3, NOW3):
         card.init(big)
+    fresh_big = os.path.join(w, "tags-card-fresh.img")
+    subprocess.run(["cp", "--sparse=always", big, fresh_big], check=True)
     case("add %d files of every format" % len(readable), big,
          lambda a: card.add(a, readable), ["add", "@"] + readable)
     with entropy.deterministic(SEED3, NOW3):
         card.add(big, readable)
     case("rebuild a card of every format", big, lambda a: card.rebuild(a),
          ["rebuild", "@"])
+    if wasm:                                       # every format, in wasm too
+        saved_fpcore = par.fpcore
+        for runner, tag in ((saved_fpcore, ""), (wasm[0], " (wasm)")):
+            par.fpcore = runner
+            case("api add %d files of every format%s" % (len(readable), tag),
+                 fresh_big, lambda a: card.add(a, readable),
+                 ["run", "@", json.dumps({"op": "add", "files": readable,
+                                          "seed": SEED3, "now": NOW3})])
+        par.fpcore = saved_fpcore
 
     # a rebuild past files mutagen can't read: skipped and named (0.5.2);
     # the reason after "skipping PATH:" is mutagen's text on one side

@@ -8,7 +8,7 @@ use crate::entropy::Entropy;
 use crate::error::{Error, ErrorKind};
 use crate::fat::{self, Fat32, SECTOR};
 use crate::itunesdb::{self, Library, Track};
-use crate::library::{self, AudioInfo, Options, TagSource, ADD_HEADROOM};
+use crate::library::{self, AudioInfo, Hooks, Options, TagSource, ADD_HEADROOM};
 use crate::text::py_repr;
 use serde_json::{json, Value};
 
@@ -124,7 +124,7 @@ pub fn remove(dev: &mut dyn BlockDevice, what: &[String], ent: &mut Entropy) -> 
 
 /// RawTarget.copy: a collision-free fp###### name in a random F## folder.
 fn copy(fs: &mut Fat32, src: &str, read_source: &mut dyn FnMut(&str) -> std::io::Result<Vec<u8>>,
-        ent: &mut Entropy) -> Result<String, String> {
+        ent: &mut Entropy, progress: &mut dyn FnMut(u64, u64)) -> Result<String, String> {
     let music = "iPod_Control/Music";
     let mut fdirs: Vec<String> = fs
         .listdir(music)?
@@ -150,7 +150,7 @@ fn copy(fs: &mut Fat32, src: &str, read_source: &mut dyn FnMut(&str) -> std::io:
     // the source is read after the name is drawn, as RawTarget.copy does
     let data = read_source(src)
         .map_err(|e| format!("[Errno {}] {}: {}", e.raw_os_error().unwrap_or(0), e, py_repr(src)))?;
-    fs.write_file(&dst, &data)?;
+    fs.write_file_with(&dst, &data, Some(progress))?;
     Ok(format!(":iPod_Control:Music:{}:{}", fdir, name))
 }
 
@@ -205,8 +205,10 @@ fn probe(fs: &mut Fat32, memo: &mut Option<Option<bool>>) -> Option<bool> {
 
 /// card.plan_add. `files` expanded unless `expand_dirs`.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub fn plan_add_fs(fs: &mut Fat32, files: &[String], src: &mut dyn TagSource, ent: &mut Entropy, opts: Options,
-                   expand_dirs: bool, assess: bool, lib: Option<Library>) -> Result<Plan, Error> {
+                   expand_dirs: bool, assess: bool, lib: Option<Library>, hooks: &mut dyn Hooks)
+    -> Result<Plan, Error> {
     let mut warnings = Vec::new();
     let paths: Vec<String> = if expand_dirs {
         library::expand(files, &mut |m| warnings.push(m))
@@ -222,7 +224,7 @@ pub fn plan_add_fs(fs: &mut Fat32, files: &[String], src: &mut dyn TagSource, en
         Some(l) => l,
         None => load(fs, ent)?,
     };
-    let b = library::read_batch(&lib, &paths, src, ent, &mut |m| unreadable.push(m));
+    let b = library::read_batch(&lib, &paths, src, ent, &mut |m| unreadable.push(m), hooks);
     let (mut free, mut free_error) = (None, None);
     if !b.pending.is_empty() {
         match fs.free_bytes() {
@@ -237,6 +239,7 @@ pub fn plan_add_fs(fs: &mut Fat32, files: &[String], src: &mut dyn TagSource, en
     } else {
         None
     };
+    let cancelled = hooks.cancelled();
     let budget = free.map(|f| f - ADD_HEADROOM);
     let batch: i64 = b.pending.iter().map(|(_, t)| t.size as i64).sum();
     let newj: Vec<Value> = b
@@ -251,7 +254,7 @@ pub fn plan_add_fs(fs: &mut Fat32, files: &[String], src: &mut dyn TagSource, en
     let mut j = json!({
         "files": paths.len(), "new": newj, "duplicates": b.skipped, "unreadable": unreadable,
         "failed": b.failed, "warnings": warnings, "batch_bytes": batch, "free_bytes": free,
-        "free_error": free_error, "budget": budget, "cancelled": false,
+        "free_error": free_error, "budget": budget, "cancelled": cancelled,
     });
     if assess {
         let space_fit = match budget {
@@ -284,23 +287,31 @@ pub fn plan_add_fs(fs: &mut Fat32, files: &[String], src: &mut dyn TagSource, en
     Ok(Plan { json: j, lib, items: b.pending, fixed: memo })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn plan_add(dev: &mut dyn BlockDevice, files: &[String], src: &mut dyn TagSource, ent: &mut Entropy,
-                opts: Options, expand_dirs: bool, assess: bool) -> Result<Plan, Error> {
+                opts: Options, expand_dirs: bool, assess: bool, hooks: &mut dyn Hooks) -> Result<Plan, Error> {
     let mut fs = open_fat(dev)?;
-    plan_add_fs(&mut fs, files, src, ent, opts, expand_dirs, assess, None)
+    plan_add_fs(&mut fs, files, src, ent, opts, expand_dirs, assess, None, hooks)
 }
 
 /// card.apply_add: copy `keep` (default: the plan's tracks), save once.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_add_fs(fs: &mut Fat32, plan: &mut Plan, keep: Option<usize>, save_anyway: bool,
-                    read_source: &mut dyn FnMut(&str) -> std::io::Result<Vec<u8>>, ent: &mut Entropy)
+                    read_source: &mut dyn FnMut(&str) -> std::io::Result<Vec<u8>>, ent: &mut Entropy,
+                    hooks: &mut dyn Hooks)
     -> Result<Value, Error>
 {
     let n = keep.unwrap_or(plan.items.len()).min(plan.items.len());
     let items: Vec<(String, Track)> = plan.items[..n].to_vec();
     let mut added: Vec<Track> = Vec::new();
     let mut failed: Vec<Value> = Vec::new();
-    for (path, mut track) in items {
-        let located = copy(fs, &path, read_source, ent);
+    for (nr, (path, mut track)) in items.iter().cloned().enumerate() {
+        if hooks.cancelled() {
+            break;
+        }
+        let title = track.title.clone().unwrap_or_default();
+        hooks.progress("copy", nr as u64 + 1, n as u64, &title);
+        let located = copy(fs, &path, read_source, ent, &mut |d, t| hooks.progress("write", d, t, &title));
         match located {
             Err(e) => failed.push(json!({"path": path, "error": e})),
             Ok(loc) => {
@@ -314,10 +325,11 @@ pub fn apply_add_fs(fs: &mut Fat32, plan: &mut Plan, keep: Option<usize>, save_a
     if !added.is_empty() || save_anyway {
         save_library(fs, &plan.lib, ent)?;
     }
+    let cancelled = hooks.cancelled() && added.len() + failed.len() < n;
     Ok(json!({
         "added": added.iter().map(|t| t.to_dict()).collect::<Vec<_>>(),
         "duplicates": plan.json["duplicates"], "unreadable": plan.json["unreadable"],
-        "failed": failed, "dropped_space": 0, "dropped_ceiling": 0, "cancelled": false,
+        "failed": failed, "dropped_space": 0, "dropped_ceiling": 0, "cancelled": cancelled,
         "bytes": added.iter().map(|t| t.size as i64).sum::<i64>(),
     }))
 }
@@ -325,11 +337,19 @@ pub fn apply_add_fs(fs: &mut Fat32, plan: &mut Plan, keep: Option<usize>, save_a
 /// card.add with a policy: full "stop"|"fit", ceiling "refuse"|"fit"|"force".
 #[allow(clippy::too_many_arguments)]
 pub fn add(dev: &mut dyn BlockDevice, files: &[String], full: &str, ceiling_pol: &str, src: &mut dyn TagSource,
-           read_source: &mut dyn FnMut(&str) -> std::io::Result<Vec<u8>>, ent: &mut Entropy, opts: Options)
+           read_source: &mut dyn FnMut(&str) -> std::io::Result<Vec<u8>>, ent: &mut Entropy, opts: Options,
+           hooks: &mut dyn Hooks)
     -> Result<Value, Error>
 {
     let mut fs = open_fat(dev)?;
-    let mut now = plan_add_fs(&mut fs, files, src, ent, opts, true, true, None)?;
+    let mut now = plan_add_fs(&mut fs, files, src, ent, opts, true, true, None, hooks)?;
+    if now.json["cancelled"] == json!(true) {
+        // cancelled while reading tags: nothing written
+        return Ok(json!({
+            "added": [], "duplicates": now.json["duplicates"], "unreadable": now.json["unreadable"],
+            "failed": [], "dropped_space": 0, "dropped_ceiling": 0, "cancelled": true, "bytes": 0,
+        }));
+    }
     let mut keep = now.items.len();
     let (mut dropped_space, mut dropped_ceiling) = (0, 0);
     let space_fit = now.json["space_fit"].as_u64().unwrap_or(0) as usize;
@@ -365,7 +385,7 @@ pub fn add(dev: &mut dyn BlockDevice, files: &[String], full: &str, ceiling_pol:
             }
         }
     }
-    let mut rep = apply_add_fs(&mut fs, &mut now, Some(keep), false, read_source, ent)?;
+    let mut rep = apply_add_fs(&mut fs, &mut now, Some(keep), false, read_source, ent, hooks)?;
     rep["dropped_space"] = json!(dropped_space);
     rep["dropped_ceiling"] = json!(dropped_ceiling);
     Ok(rep)
@@ -374,7 +394,8 @@ pub fn add(dev: &mut dyn BlockDevice, files: &[String], full: &str, ceiling_pol:
 /// card.rebuild: the library rebuilt from the music files on the card (tags
 /// read by `src` from each file, read lazily off the card), saved unless
 /// !save. A file that can't be opened or read is skipped with a message.
-pub fn rebuild(dev: &mut dyn BlockDevice, name: &str, save: bool, src: &mut dyn TagSource, ent: &mut Entropy)
+pub fn rebuild(dev: &mut dyn BlockDevice, name: &str, save: bool, src: &mut dyn TagSource, ent: &mut Entropy,
+               hooks: &mut dyn Hooks)
     -> Result<Value, Error>
 {
     let mut fs = open_fat(dev)?;
@@ -382,7 +403,9 @@ pub fn rebuild(dev: &mut dyn BlockDevice, name: &str, save: bool, src: &mut dyn 
     let files = fs.music_files().map_err(os_err)?;
     let mut skipped = Vec::new();
     let mut located: Vec<(String, Track)> = Vec::new();
-    for (relpath, location) in files {
+    let total = files.len() as u64;
+    for (nr, (relpath, location)) in files.into_iter().enumerate() {
+        hooks.progress("rebuild", nr as u64 + 1, total, &relpath);
         // target.read_track_file: open_file (None for a missing file or a
         // directory), then the tags through the lazy file
         let entry = match fs.resolve(&relpath) {

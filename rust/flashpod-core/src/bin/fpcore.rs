@@ -10,6 +10,9 @@
 //!   fpcore init PATH [--name N] [--overwrite] | remove PATH WHAT...
 //!   fpcore plan-add|add PATH [--tags JSON] [--no-expand] [--no-assess] [--full fit] [--ceiling fit|force] FILES...
 //!   fpcore rebuild PATH [--tags JSON] [--name N] [--no-save]
+//!   (add, plan-add, rebuild: --events puts the progress events in the result;
+//!   --cancel-after N cancels once N files were announced)
+//!   fpcore run CARD JSON [--blob FILE] [--events]   (one flashpod_core::api command)
 //!   fpcore tags FILE... | card-tags IMAGE   (what make_track reads, per file)
 //! (tags come from the Rust reader; --tags JSON supplies Python's instead)
 //! (FLASHPOD_SEED / FLASHPOD_NOW: the id seed and clock)
@@ -118,6 +121,61 @@ impl flashpod_core::library::TagSource for JsonTags {
     }
 }
 
+/// --events: record progress; --cancel-after N: cancelled once N files
+/// ("tags" or "copy" events) have been announced (the harness's rule on
+/// both sides).
+struct Recorder {
+    events: Vec<serde_json::Value>,
+    files: u64,
+    cancel_after: Option<u64>,
+}
+
+impl flashpod_core::library::Hooks for Recorder {
+    fn progress(&mut self, stage: &str, done: u64, total: u64, item: &str) {
+        if stage == "tags" || stage == "copy" {
+            self.files += 1;
+        }
+        self.events.push(serde_json::json!([stage, done, total, item]));
+    }
+    fn cancelled(&mut self) -> bool {
+        self.cancel_after.map_or(false, |n| self.files >= n)
+    }
+}
+
+fn recorder(args: &[String]) -> Recorder {
+    Recorder { events: Vec::new(), files: 0, cancel_after: flag_value(args, "--cancel-after").map(|v| v.parse().expect("N")) }
+}
+
+/// The result, with the recorded events when --events was given.
+fn with_events(args: &[String], r: Result<serde_json::Value, flashpod_core::Error>, rec: Recorder)
+    -> Result<serde_json::Value, flashpod_core::Error>
+{
+    r.map(|mut v| {
+        if args.iter().any(|a| a == "--events") {
+            v["events"] = serde_json::Value::Array(rec.events);
+        }
+        v
+    })
+}
+
+/// `fpcore run`'s host: music files are local files; progress as Recorder.
+struct FileHost(Recorder);
+
+impl flashpod_core::library::Hooks for FileHost {
+    fn progress(&mut self, stage: &str, done: u64, total: u64, item: &str) {
+        self.0.progress(stage, done, total, item)
+    }
+    fn cancelled(&mut self) -> bool {
+        self.0.cancelled()
+    }
+}
+
+impl flashpod_core::api::Host for FileHost {
+    fn source(&mut self, path: &str) -> Option<Box<dyn flashpod_core::tags::ReadAt + '_>> {
+        std::fs::File::open(path).ok().map(|f| Box::new(f) as Box<dyn flashpod_core::tags::ReadAt>)
+    }
+}
+
 /// --tags JSON (Python's tags) or the Rust reader
 fn tag_source(args: &[String]) -> Box<dyn TagSource> {
     match flag_value(args, "--tags") {
@@ -193,15 +251,16 @@ fn main() {
         Some("remove") if args.len() >= 2 => FileDevice::open_image(&args[1], true)
             .and_then(|mut dev| flashpod_core::ops::remove(&mut dev, &args[2..], &mut entropy())),
         Some("plan-add") | Some("add") if args.len() >= 2 => {
-            let files = positional(&args[2..], &["--tags", "--full", "--ceiling"]);
+            let files = positional(&args[2..], &["--tags", "--full", "--ceiling", "--cancel-after"]);
+            let mut rec = recorder(&args);
             let mut src = tag_source(&args);
             let src = src.as_mut();
             let mut ent = entropy();
             let expand = !args.iter().any(|a| a == "--no-expand");
             let assess = !args.iter().any(|a| a == "--no-assess");
-            if args[0] == "plan-add" {
+            let r = if args[0] == "plan-add" {
                 FileDevice::open_image(&args[1], false).and_then(|mut dev| {
-                    flashpod_core::ops::plan_add(&mut dev, &files, src, &mut ent, options(), expand, assess)
+                    flashpod_core::ops::plan_add(&mut dev, &files, src, &mut ent, options(), expand, assess, &mut rec)
                         .map(|p| p.json)
                 })
             } else {
@@ -209,16 +268,42 @@ fn main() {
                 let ceil = flag_value(&args, "--ceiling").unwrap_or_else(|| "refuse".into());
                 let mut read = |p: &str| std::fs::read(p);
                 FileDevice::open_image(&args[1], true).and_then(|mut dev| {
-                    flashpod_core::ops::add(&mut dev, &files, &full, &ceil, src, &mut read, &mut ent, options())
+                    flashpod_core::ops::add(&mut dev, &files, &full, &ceil, src, &mut read, &mut ent, options(), &mut rec)
                 })
-            }
+            };
+            with_events(&args, r, rec)
         }
         Some("rebuild") if args.len() >= 2 => {
             let mut src = tag_source(&args);
             let name = flag_value(&args, "--name").unwrap_or_else(|| "iPod".into());
             let save = !args.iter().any(|a| a == "--no-save");
-            FileDevice::open_image(&args[1], true)
-                .and_then(|mut dev| flashpod_core::ops::rebuild(&mut dev, &name, save, src.as_mut(), &mut entropy()))
+            let mut rec = recorder(&args);
+            let r = FileDevice::open_image(&args[1], true)
+                .and_then(|mut dev| flashpod_core::ops::rebuild(&mut dev, &name, save, src.as_mut(), &mut entropy(), &mut rec));
+            with_events(&args, r, rec)
+        }
+        Some("run") if args.len() >= 3 => {
+            // fpcore run CARD JSON [--blob FILE]: one command through flashpod_core::api
+            let blob = flag_value(&args, "--blob").map(|p| std::fs::read(p).expect("blob")).unwrap_or_default();
+            let mut host = FileHost(recorder(&args));
+            let writable = !matches!(
+                serde_json::from_str::<serde_json::Value>(&args[2]).ok().and_then(|c| c["op"].as_str().map(String::from)).as_deref(),
+                Some("inspect") | Some("tracks") | Some("plan_add") | Some("min_card_bytes") | Some("catalog") | Some("check_firmware")
+            );
+            let answer = match FileDevice::open_image(&args[1], writable) {
+                Ok(mut dev) => flashpod_core::api::run_json(args[2].as_bytes(), &blob, &mut dev, &mut host),
+                Err(e) => serde_json::json!({"ok": false, "error": e.to_json()}),
+            };
+            if answer["ok"] == serde_json::json!(true) {
+                let mut v = answer["value"].clone();
+                if args.iter().any(|a| a == "--events") {
+                    v["events"] = serde_json::Value::Array(host.0.events);
+                }
+                Ok(v)
+            } else {
+                println!("{}", answer["error"]);
+                std::process::exit(1);
+            }
         }
         Some("tags") => {
             let mut out = serde_json::Map::new();

@@ -5,6 +5,7 @@
 //! JSON as the Python results' `to_dict()`, and errors carry the same stable
 //! codes. Parity is proved by `scripts/rust_parity.py` in the flashpod repo.
 
+pub mod api;
 pub mod block;
 pub mod card;
 pub mod entropy;
