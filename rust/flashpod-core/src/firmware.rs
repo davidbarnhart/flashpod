@@ -16,6 +16,7 @@ pub fn version_word_means(w: u32) -> Option<&'static str> {
     match w {
         0x0150_8000 => Some("1.5"),
         0x0160_8000 => Some("1.6"),
+        0x0170_8000 => Some("1.7"),
         _ => None,
     }
 }

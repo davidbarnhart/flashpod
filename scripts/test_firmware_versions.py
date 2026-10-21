@@ -20,12 +20,13 @@ carry Apple's version; no entry's version is 0.x (the renumbering's mark);
 within each generation, version order agrees with build-date order; the
 1G releases sort 1.0 < 1.0.2 < 1.0.4 < 1.1 < ... < 1.5 by version tuple,
 and both firmware_catalog() and the CLI picker list them newest first; the
-one non-Apple entry, flashpod 1.6, says NOT AN APPLE RELEASE in the catalog
+two non-Apple entries, flashpod 1.6 and 1.7, say NOT AN APPLE RELEASE in the catalog
 and the picker, and Apple's 1.5 stays the default.
 Against the manifest before the fix, 4 checks fail (3 versions, and the
 0.x scan).
 """
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -43,7 +44,7 @@ APPLE = {
 #: Every 1G release in the catalog, oldest first. 1.0.4 (2001) must sort
 #: before 1.1 and 1.4 -- the order the old 0.x names were protecting.
 ONE_G_ORDER = ["1.0", "1.0.2", "1.0.4", "1.1", "1.2", "1.2.1", "1.2.2",
-               "1.2.6", "1.3", "1.4", "1.5", "1.6"]
+               "1.2.6", "1.3", "1.4", "1.5", "1.6", "1.7"]
 
 fails = []
 
@@ -102,7 +103,7 @@ def main():
         by_ver = [e["file"] for e in sorted(es, key=lambda e: vtuple(e["version"]))]
         check(by_date == by_ver, "%s (%d dated)" % (gen, len(es)))
 
-    print("the 1G list runs 1.0 < 1.0.2 < 1.0.4 < 1.1 < ... < 1.5 < 1.6 (lead, #1204)")
+    print("the 1G list runs 1.0 < 1.0.2 < 1.0.4 < 1.1 < ... < 1.5 < 1.6 < 1.7 (lead, #1204)")
     one_g = [e["version"] for e in entries if "1G" in e.get("models", [])]
     check(sorted(one_g, key=vtuple) == ONE_G_ORDER,
           "version-tuple order: %s" % " < ".join(sorted(one_g, key=vtuple)))
@@ -114,18 +115,20 @@ def main():
 
     print("not-Apple firmware is labelled so")
     others = [e for e in entries if e.get("maker", "apple") != "apple"]
-    check([(e["maker"], e["version"]) for e in others] == [("flashpod", "1.6")],
-          "the one non-Apple entry is flashpod 1.6: %r"
+    check([(e["maker"], e["version"]) for e in others] == [("flashpod", "1.7"), ("flashpod", "1.6")],
+          "the two non-Apple entries are flashpod 1.7 and 1.6: %r"
           % [(e.get("maker"), e["version"]) for e in others])
     check(all(e["description"].startswith("NOT AN APPLE RELEASE")
               for e in others), "its description starts NOT AN APPLE RELEASE")
     check(not any(e["description"].startswith("NOT AN APPLE")
                   for e in entries if e.get("maker", "apple") == "apple"),
           "no Apple entry says so")
-    row = next((ln for ln in picker.splitlines() if " 1.6 " in ln), "")
-    check("(flashpod)" in row and "NOT AN APPLE RELEASE" in row,
-          "the picker's 1.6 row says (flashpod) and NOT AN APPLE RELEASE: %r"
-          % row.strip())
+    for ver in ("1.6", "1.7"):
+        row = next((ln for ln in picker.splitlines()
+                    if re.match(r"\s*\d+\s+%s " % re.escape(ver), ln)), "")
+        check("(flashpod)" in row and "NOT AN APPLE RELEASE" in row,
+              "the picker's %s row says (flashpod) and NOT AN APPLE RELEASE: %r"
+              % (ver, row.strip()))
     check(next((e for e in entries if e.get("default")), {}).get("version")
           == "1.5", "the default is still Apple's 1.5")
 

@@ -228,7 +228,7 @@ PP5002_OSOS_ADDR = 0x28000000
 #: vaddr 0x2803174c (openpod firmware session, bridge #1083). The 1.6 version
 #: fix writes 0x01608000 there.
 VERSION_WORD_OFFSET = 0x3174c
-VERSION_WORDS = {0x01508000: "1.5", 0x01608000: "1.6"}
+VERSION_WORDS = {0x01508000: "1.5", 0x01608000: "1.6", 0x01708000: "1.7"}
 
 #: Exact osos builds that are not stock catalog entries, by sha256 of the
 #: osos payload as installed (openpod firmware session, bridge #1083).

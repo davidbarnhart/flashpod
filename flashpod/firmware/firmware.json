@@ -15,6 +15,22 @@
   ],
   "firmwares": [
     {
+      "file": "flashpod_1.1.7_2026_10_21.bin.gz",
+      "sha256": "a0a029d6abe0f06f21ee5ad8b6e37ec58ee0d714de3ceae3309cd6290be53e8f",
+      "osos_sha256": "7e1d980715a82f5b931018042475cbf540a6e647f91cd1a397cc6366c9f88a61",
+      "size": 2124136,
+      "generation": "1st/2nd generation (FireWire)",
+      "models": [
+        "1G",
+        "2G"
+      ],
+      "version": "1.7",
+      "maker": "flashpod",
+      "build_date": "2026-10-21",
+      "description": "NOT AN APPLE RELEASE -- flashpod's 1.7: 1.6 plus Refresh Library. Copy music folders onto the iPod in disk mode, choose Refresh Library at the bottom of the main menu, and the songs are under Music (MP3, AAC/M4A, FLAC, WAV and AIFF; tags read on the iPod, iTunesDB written and loaded without a restart). Everything in 1.6 is kept.",
+      "_note": "flashpod's own release, not Apple's (maker: flashpod; inspect reports 'flashpod 1.7'). Built from the openpod project's gen-1 fix folder: openpod main 0af5e7a (PR #230 and later), firmware/1/1.7, applied to Apple's 1.5 with its tools/fw_fix.py into iPod_1.1.7.ipsw (sha256 598afd8f5fc740b80894b9243b6fc72625e5c328edf8563cc574a81a62f46f86). This asset is the deterministic gzip (scripts/extract_firmware.py gz) of the firmware file inside it (5,503,445 bytes, sha256 87242a72cdbf9d0c0c8985abd6e65d9adb7f7610bc3c870a83b61ae3a92ba7bf; osos sha256 7e1d9807...). Rebuilt here from openpod main and the shas matched those the openpod firmware session gave. HARDWARE: Refresh Library ran on a 1st-generation iPod in a 1.6 + Refresh Library build (test4/test5: 419 MP3s found in under 30 s, loaded in place, songs play); THIS image has not itself run on an iPod yet (it differs from test5 in the version bytes and two screen messages). Disk mode on a card past 128 GiB works only once the iPod's flash ROM has been reprogrammed with this aupd, as for 1.6. build_date is the date the entry was added; the compiled-in __DATE__ is still Apple's 'Feb 18 2005'."
+    },
+    {
       "file": "flashpod_1.1.6_2026_10_16.bin.gz",
       "sha256": "4b5f1f47b2e98d90601b8c9255db522eacfeb61d2ec2e1f6a2312b9b8cbc45cd",
       "osos_sha256": "fdf1372267d902b99276b1982b27bc80f1a50835fb61893870f618e291b4677a",
