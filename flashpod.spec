@@ -19,13 +19,31 @@ ROOT = os.path.abspath(SPECPATH)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+# Build flavor. FLASHPOD_FLAVOR=lite produces the vintage-Mac artifact, whose
+# only job is syncing music over FireWire: `flash` refuses to run there (see
+# resources.is_lite), so the firmware catalog it would consult and the Linux
+# udev rule are both left out. Anything else — including a plain build, a
+# source checkout, and the pip package — is a full build.
+FLAVOR = os.environ.get("FLASHPOD_FLAVOR", "full").strip().lower()
+if FLAVOR not in ("full", "lite"):
+    raise SystemExit(
+        "FLASHPOD_FLAVOR must be 'full' or 'lite', got %r" % FLAVOR)
+
 # Bundle package data so resources.py finds it under sys._MEIPASS/flashpod/...
 # Only the firmware *catalog* (firmware.json) and the udev rule ship inside the
 # binary; the .ipsw images are GitHub release assets fetched on demand.
-datas = [
-    (os.path.join(ROOT, "flashpod", "firmware"), "flashpod/firmware"),
-    (os.path.join(ROOT, "flashpod", "contrib"), "flashpod/contrib"),
-]
+if FLAVOR == "lite":
+    # The marker's basename becomes the bundled name, so resources.py finds it
+    # at flashpod/build_flavor.txt.
+    datas = [
+        (os.path.join(ROOT, "packaging", "flavor", "build_flavor.txt"),
+         "flashpod"),
+    ]
+else:
+    datas = [
+        (os.path.join(ROOT, "flashpod", "firmware"), "flashpod/firmware"),
+        (os.path.join(ROOT, "flashpod", "contrib"), "flashpod/contrib"),
+    ]
 
 # Pull in the whole flashpod package (the platform backends are imported
 # lazily) and mutagen's dynamically-loaded format handlers.

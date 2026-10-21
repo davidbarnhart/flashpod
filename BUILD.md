@@ -110,8 +110,31 @@ pyinstaller --clean --noconfirm flashpod.spec           # now a heavy build
 > [print(e['file']) for v in m.values() if isinstance(v,list) for e in v if isinstance(e,dict) and 'file' in e]"
 > ```
 
-(The firmware images are gitignored, so this doesn't dirty the repo.) This is
-the recommended form for the **macOS 10.8** release — see below.
+(The firmware images are gitignored, so this doesn't dirty the repo.)
+
+### Lite builds (sync only, no card imaging)
+
+`FLASHPOD_FLAVOR=lite` strips the card-imaging half: `flash` is hidden from
+`--help` and refuses to run, pointing the user at a modern machine instead. The
+firmware catalog and the Linux udev rule are left out of the bundle too, since
+nothing left in the binary consults them.
+
+```sh
+FLASHPOD_FLAVOR=lite pyinstaller --clean --noconfirm flashpod.spec
+```
+
+This is the form shipped for **macOS 10.8** (see below): that machine exists to
+sync music over FireWire, and imaging a card is a one-time job better done on a
+modern computer with a USB card reader.
+
+The flavor is a marker file (`packaging/flavor/build_flavor.txt`) bundled as
+`flashpod/build_flavor.txt`; when it's absent the build is **full**. So a plain
+`pyinstaller` run, a source checkout, and the pip package are all full builds —
+only an explicitly-lite artifact is ever degraded. Verify either flavor with:
+
+```sh
+PYTHONPATH=. python3 scripts/test_lite_flavor.py
+```
 
 ## macOS — manual (target: OS X 10.8)
 
@@ -121,10 +144,14 @@ produce a 10.8-compatible binary, so this one is built **by hand on 10.8
 hardware** and uploaded to the release afterwards. The recipe below is
 battle-tested (it's how `flashpod-macos-vintage-no-internet` is built).
 
-**Build it heavy** (firmware baked in). An end user's 10.8 machine generally
-can't do the runtime firmware download (a frozen binary's `urllib` has no CA
-bundle there), so bundle the images so the shipped binary needs no network and
-no `--firmware`. See "Self-contained builds" above.
+**Build it lite** (`FLASHPOD_FLAVOR=lite`) — see "Lite builds" above. This
+artifact syncs music over FireWire and nothing else; `flash` refuses to run.
+
+That sidesteps what used to force a *heavy* build here. A frozen binary's
+`urllib` has no CA bundle on 10.8, so the runtime firmware download can't work
+there, and the images had to be baked in to make `flash` usable at all. Once
+imaging moved to a modern machine with a USB card reader, none of that applies:
+no firmware ships, no network is needed, and the binary is smaller.
 
 ### The two non-obvious traps
 
@@ -161,41 +188,27 @@ no `--firmware`. See "Self-contained builds" above.
    python3.6 -m pip install "pyinstaller==4.2" mutagen
    ```
 
-4. **Get the source + firmware onto the Mac.** Either fetch with `python3.6`
-   (TLS now works):
+4. **Get the source onto the Mac.** Either fetch with `python3.6` (TLS now
+   works):
    ```sh
    python3.6 - <<'EOF'
    import urllib.request as u
    u.urlretrieve("https://github.com/davidbarnhart/flashpod/archive/refs/tags/v0.5.2.tar.gz","src.tgz")
    EOF
    tar xf src.tgz
-   python3.6 - <<'EOF'
-   import urllib.request as u, glob, json, os
-   src = glob.glob("flashpod-*/flashpod/firmware/firmware.json")[0]
-   m = json.load(open(src))
-   base = m["base_url"].rstrip("/") + "/"
-   for e in m["firmwares"]:
-       print("fetching " + e["file"])
-       u.urlretrieve(base + e["file"], os.path.join(os.path.dirname(src), e["file"]))
-   EOF
    ```
    …or copy a prepared tree over a network share (SSH works fine into 10.8 —
-   `scp` the source archive and images from a modern machine; see the
-   legacy-algorithm note in your `~/.ssh/config` if it refuses to connect).
-   Either way, every image `firmware.json` references must be in
-   `flashpod/firmware/` for a heavy build (~54 MiB across 25 images since the
-   catalog was completed — which is why the list above is driven from the
-   manifest rather than typed out; a hand-kept list went stale the moment the
-   catalog grew, and a heavy build missing images fails offline exactly where
-   "no-internet" matters — see the stale-bundle trap above).
+   `scp` the source archive from a modern machine; see the legacy-algorithm
+   note in your `~/.ssh/config` if it refuses to connect). A lite build
+   bundles no firmware, so there is nothing else to fetch.
 
-5. **Build and smoke-test:**
+5. **Build and smoke-test.** Note `FLASHPOD_FLAVOR=lite` — without it you get a
+   full build that offers a `flash` command this machine shouldn't be used for:
    ```sh
    cd flashpod-*            # the unpacked source tree
-   python3.6 -m PyInstaller --clean --noconfirm flashpod.spec
-   ./dist/flashpod flash --self-test                       # expect "self-test OK"
-   python3.6 -c "open('dummy.img','wb').truncate(64*1024*1024)"
-   ./dist/flashpod flash dummy.img --dry-run --yes         # must NOT say "downloading"
+   FLASHPOD_FLAVOR=lite python3.6 -m PyInstaller --clean --noconfirm flashpod.spec
+   ./dist/flashpod --help          # `flash` must NOT appear in the command list
+   ./dist/flashpod flash ; echo $? # must refuse with the "modern machine" note, exit 1
    ```
 
 6. **Package it like the CI builds** — a tarball with the binary, README, and
