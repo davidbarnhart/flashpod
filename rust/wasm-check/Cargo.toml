@@ -1,0 +1,14 @@
+[package]
+name = "wasm-check"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Test only: flashpod_core::api compiled to WebAssembly, so scripts/rust_parity.py can run it under Node and compare it with the native build. Not for consumers; emupod's app has its own wrapper."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+flashpod-core = { path = "../flashpod-core" }
+serde_json = { version = "1", features = ["preserve_order"] }

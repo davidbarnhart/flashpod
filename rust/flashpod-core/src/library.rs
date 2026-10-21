@@ -40,6 +40,22 @@ pub enum TagResult {
     Unrecognized,
 }
 
+/// What a long call reports and asks while it runs, as card.py's
+/// ``progress(stage, done, total, item)`` and ``cancelled()``: stages "tags"
+/// (files read), "copy" (files copied), "write" (bytes of one file),
+/// "rebuild" (files read back). Both are called on the caller's thread, at
+/// the same points as in Python; ``cancelled`` is asked between files.
+pub trait Hooks {
+    fn progress(&mut self, _stage: &str, _done: u64, _total: u64, _item: &str) {}
+    fn cancelled(&mut self) -> bool {
+        false
+    }
+}
+
+/// No progress, never cancelled.
+pub struct NoHooks;
+impl Hooks for NoHooks {}
+
 pub trait TagSource {
     fn read(&mut self, path: &str) -> TagResult;
     /// A file on the card (a rebuild), read through `file`; by default
@@ -153,7 +169,7 @@ pub struct Batch {
 
 /// library.read_batch.
 pub fn read_batch(lib: &Library, files: &[String], src: &mut dyn TagSource, ent: &mut Entropy,
-                  report: &mut dyn FnMut(String)) -> Batch {
+                  report: &mut dyn FnMut(String), hooks: &mut dyn Hooks) -> Batch {
     let mut seen: HashSet<(u32, u32, String)> = lib.tracks.iter().map(track_key).collect();
     let rebuilt: HashSet<(u32, u32)> = lib
         .tracks
@@ -164,6 +180,10 @@ pub fn read_batch(lib: &Library, files: &[String], src: &mut dyn TagSource, ent:
     let n = files.len();
     let mut b = Batch { pending: Vec::new(), failed: Vec::new(), skipped: Vec::new() };
     for (i, path) in files.iter().enumerate() {
+        if hooks.cancelled() {
+            break;
+        }
+        hooks.progress("tags", i as u64 + 1, n as u64, path);
         let track = match make_track(path, i + 1, n, src, ent, report) {
             None => {
                 b.failed.push(path.clone());

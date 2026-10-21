@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["flashpod-core"]
+members = ["flashpod-core", "wasm-check"]
 
 [workspace.package]
 edition = "2021"

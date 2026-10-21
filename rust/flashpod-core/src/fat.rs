@@ -795,11 +795,25 @@ impl<'a> Fat32<'a> {
     }
 
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), String> {
+        self.write_file_with(path, data, None)
+    }
+
+    /// write_file with ``progress(done, total)``: once before any I/O, then
+    /// after each data cluster (fatfs.write_file's progress).
+    pub fn write_file_with(&mut self, path: &str, data: &[u8], mut progress: Option<&mut dyn FnMut(u64, u64)>)
+        -> Result<(), String>
+    {
         let (parent, name) = Self::split(path);
         let parent_first = self.resolve_dir(&parent)?;
         let bpc = self.bpc() as usize;
         let n = data.len().div_ceil(bpc);
         let chain = self.alloc_chain(n)?;
+        let total = data.len() as u64;
+        if let Some(p) = progress.as_mut() {
+            if !data.is_empty() {
+                p(0, total);
+            }
+        }
         for (i, &cl) in chain.iter().enumerate() {
             let start = i * bpc;
             let end = ((i + 1) * bpc).min(data.len());
@@ -807,6 +821,9 @@ impl<'a> Fat32<'a> {
             chunk.resize(bpc, 0);
             let lba = self.cluster_lba(cl);
             self.sec.write(lba, &chunk)?;
+            if let Some(p) = progress.as_mut() {
+                p((((i + 1) * bpc) as u64).min(total), total);
+            }
         }
         let first = chain.first().copied().unwrap_or(0);
         match self.resolve(path)? {
