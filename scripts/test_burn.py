@@ -19,7 +19,6 @@ import hashlib
 import io
 import os
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -105,7 +104,7 @@ def main():
     if not sys.platform.startswith("linux"):
         print("not Linux -- burn is Linux-only; skipping")
         return 0
-    tmp = tempfile.mkdtemp(prefix="fp-burn-")
+    tmp = synth.scratch_dir("fp-burn-")
     img = os.path.join(tmp, "card.img")
     card.create_blank(img, 96 << 20)
     card.flash(img, synth.write_firmware(os.path.join(tmp, "fw.bin")))

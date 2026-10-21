@@ -18,14 +18,10 @@ Checks, on synthetic data:
     FLAC track still carries "\\0FLA" and its first time added.
 Against the tree before the fix, the round trip and the card check fail.
 """
-import contextlib
 import os
-import shutil
 import struct
 import subprocess
 import sys
-import tempfile
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -33,7 +29,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 
 import synth_fixtures as synth  # noqa: E402
-from flashpod import card, itunesdb  # noqa: E402
+from flashpod import card, entropy, itunesdb  # noqa: E402
 
 fails = []
 
@@ -42,17 +38,6 @@ def check(cond, what):
     print("  %s %s" % ("ok  " if cond else "FAIL", what))
     if not cond:
         fails.append(what)
-
-
-@contextlib.contextmanager
-def clock(now):
-    """time.time() returns `now` inside the block."""
-    real = time.time
-    time.time = lambda: float(now)
-    try:
-        yield
-    finally:
-        time.time = real
 
 
 def track_records(db):
@@ -80,7 +65,7 @@ def main():
         t.location = ":iPod_Control:Music:F00:fp%06d" % i
         lib.tracks.append(t)
     first = itunesdb.serialize(lib)
-    with clock(1700000000):    # a different "now"
+    with entropy.deterministic(1, 1700000000):    # a different "now"
         again = itunesdb.serialize(itunesdb.parse_bytes(first))
     a, b = track_records(first), track_records(again)
     check(len(a) == 2 and a == b, "the track records come back byte for byte")
@@ -92,30 +77,13 @@ def main():
     zero = bytearray(first)
     i = zero.find(b"mhit")
     struct.pack_into("<I", zero, i + 88, 0)
-    with clock(1700000000):
+    with entropy.deterministic(1, 1700000000):
         t = itunesdb.parse_bytes(bytes(zero)).tracks[0]
     check(t.time_added == 1700000000 + itunesdb.MAC_EPOCH_OFFSET,
           "parses as now (%d)" % t.time_added)
 
     print("on a card: a FLAC track through a later add")
-    tmp = tempfile.mkdtemp(prefix="fp-roundtrip-")
-    try:
-        on_card(tmp)
-    finally:
-        if fails:
-            print("  kept %s" % tmp)
-        else:
-            shutil.rmtree(tmp, ignore_errors=True)
-
-    print()
-    if fails:
-        print("%d FAILED" % len(fails))
-        return 1
-    print("ALL ASSERTIONS PASSED")
-    return 0
-
-
-def on_card(tmp):
+    tmp = synth.scratch_dir("fp-roundtrip-")
     flac = os.path.join(tmp, "song.flac")
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
                     "sine=frequency=500:duration=1", "-metadata",
@@ -127,9 +95,9 @@ def on_card(tmp):
     card.create_blank(img, 96 << 20)
     card.flash(img, synth.write_firmware(os.path.join(tmp, "fw.bin")))
     card.init(img)
-    with clock(1600000000):
+    with entropy.deterministic(2, 1600000000):
         card.add(img, [flac])
-    with clock(1650000000):    # later
+    with entropy.deterministic(3, 1650000000):    # later
         card.add(img, [mp3])
     with card.open_target(img) as c:
         db = c.target().fs.read_file(card.DB_PATH)
@@ -140,6 +108,13 @@ def on_card(tmp):
           == (itunesdb.MARKER_FLAC, 1600000000 + itunesdb.MAC_EPOCH_OFFSET),
           "the FLAC track kept \\0FLA and its time added: %r"
           % (mhit_fields(rec) if rec else None,))
+
+    print()
+    if fails:
+        print("%d FAILED" % len(fails))
+        return 1
+    print("ALL ASSERTIONS PASSED")
+    return 0
 
 
 if __name__ == "__main__":

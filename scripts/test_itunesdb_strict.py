@@ -30,7 +30,6 @@ import os
 import struct
 import subprocess
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -117,7 +116,7 @@ def main():
     check(refused(bytes(long_)), "a dataset length past the end")
 
     print("on a card")
-    tmp = tempfile.mkdtemp(prefix="fp-strict-")
+    tmp = synth.scratch_dir("fp-strict-")
     img = os.path.join(tmp, "card.img")
     card.create_blank(img, 96 << 20)
     card.flash(img, synth.write_firmware(os.path.join(tmp, "fw.bin")))

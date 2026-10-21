@@ -15,6 +15,7 @@ import struct
 import sys
 import time
 
+from . import entropy
 from . import fatfs
 from . import itunesdb
 from .errors import CorruptLibrary, NotACard
@@ -193,18 +194,17 @@ class RawTarget:
     def copy(self, src, progress=None, ext=None):
         """Mirror itunesdb.copy_to_ipod over the raw FAT: spread across the
         Music/F## dirs, collision-proof name, return the ':'-style location."""
-        import random
         music = "iPod_Control/Music"
         entries = self.fs.listdir(music) or []
         fdirs = sorted(e.name for e in entries if e.name.upper().startswith("F"))
         if not fdirs:
             raise OSError("no Music/F## directories (run init first?)")
-        fdir = random.choice(fdirs)
+        fdir = entropy.rng().choice(fdirs)
         ext = (ext or os.path.splitext(src)[1] or ".mp3").lower()
         timing = os.environ.get("FLASHPOD_TIMING")
         t0 = time.monotonic()
         while True:
-            name = "fp%06d%s" % (random.randrange(10 ** 6), ext)
+            name = "fp%06d%s" % (entropy.rng().randrange(10 ** 6), ext)
             dst = "%s/%s/%s" % (music, fdir, name)
             if not self.fs.exists(dst):
                 break

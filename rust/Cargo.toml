@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["flashpod-core"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"

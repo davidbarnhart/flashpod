@@ -12,9 +12,10 @@ All integers little-endian; strings UTF-16LE; timestamps are Mac epoch
 """
 
 import os
-import random
 import struct
 import time
+
+from . import entropy
 
 MAC_EPOCH_OFFSET = 2082844800  # 1904-01-01 -> 1970-01-01
 
@@ -51,8 +52,8 @@ class Track:
         self.year = 0
         self.bitrate = 0
         self.samplerate = 0
-        self.time_added = int(time.time()) + MAC_EPOCH_OFFSET
-        self.dbid = random.getrandbits(64)
+        self.time_added = entropy.now() + MAC_EPOCH_OFFSET
+        self.dbid = entropy.rng().getrandbits(64)
         self.marker = MARKER_MP3        # mhit+24; see the note above
         for f in self.FIELDS:
             setattr(self, f, None)
@@ -68,7 +69,7 @@ class Library:
     def __init__(self, name="iPod"):
         self.name = name
         self.tracks = []
-        self.dbid = random.getrandbits(64)
+        self.dbid = entropy.rng().getrandbits(64)
 
     def next_track_id(self):
         return max([t.id for t in self.tracks], default=51) + 1
@@ -271,7 +272,7 @@ def _mk_mhit(track):
 def _mk_mhyp(name, track_ids, master):
     mhods = _mk_string_mhod(MHOD_TITLE, name)
     items = b""
-    now = int(time.time()) + MAC_EPOCH_OFFSET
+    now = entropy.now() + MAC_EPOCH_OFFSET
     for pos, tid in enumerate(track_ids, 1):
         pos_mhod = _mk_pos_mhod(pos)
         item = b"mhip" + struct.pack("<IIIIIII", 76, 76 + len(pos_mhod),
@@ -285,7 +286,7 @@ def _mk_mhyp(name, track_ids, master):
                      HLEN + len(mhods) + len(items), 1, len(track_ids))
     struct.pack_into("<I", hdr, 20, 1 if master else 0)
     struct.pack_into("<I", hdr, 24, now)
-    struct.pack_into("<Q", hdr, 28, random.getrandbits(64))
+    struct.pack_into("<Q", hdr, 28, entropy.rng().getrandbits(64))
     return bytes(hdr) + mhods + items
 
 
@@ -351,10 +352,10 @@ def copy_to_ipod(mount, src, ext=None, progress=None):
     fdirs = sorted(d for d in os.listdir(music) if d.startswith("F"))
     if not fdirs:
         raise OSError("no Music/F## directories (run init?)")
-    fdir = random.choice(fdirs)
+    fdir = entropy.rng().choice(fdirs)
     ext = ext or os.path.splitext(src)[1] or ".mp3"
     while True:
-        name = "fp%06d%s" % (random.randrange(10 ** 6), ext.lower())
+        name = "fp%06d%s" % (entropy.rng().randrange(10 ** 6), ext.lower())
         dst = os.path.join(music, fdir, name)
         if not os.path.exists(dst):
             break

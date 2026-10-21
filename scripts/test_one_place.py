@@ -22,7 +22,6 @@ the CLI really runs the library's code.)
 import os
 import re
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -105,7 +104,7 @@ def static():
 
 def dynamic():
     print("dynamic: every CLI data command reaches card.*")
-    tmp = tempfile.mkdtemp(prefix="fp-oneplace-")
+    tmp = synth.scratch_dir("fp-oneplace-")
     music = synth.make_music(os.path.join(tmp, "music"))
     fw = synth.write_firmware(os.path.join(tmp, "fw.bin"))
     img = os.path.join(tmp, "card.img")

@@ -14,11 +14,14 @@ produce stand-ins that exercise the same code:
   collection holds: an AppleDouble ``._`` file, a text file, an untagged WAV
   and a corrupt ``.mp3``.
 """
+import atexit
 import math
 import os
 import shutil
 import struct
 import subprocess
+import sys
+import tempfile
 import wave
 
 OSOS_ADDR = 0x28000000
@@ -151,3 +154,39 @@ def big_wav(path, megabytes):
             w.writeframes(chunk[:n * 2])
             left -= n
     return path
+
+
+# -- scratch directories ------------------------------------------------------
+_scratch = []
+_crashed = []
+
+
+def scratch_dir(prefix):
+    """A temporary directory for a test's card images, deleted when the test
+    exits -- unless it failed (a non-empty ``fails`` list in the test, or an
+    uncaught exception) or FLASHPOD_KEEP_TMP=1 is set; then it is kept and
+    its path printed, for a look at the images. (Before this, every run left
+    its images in /tmp; on a RAM-backed /tmp they filled it, 2026-10-20.)"""
+    path = tempfile.mkdtemp(prefix=prefix)
+    if not _scratch:
+        atexit.register(_clean_scratch)
+        hook = sys.excepthook
+
+        def note_crash(*exc):
+            _crashed.append(True)
+            hook(*exc)
+        sys.excepthook = note_crash
+    _scratch.append(path)
+    return path
+
+
+def _clean_scratch():
+    main = sys.modules.get("__main__")
+    failed = bool(getattr(main, "fails", None)) or bool(_crashed)
+    keep = failed or os.environ.get("FLASHPOD_KEEP_TMP") == "1"
+    for path in _scratch:
+        if keep:
+            print("(kept %s%s)" % (path, " for the failure" if failed else ""),
+                  file=sys.stderr)
+        else:
+            shutil.rmtree(path, ignore_errors=True)

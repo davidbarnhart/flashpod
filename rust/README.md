@@ -1,0 +1,86 @@
+# flashpod in Rust
+
+The port of flashpod's card library (`flashpod/card.py` and the modules
+under it) to Rust, so one implementation can serve the command line,
+emupod's server and emupod's offline phone app (compiled to WebAssembly).
+The brief is emupod's `docs/FLASHPOD_RUST.md`.
+
+Decisions (David, 2026-10-20): the crates live here, in `rust/`, until the
+Rust command line takes over; the Python library stays the reference and
+the shipped program until the port reaches parity; the OS X 10.8 build stays
+Python (current Rust targets macOS 10.12 and later).
+
+- `flashpod-core`: the library. No printing, prompts or exit; all I/O
+  through `BlockDevice` (u64 offsets), so it builds for
+  `wasm32-unknown-unknown`. Results serialize to the Python `to_dict()` JSON,
+  errors carry the same codes.
+- `fpcore` (a binary in `flashpod-core`): the harness's handle on the
+  library, JSON in and out. Not the flashpod CLI.
+
+## Proof
+
+`scripts/rust_parity.py` runs the same calls through Python and Rust on a
+corpus of cards (synthetic, plus one per cached catalog firmware) and
+compares every field Rust produces; fields it doesn't produce yet are listed
+as PENDING. Ids and time come from `flashpod/entropy.py`, whose SplitMix64
+and fixed clock the Rust side reproduces, so written images can be compared
+byte for byte as the port reaches the writers.
+
+```sh
+cd rust && cargo test && cargo build --lib --target wasm32-unknown-unknown
+python3 scripts/rust_parity.py
+```
+
+## Progress
+
+- M0: harness, entropy, block device, error codes. Done.
+- M1 (read-only): done. `inspect` (layout, firmware identification
+  including openpod fixes and the disk-mode arm state, FAT32, the iTunesDB
+  with its ceiling, music files, orphans, missing) and `tracks` match the
+  Python library field for field on the whole corpus: 43 cards (edge cases,
+  non-ASCII tags, a damaged DB, missing/orphaned files, an unknown FSInfo
+  count, a 130 GiB card, flashpod 1.6 with music and armed, and every
+  cached catalog firmware), FLASHPOD_DB_LIMIT variants, and the error
+  cases. Python's casefold, latin-1 and UTF-16 "replace" decoding,
+  `rstrip` and struct error messages are reproduced where the output
+  depends on them (`text.rs`).
+- M2 (writers): done. `min_card_bytes`, `create_blank`, `flash` (with
+  `--lba48`, `--max-data-gb`, `--no-format`, `--arm`), `flash_firmware` and
+  `format_data` write the same bytes as the Python library, and refuse the
+  same things with the same errors (message and details): firmware raw,
+  `.bin.gz` and `.ipsw` (synthetic, six real catalog images, the real 1.6
+  `.ipsw`), bad firmware of every kind, too-small and just-too-small
+  cards, a 140 GiB card with and without `--lba48`, flashing over music,
+  foreign layouts. Images are compared byte for byte (sparse-aware).
+- M3 (the library): done. The FAT32 write path (allocation, chains,
+  directory slots, 8.3 and long names, directory growth, FSInfo), the
+  iTunesDB writer, and `init`, `plan_add`, `add` (full and ceiling
+  policies, the 1.6 track cap), `remove` and `rebuild` make the same bytes
+  and the same results as the Python library. Ids and "now" come from an
+  `Entropy` and are drawn where Python draws them, parser and size
+  projections included. While porting it, a bug in both was found and
+  fixed in both (and shipped in Python 0.5.1): loading the iTunesDB dropped
+  each track's type marker and time added, so any save after a load turned
+  FLAC tracks into MP3 ones.
+- M4 (tags): done. `tags/` reads MP3 (ID3v2.2-2.4 with ID3v1 merged, the
+  MPEG length from Xing/Info, LAME, VBRI or the file size), FLAC, MP4/M4A
+  (AAC, ALAC, AC-3 sample entries, iTunes atoms), AAC (ADTS/ADIF), WAV and
+  AIFF the way flashpod's Python reads them through mutagen 1.48.1:
+  mutagen's format sniffing, its text decoding and repairs, `(17)Rock`
+  genres, TYER/TDAT/TIME dates, and the cases where it raises. No audio
+  crate: mutagen's behaviour is the specification. Rebuild reads each card
+  file lazily, a cluster at a time, as Python does. `add`, `plan_add` and
+  `rebuild` now run on the Rust reader (`--tags JSON` still takes mutagen's).
+  The proof compares 174 synthetic files of every kind, the same files read
+  off a card, and 3,000 seeded damaged copies (20,000 tried once), field by
+  field; 14 of 16 mutants are caught, the other two are unobservable through
+  the first-value reads flashpod makes. Named differences: an unreadable
+  file's message is the port's own text, not mutagen's; a file mutagen
+  sniffs as another format (Ogg, APE, ...) is unreadable here; where Python
+  hangs or fails later (an MP4 cover atom mutagen loops on, numbers past
+  2**63) the port reports the file unreadable. Three Python bugs found
+  here were fixed in both (Python 0.5.2): an .aac failed the whole add,
+  WAV/AIFF tags were ignored, and one unreadable file failed a rebuild. Tables
+  that must match Python (genres, frame names, Unicode digits and spaces)
+  are generated by `scripts/gen_tag_tables.py`.
+- Next, M5: `flashpod-wasm` for emupod's offline app.

@@ -16,10 +16,8 @@ On synthetic cards and files. Against 0.5.1, every check fails except the
 untagged-WAV guard.
 """
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -118,14 +116,7 @@ def run(tmp):
 
 
 def main():
-    tmp = tempfile.mkdtemp(prefix="fp-tagfix-")
-    try:
-        run(tmp)
-    finally:
-        if fails:
-            print("  kept %s" % tmp)
-        else:
-            shutil.rmtree(tmp, ignore_errors=True)
+    run(synth.scratch_dir("fp-tagfix-"))
     print()
     if fails:
         print("%d FAILED" % len(fails))

@@ -1,0 +1,18 @@
+[package]
+name = "flashpod-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "flashpod's card library in Rust: the port of flashpod/card.py (see docs in emupod/docs/FLASHPOD_RUST.md)"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+caseless = "0.2"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[[bin]]
+name = "fpcore"
+path = "src/bin/fpcore.rs"

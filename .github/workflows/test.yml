@@ -203,6 +203,14 @@ jobs:
         shell: bash
         run: PYTHONPATH=. python scripts/test_tag_fixes.py
 
+      - name: Rust port (rust/flashpod-core) builds, tests, builds for wasm, matches Python
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          rustup target add wasm32-unknown-unknown
+          (cd rust && cargo test -q && cargo build -q --lib --release --target wasm32-unknown-unknown)
+          PYTHONPATH=. python scripts/rust_parity.py
+
       - name: flashpod burn checks (a file stands in for the card)
         if: runner.os == 'Linux'
         shell: bash
