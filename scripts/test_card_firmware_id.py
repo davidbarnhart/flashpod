@@ -28,6 +28,16 @@ from flashpod import card  # noqa: E402
 
 fails = []
 
+#: The 1.7 folder's own fixes: `version` is said again as `version-1.7`, and
+#: Refresh Library is new; what a card of each flashpod release carries.
+ONLY_17 = {"version-1.7", "refresh-library"}
+FIXES = {
+    "1.6": lambda t: sorted(x["name"] for x in t["fixes"]
+                            if x["name"] not in ONLY_17),
+    "1.7": lambda t: sorted(x["name"] for x in t["fixes"]
+                            if x["name"] != "version"),
+}
+
 
 def check(cond, what):
     print("  %s %s" % ("ok  " if cond else "FAIL", what))
@@ -69,10 +79,11 @@ def main():
         if e.get("maker") == "flashpod":
             table = json.load(open(os.path.join(ROOT, "flashpod", "firmware",
                                                 "fixes.json")))
-            check(sorted(f["fixes"]) == sorted(x["name"] for x in table["fixes"])
-                  and len(f["fixes"]) == 23 and f["version_word_means"] == "1.6",
-                  "flashpod 1.6: all %d fixes, version word %s"
-                  % (len(f["fixes"]), f["version_word_means"]))
+            v = e["version"]
+            want = FIXES[v](table)
+            check(sorted(f["fixes"]) == want and f["version_word_means"] == v,
+                  "flashpod %s: all %d fixes, version word %s"
+                  % (v, len(f["fixes"]), f["version_word_means"]))
         if e["file"].startswith("iPod_1.1.5"):
             check(f["fixes"] == [] and f["version_word_means"] == "1.5",
                   "stock 1.5: no openpod fixes, version word 1.5")
@@ -84,7 +95,8 @@ def main():
         print("openpod 1.6 builds")
         table = json.load(open(os.path.join(ROOT, "flashpod", "firmware",
                                             "fixes.json")))
-        all_fixes = sorted(f["name"] for f in table["fixes"])
+        all_fixes = FIXES["1.6"](table)
+        f17 = os.path.join(opts.openpod, "firmware", "1", "1.7")
         cases = [
             ("all", [], "flashpod 1.6", "1.6", all_fixes),
             ("noversion", ["--without", "version"], "unrecognized", "1.5",
@@ -92,6 +104,14 @@ def main():
             ("libleak", ["--only", "library-leak"], "unrecognized", "1.5",
              ["library-leak"]),
         ]
+        if os.path.isdir(f17):
+            cases += [
+                ("all17", ["--fixes", f17], "flashpod 1.7", "1.7",
+                 FIXES["1.7"](table)),
+                ("norefresh17", ["--fixes", f17, "--without", "refresh-library"],
+                 "unrecognized", "1.7",
+                 [n for n in FIXES["1.7"](table) if n != "refresh-library"]),
+            ]
         for name, args, build, word, want in cases:
             out = os.path.join(tmp, name + ".ipsw")
             subprocess.run([sys.executable, tool, "--out", out] + args,
