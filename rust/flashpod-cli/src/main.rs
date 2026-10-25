@@ -10,6 +10,9 @@ use flashpod_core::itunesdb::Track;
 use flashpod_core::ops;
 use flashpod_core::text::casefold;
 
+mod flash;
+mod term;
+
 const VERSION: &str = "0.5.2";
 
 /// What Python's `orunknown` does.
@@ -203,8 +206,86 @@ fn diagnose_missing_db(fs: &mut flashpod_core::fat::Fat32, device: &str) {
     eprintln!("flashpod: no iTunesDB on {} (iPod_Control is present but iPod_Control/iTunes/iTunesDB is missing). If this iPod should have music, that's unexpected \u{2014} otherwise run `flashpod init`.", device);
 }
 
+/// `flashpod flash ...` on an image file (argparse's p_fl, for the options
+/// an image takes). None: not something the Rust build handles yet.
+fn cmd_flash(args: &[String]) -> Option<i32> {
+    let mut o = flash::Opts {
+        device: String::new(),
+        firmware: String::new(),
+        yes: false,
+        dry_run: false,
+        no_format: false,
+        arm: false,
+        lba48: false,
+        max_data_gb: None,
+    };
+    let mut no_arm = false;
+    let mut device: Option<String> = None;
+    let mut firmware: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        let (key, inline) = match a.split_once('=') {
+            Some((k, v)) if k.starts_with("--") => (k, Some(v.to_string())),
+            _ => (a, None),
+        };
+        let mut value = || -> Option<String> {
+            if inline.is_some() {
+                return inline.clone();
+            }
+            i += 1;
+            args.get(i).cloned()
+        };
+        match key {
+            "--firmware" => firmware = Some(value()?),
+            "--max-data-gb" => o.max_data_gb = Some(value()?.parse().ok()?),
+            "--yes" => o.yes = true,
+            "--dry-run" => o.dry_run = true,
+            "--no-format" => o.no_format = true,
+            "--arm" => o.arm = true,
+            "--no-arm" => no_arm = true,
+            "--lba48" => o.lba48 = true,
+            _ if a.starts_with('-') => return None,
+            _ if device.is_none() => device = Some(a.to_string()),
+            _ => return None,
+        }
+        i += 1;
+    }
+    let device = device?;
+    // platform.use_image: only a regular file is an image
+    if !std::fs::metadata(&device).map(|m| m.is_file()).unwrap_or(false) {
+        return None;
+    }
+    if o.arm && no_arm {
+        return None;
+    }
+    o.device = device;
+    o.firmware = firmware?;
+    if !o.arm && !no_arm {
+        o.arm = flash::ask_arm(&o.firmware);
+    }
+    // offer_init_after_flash needs add; on a terminal that's still Python's
+    if term::stdin_isatty() && !o.dry_run && !o.no_format {
+        return None;
+    }
+    Some(match flash::flash(&o, None) {
+        Ok(rc) => rc,
+        Err(flash::Exit(msg)) => {
+            eprintln!("{}", msg);
+            1
+        }
+    })
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(|s| s.as_str()) == Some("flash") {
+        let code = cmd_flash(&args[1..]).unwrap_or_else(|| {
+            eprintln!("flashpod: not implemented in the Rust build yet");
+            2
+        });
+        std::process::exit(code);
+    }
     if args.iter().any(|a| a == "--version") {
         println!("flashpod {}", VERSION);
         return;
