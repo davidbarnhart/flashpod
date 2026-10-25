@@ -1,10 +1,13 @@
 //! `init`, `add`, `rm` and `rebuild` over `--raw IMAGE`: cli.run_raw's image
 //! branch and the commands it dispatches to (cmd_init_raw, cmd_add_raw /
 //! _cmd_add_core, cmd_rm_raw / _cmd_rm_core, cmd_rebuild_raw), message for
-//! message, on a terminal-less run. On a terminal the progress window and
-//! the trimming questions aren't ported yet; those hand back to the caller.
+//! message, on a terminal or off one.
 
 use crate::entropy;
+use crate::term;
+use crate::window::{self, EtaEstimator, LineWindow};
+use crate::winnow;
+use std::cell::RefCell;
 use flashpod_core::block::FileDevice;
 use flashpod_core::error::{Error, ErrorKind};
 use flashpod_core::fat::Fat32;
@@ -32,19 +35,6 @@ fn fmt_duration(secs: f64) -> String {
         format!("{}m{:02}s", m, s)
     } else {
         format!("{}s", s)
-    }
-}
-
-/// time.monotonic, frozen when FLASHPOD_NOW pins the clock (the test
-/// harness freezes Python's the same way).
-struct Clock(Option<std::time::Instant>);
-
-impl Clock {
-    fn start() -> Self {
-        Clock(if std::env::var_os("FLASHPOD_NOW").is_some() { None } else { Some(std::time::Instant::now()) })
-    }
-    fn secs(&self) -> f64 {
-        self.0.map_or(0.0, |t| t.elapsed().as_secs_f64())
     }
 }
 
@@ -121,9 +111,30 @@ pub fn run_raw_image(node: &str, cmd: Cmd) -> i32 {
     }
 }
 
+/// _raw_rebuild's window: one "recovering" line updated in place.
+struct RebuildUi<'a>(&'a RefCell<LineWindow>);
+
+impl Hooks for RebuildUi<'_> {
+    fn progress(&mut self, _stage: &str, nr: u64, total: u64, item: &str) {
+        self.0.borrow_mut().update(format!("[{}/{}] recovering {}...", nr, total, library::basename(item)));
+    }
+}
+
+/// _raw_rebuild: the library rebuilt from the files on the card, with a
+/// progress line; saved only with `save`.
+fn raw_rebuild(fs: &mut Fat32, name: &str, save: bool, ent: &mut flashpod_core::entropy::Entropy)
+    -> Result<flashpod_core::itunesdb::Library, Error>
+{
+    let win = RefCell::new(LineWindow::new());
+    let lib = ops::rebuild_fs(fs, name, save, &mut FileTags, ent, &mut RebuildUi(&win),
+                              &mut |m| win.borrow_mut().note(&m))?;
+    win.borrow_mut().clear();
+    Ok(lib)
+}
+
 /// cmd_rebuild_raw: rebuild the iTunesDB from the music on the card.
 fn rebuild(fs: &mut Fat32, node: &str, name: &str, ent: &mut flashpod_core::entropy::Entropy) -> i32 {
-    let lib = match ops::rebuild_fs(fs, name, true, &mut FileTags, ent, &mut library::NoHooks, &mut |m| eprintln!("{}", m)) {
+    let lib = match raw_rebuild(fs, name, true, ent) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("flashpod: {}", e.message);
@@ -186,21 +197,64 @@ fn rm(fs: &mut Fat32, node: &str, what: &[String], ent: &mut flashpod_core::entr
     0
 }
 
-/// apply_add's hooks, worded as _cmd_add_core's non-terminal LineWindow:
-/// each file's "Adding:" line on stdout, nothing for progress ticks.
-struct AddHooks<'a> {
-    labels: &'a [String],
+/// _cmd_add_core's callbacks for both passes, drawn in the LineWindow.
+struct AddUi {
+    win: LineWindow,
+    labels: Vec<String>,
+    eta: Option<EtaEstimator>,
+    batch_done: i64,
+    cur: usize,
+    npend: u64,
+    last: f64,
 }
 
-impl Hooks for AddHooks<'_> {
-    fn progress(&mut self, stage: &str, done: u64, total: u64, _item: &str) {
-        if stage == "copy" {
-            println!("[{}/{}] Adding: {}...", done, total, self.labels[done as usize - 1]);
+impl Hooks for AddUi {
+    fn progress(&mut self, stage: &str, done: u64, total: u64, item: &str) {
+        match stage {
+            "tags" => self.win.add(format!("[{}/{}] Reading tags: {}...", done, total, library::basename(item)), true),
+            "copy" => {
+                self.cur = done as usize;
+                self.npend = total;
+                self.last = 0.0;
+                self.win.add(format!("[{}/{}] Adding: {}...", done, total, self.labels[self.cur - 1]), false);
+            }
+            "write" => {
+                let now = window::monotonic();
+                // throttle to ~8/sec; always let 100% through
+                if done < total && now - self.last < 0.125 {
+                    return;
+                }
+                self.last = now;
+                let eta = self.eta.as_mut().unwrap();
+                eta.update(self.batch_done + done.min(total) as i64);
+                let mib = (1u64 << 20) as f64;
+                let pct = if total > 0 { done * 100 / total } else { 100 };
+                self.win.update(format!("[{}/{}] Adding: {}... {}% ({:.1}/{:.1} MiB)", self.cur, self.npend,
+                                        self.labels[self.cur - 1], pct, done as f64 / mib, total as f64 / mib));
+                let status = eta.remaining_text();
+                self.win.set_status(status);
+            }
+            _ => {}
+        }
+    }
+    fn report(&mut self, msg: &str) {
+        self.win.note(msg);
+    }
+    fn duplicate(&mut self, nr: u64, total: u64, path: &str) {
+        self.win.update(format!("[{}/{}] skipping {}: already on iPod", nr, total, library::basename(path)));
+    }
+    fn copied(&mut self, _nr: u64, _total: u64, size: u64) {
+        self.batch_done += size as i64;
+    }
+    fn failed(&mut self, nr: u64, total: u64, path: &str, size: u64, error: &str) {
+        self.win.note(&format!("[{}/{}] FAILED {}: {}", nr, total, path, error));
+        if let Some(e) = self.eta.as_mut() {
+            e.exclude(size as i64);
         }
     }
 }
 
-/// cmd_add_raw / _cmd_add_core, off a terminal.
+/// cmd_add_raw / _cmd_add_core.
 fn add(fs: &mut Fat32, node: &str, paths: &[String], ent: &mut flashpod_core::entropy::Entropy) -> i32 {
     if paths.is_empty() {
         // prompt_for_paths -> prompt_for_path, stdin not a terminal
@@ -215,6 +269,7 @@ fn add(fs: &mut Fat32, node: &str, paths: &[String], ent: &mut flashpod_core::en
         eprintln!("nothing to add");
         return 1;
     }
+    let mut rebuilt = false;
     let lib = match ops::load(fs, ent) {
         Ok(l) => l,
         Err(e) if e.kind == ErrorKind::NotInitialized => {
@@ -222,8 +277,23 @@ fn add(fs: &mut Fat32, node: &str, paths: &[String], ent: &mut flashpod_core::en
             return 1;
         }
         Err(e) if e.kind == ErrorKind::CorruptLibrary => {
-            eprintln!("flashpod: the iTunesDB is corrupt and can't be read ({}). Run `flashpod rebuild` to rebuild it from the files on the card.", e.message);
-            return 1;
+            if !term::stdin_isatty() {
+                eprintln!("flashpod: the iTunesDB is corrupt and can't be read ({}). Run `flashpod rebuild` to rebuild it from the files on the card.", e.message);
+                return 1;
+            }
+            println!("Arrr! Blow me down \u{2014} yer iPod's song-ledger be scuttled, naught but bilgewater where the music log oughta be. We'll not be stowin' fresh booty aboard till she's careened an' a new log writ proper.");
+            if !term::ask_yes("Shall I scrape 'er hull an' rebuild, ye salty sea-dog? [Aye/Nay] ", true) {
+                println!("flashpod: belay that \u{2014} nothin' added.");
+                return 0;
+            }
+            rebuilt = true;
+            match raw_rebuild(fs, "iPod", false, ent) {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("flashpod: {}", e.message);
+                    return 1;
+                }
+            }
         }
         Err(e) => {
             eprintln!("flashpod: {}", e.message);
@@ -231,57 +301,70 @@ fn add(fs: &mut Fat32, node: &str, paths: &[String], ent: &mut flashpod_core::en
         }
     };
     let opts = options();
-    let mut plan = match ops::plan_add_fs(fs, &files, &mut FileTags, ent, opts, false, false, Some(lib), &mut library::NoHooks) {
+    let mut ui = AddUi { win: LineWindow::new(), labels: Vec::new(), eta: None, batch_done: 0, cur: 0, npend: 0, last: 0.0 };
+    let mut plan = match ops::plan_add_fs(fs, &files, &mut FileTags, ent, opts, false, false, Some(lib), &mut ui) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("flashpod: {}", e.message);
             return 1;
         }
     };
-    let strs = |v: &Value| -> Vec<String> {
-        v.as_array().map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect()).unwrap_or_default()
-    };
-    for m in strs(&plan.json["unreadable"]) {
-        eprintln!("{}", m);
-    }
-    let mut failures = strs(&plan.json["failed"]).len();
-    let skipped = strs(&plan.json["duplicates"]).len();
-    let mut keep = plan.items.len();
+    let count = |v: &Value| v.as_array().map_or(0, |a| a.len());
+    let mut failures = count(&plan.json["failed"]);
+    let skipped = count(&plan.json["duplicates"]);
+    ui.win.clear();
+    let (mut dropped, mut db_dropped) = (0, 0);
 
-    if keep > 0 {
+    if !plan.items.is_empty() {
         if let Some(err) = plan.json["free_error"].as_str() {
-            eprintln!("flashpod add: couldn't check free space ({}); proceeding anyway", err);
+            ui.win.note(&format!("flashpod add: couldn't check free space ({}); proceeding anyway", err));
         }
         if let Some(budget) = plan.json["budget"].as_i64() {
             let batch: i64 = plan.items.iter().map(|(_, t)| t.size as i64).sum();
             if batch <= budget {
                 println!("flashpod add: this batch is {}. You've got {} more than you need, Dude. That's gnarly!",
                          fmt_size(batch), fmt_size(budget - batch));
-            } else {
+            } else if !term::stdin_isatty() {
                 eprintln!("flashpod add: batch is {} but only {} free; trim the selection or free space (can't prompt here).",
                           fmt_size(batch), fmt_size(budget));
                 return 1;
+            } else {
+                let kept = match winnow::winnow(&plan.items, budget) {
+                    Some(k) => k,
+                    None => {
+                        println!("flashpod add: nothing added.");
+                        return 0;
+                    }
+                };
+                dropped = plan.items.len() - kept.len();
+                plan.items = kept.iter().map(|&i| plan.items[i].clone()).collect();
+                if plan.items.is_empty() {
+                    println!("flashpod add: nothing selected; nothing added.");
+                    return 0;
+                }
             }
         }
     }
 
+    // will the grown iTunesDB still load on the iPod?
+    let mut keep = plan.items.len();
     if keep > 0 && opts.db_limit != 0 {
         let new: Vec<&flashpod_core::itunesdb::Track> = plan.items.iter().map(|(_, t)| t).collect();
         let mut memo = None;
         let c = library::ceiling(&plan.lib, &new, opts, &mut || ops::probe(fs, &mut memo), ent);
         let have = plan.lib.tracks.len();
-        if c.kind == Some("tracks") {
+        let (past, extra) = if c.kind == Some("tracks") {
             if c.fit == keep {
                 println!("flashpod add: the iPod's database will be {} bytes \u{2014} more than stock firmware loads, but this card's firmware has the large-library fix ({} of {} tracks).",
                          commas(c.projected.unwrap_or(0)), commas((have + keep) as i64), commas(c.limit));
+                (false, "")
             } else {
                 eprintln!("flashpod add: that is past the {} tracks the firmware lists; the rest would be on the card but never shown.", commas(c.limit));
                 if c.fit == 0 {
                     eprintln!("  The library already holds {}; remove tracks (`flashpod rm`) or set FLASHPOD_DB_LIMIT=0 to override.", commas(have as i64));
                     return 1;
                 }
-                eprintln!("  {} of the {} new tracks would fit; trim the batch, or set FLASHPOD_DB_LIMIT=0 to override (can't prompt here).", c.fit, keep);
-                return 1;
+                (true, "cap")
             }
         } else if c.projected.unwrap_or(0) > c.limit {
             eprintln!("flashpod add: this batch would grow the iPod's database to {} bytes \u{2014} past the ~{}-byte ceiling early iPod firmware can load (the iPod would then show ZERO songs).",
@@ -293,14 +376,34 @@ fn add(fs: &mut Fat32, node: &str, paths: &[String], ent: &mut flashpod_core::en
                 eprintln!("  The library alone already exceeds the ceiling; remove tracks (`flashpod rm`) or set FLASHPOD_DB_LIMIT=0 to override.");
                 return 1;
             }
-            eprintln!("  {} of the {} new tracks would fit; trim the batch, or set FLASHPOD_DB_LIMIT=0 to override (can't prompt here).", c.fit, keep);
-            return 1;
+            (true, "ceiling")
+        } else {
+            (false, "")
+        };
+        if past {
+            if !term::stdin_isatty() {
+                eprintln!("  {} of the {} new tracks would fit; trim the batch, or set FLASHPOD_DB_LIMIT=0 to override (can't prompt here).", c.fit, keep);
+                return 1;
+            }
+            let all = if extra == "cap" {
+                "  Add ALL anyway \u{2014} the iPod won't list the extra tracks? [y/N] "
+            } else {
+                "  Add ALL anyway \u{2014} the iPod will likely show an empty library? [y/N] "
+            };
+            if term::ask_yes(&format!("  {} of {} new tracks fit under the {}. Add just those? [Y/n] ", c.fit, keep, extra), true) {
+                db_dropped = keep - c.fit;
+                keep = c.fit;
+            } else if !term::ask_yes(all, false) {
+                println!("flashpod add: nothing added.");
+                return 0;
+            }
         }
     }
-    keep = keep.min(plan.items.len());
 
-    let clock = Clock::start();
-    let labels: Vec<String> = plan.items[..keep]
+    // pass 2: copy what survived, then the one save
+    let start = window::monotonic();
+    ui.eta = Some(EtaEstimator::new(plan.items[..keep].iter().map(|(_, t)| t.size as i64).sum()));
+    ui.labels = plan.items[..keep]
         .iter()
         .map(|(_, t)| {
             let title = t.title.clone().unwrap_or_default();
@@ -310,27 +413,25 @@ fn add(fs: &mut Fat32, node: &str, paths: &[String], ent: &mut flashpod_core::en
             }
         })
         .collect();
-    let paths_kept: Vec<String> = plan.items[..keep].iter().map(|(p, _)| p.clone()).collect();
-    let mut hooks = AddHooks { labels: &labels };
-    let rep = match ops::apply_add_fs(fs, &mut plan, Some(keep), false, &mut |p| std::fs::read(p), ent, &mut hooks) {
+    let rep = match ops::apply_add_fs(fs, &mut plan, Some(keep), rebuilt, &mut |p| std::fs::read(p), ent, &mut ui) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("flashpod: {}", e.message);
             return 1;
         }
     };
-    if let Some(failed) = rep["failed"].as_array() {
-        for f in failed {
-            let path = f["path"].as_str().unwrap_or("");
-            let nr = paths_kept.iter().position(|p| p == path).map_or(0, |i| i + 1);
-            eprintln!("[{}/{}] FAILED {}: {}", nr, keep, path, f["error"].as_str().unwrap_or(""));
-        }
-        failures += failed.len();
-    }
-    let added = rep["added"].as_array().map_or(0, |a| a.len());
+    failures += count(&rep["failed"]);
+    let added = count(&rep["added"]);
     let added_bytes = rep["bytes"].as_i64().unwrap_or(0);
-    let secs = clock.secs();
+    ui.win.set_status(None);
+    let secs = window::monotonic() - start;
     let mut parts = vec![format!("{} track{} added", added, if added != 1 { "s" } else { "" })];
+    if dropped > 0 {
+        parts.push(format!("{} dropped to fit free space", dropped));
+    }
+    if db_dropped > 0 {
+        parts.push(format!("{} dropped to fit the database ceiling", db_dropped));
+    }
     if skipped > 0 {
         parts.push(format!("{} skipped (already on iPod)", skipped));
     }

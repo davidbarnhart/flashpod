@@ -319,11 +319,15 @@ pub fn apply_add_fs(fs: &mut Fat32, plan: &mut Plan, keep: Option<usize>, save_a
         hooks.progress("copy", nr as u64 + 1, n as u64, &title);
         let located = copy(fs, &path, read_source, ent, &mut |d, t| hooks.progress("write", d, t, &title));
         match located {
-            Err(e) => failed.push(json!({"path": path, "error": e})),
+            Err(e) => {
+                hooks.failed(nr as u64 + 1, n as u64, &path, track.size as u64, &e);
+                failed.push(json!({"path": path, "error": e}));
+            }
             Ok(loc) => {
                 track.location = Some(loc);
                 track.id = plan.lib.next_track_id();
                 plan.lib.tracks.push(track.clone());
+                hooks.copied(nr as u64 + 1, n as u64, track.size as u64);
                 added.push(track);
             }
         }

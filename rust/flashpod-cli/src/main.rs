@@ -13,6 +13,8 @@ use flashpod_core::text::casefold;
 mod data;
 mod flash;
 mod term;
+mod window;
+mod winnow;
 
 const VERSION: &str = "0.5.2";
 
@@ -286,12 +288,11 @@ fn main() {
         }
         Some(cmd @ ("init" | "rebuild" | "rm" | "remove" | "delete" | "erase" | "add")) => {
             let image = raw.as_deref().filter(|r| std::fs::metadata(r).map(|m| m.is_file()).unwrap_or(false));
-            // the progress window and the add/rebuild questions on a terminal
-            // aren't ported yet
-            let tty = term::stdin_isatty() || std::io::IsTerminal::is_terminal(&std::io::stdout());
+            // `add` with no paths on a terminal opens the picker: not ported yet
             let args = &rest[1..];
+            let picker = cmd == "add" && args.is_empty() && term::stdin_isatty();
             match image {
-                Some(node) if !(tty && matches!(cmd, "add" | "rebuild")) => data::run_raw_image(node, match cmd {
+                Some(node) if !picker => data::run_raw_image(node, match cmd {
                     "init" => data::Cmd::Init(args.first().map(|s| s.as_str()).unwrap_or("iPod")),
                     "rebuild" => data::Cmd::Rebuild(args.first().map(|s| s.as_str())),
                     "add" => data::Cmd::Add(args),

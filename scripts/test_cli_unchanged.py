@@ -239,6 +239,46 @@ SCENARIOS = {
         S("add --raw {img} {big} {music}", write=True,
           pty=[(r"enter add", "\r")], expect="dropped to fit free space"),
     ],
+    # Every key of the cursor selector (rows: (unknown) 60 MiB, Alpha Band,
+    # Beta Group): over budget refused, toggles, arrows, all/none; then
+    # the numbered fallback, forced by a terminal too short for the list.
+    "terminal_keys": [
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --firmware {fw} --yes", write=True),
+        S("init --raw {img}", write=True),
+        S("add --raw {img} {big} {music}", write=True,
+          pty=[(r"enter add", " \rj \x1b[A anx\x1b[B\x1b[B k \r")],
+          expect="tracks added"),
+    ],
+    "terminal_lines": [
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --firmware {fw} --yes", write=True),
+        S("init --raw {img}", write=True),
+        S("add --raw {img} {big} {music}", env={"LINES": "4"}, write=True,
+          pty=[(r"q=quit: ", "1\r"), (r"q=quit: ", "\r"),
+               (r"q=quit: ", "1,x\r"), (r"q=quit: ", ",2\r"),
+               (r"q=quit: ", "a\r"), (r"q=quit: ", "n\r"),
+               (r"q=quit: ", "3 9\r"), (r"q=quit: ", "3  2\r"),
+               (r"q=quit: ", "\r")],
+          expect="tracks added"),
+    ],
+    # A corrupt database met in a terminal: the rebuild offer, declined and
+    # accepted, and `rebuild` itself drawing its progress line.
+    "terminal_rebuild": [
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --firmware {fw} --yes", write=True),
+        S("init --raw {img}", write=True),
+        S("add --raw {img} {music}", write=True, expect="tracks added"),
+        {"py": "corrupt_db"},
+        S("add --raw {img} {music}", pty=[(r"\[Aye/Nay\] ", "n\r")],
+          expect="belay that"),
+        S("add --raw {img} {music}", write=True,
+          pty=[(r"\[Aye/Nay\] ", "\r")], expect="skipped"),
+        {"py": "corrupt_db"},
+        S("rebuild --raw {img}", write=True, pty=[],
+          expect="Rebuilt the iTunesDB"),
+        S("ls --raw {img} all", expect="tracks"),
+    ],
     # The --mount path (an OS-mounted iPod) on a plain directory: same
     # commands, the kernel's FAT replaced by the host filesystem.
     "mount": [
