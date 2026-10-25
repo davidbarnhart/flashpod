@@ -142,6 +142,8 @@ fn confirm(dev: &str, total: u64, assume_yes: bool, lba48: bool, max_data_sector
     }
     eprintln!();
     let want = format!("{} {}", if do_format { "ERASE" } else { "REWRITE" }, device_label(dev));
+    // At end of input Python dies with an EOFError traceback (rc 1); David
+    // chose the plain mismatch message instead (2026-10-25).
     let got = input_line(&color(&format!("  Type \"{}\" to proceed: ", want), C_RED)).unwrap_or_default();
     if got.trim() != want {
         return Err(Exit("Confirmation did not match. Aborted.".into()));
