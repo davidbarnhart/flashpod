@@ -7,6 +7,7 @@ description = "the flashpod command line in Rust (M6): same commands, flags and 
 
 [dependencies]
 flashpod-core = { path = "../flashpod-core" }
+serde_json = { version = "1", features = ["preserve_order"] }
 
 [[bin]]
 name = "flashpod"

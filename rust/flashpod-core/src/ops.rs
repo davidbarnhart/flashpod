@@ -104,12 +104,18 @@ fn remove_location(fs: &mut Fat32, location: &Option<String>) -> Result<(), Erro
 /// card.remove: the removed tracks as dicts.
 pub fn remove(dev: &mut dyn BlockDevice, what: &[String], ent: &mut Entropy) -> Result<Value, Error> {
     let mut fs = open_fat(dev)?;
-    let mut lib = load(&mut fs, ent)?;
+    let victims = remove_fs(&mut fs, what, ent)?;
+    Ok(json!(victims.iter().map(|t| t.to_dict()).collect::<Vec<_>>()))
+}
+
+/// card.remove on an open FAT: the removed tracks.
+pub fn remove_fs(fs: &mut Fat32, what: &[String], ent: &mut Entropy) -> Result<Vec<Track>, Error> {
+    let mut lib = load(fs, ent)?;
     let idx = library::select_for_removal(&lib, what)?;
     let victims: Vec<Track> = idx.iter().map(|&i| lib.tracks[i].clone()).collect();
     let mut taken = vec![false; lib.tracks.len()];
     for &i in &idx {
-        remove_location(&mut fs, &lib.tracks[i].location)?;
+        remove_location(fs, &lib.tracks[i].location)?;
         taken[i] = true;
     }
     let mut k = 0;
@@ -118,8 +124,8 @@ pub fn remove(dev: &mut dyn BlockDevice, what: &[String], ent: &mut Entropy) -> 
         k += 1;
         keep
     });
-    save_library(&mut fs, &lib, ent)?;
-    Ok(json!(victims.iter().map(|t| t.to_dict()).collect::<Vec<_>>()))
+    save_library(fs, &lib, ent)?;
+    Ok(victims)
 }
 
 /// RawTarget.copy: a collision-free fp###### name in a random F## folder.
@@ -165,7 +171,7 @@ pub struct Plan {
 
 /// The library-fix probe, memoized, over the FAT's block device (the disk's
 /// sector 0 is -part_start, as RawTarget.firmware_read reads it).
-fn probe(fs: &mut Fat32, memo: &mut Option<Option<bool>>) -> Option<bool> {
+pub fn probe(fs: &mut Fat32, memo: &mut Option<Option<bool>>) -> Option<bool> {
     if let Some(v) = memo {
         return *v;
     }
@@ -399,9 +405,19 @@ pub fn rebuild(dev: &mut dyn BlockDevice, name: &str, save: bool, src: &mut dyn 
     -> Result<Value, Error>
 {
     let mut fs = open_fat(dev)?;
-    ensure_dirs(&mut fs)?;
-    let files = fs.music_files().map_err(os_err)?;
     let mut skipped = Vec::new();
+    let lib = rebuild_fs(&mut fs, name, save, src, ent, hooks, &mut |m| skipped.push(m))?;
+    Ok(json!({"tracks": lib.tracks.len(), "skipped": skipped}))
+}
+
+/// card.rebuild on an open FAT: the rebuilt library; each skipped file's
+/// message goes to `report` as it happens.
+pub fn rebuild_fs(fs: &mut Fat32, name: &str, save: bool, src: &mut dyn TagSource, ent: &mut Entropy,
+                  hooks: &mut dyn Hooks, report: &mut dyn FnMut(String))
+    -> Result<Library, Error>
+{
+    ensure_dirs(fs)?;
+    let files = fs.music_files().map_err(os_err)?;
     let mut located: Vec<(String, Track)> = Vec::new();
     let total = files.len() as u64;
     for (nr, (relpath, location)) in files.into_iter().enumerate() {
@@ -412,17 +428,17 @@ pub fn rebuild(dev: &mut dyn BlockDevice, name: &str, save: bool, src: &mut dyn 
             Ok(Some(e)) if e.attr & crate::fat::ATTR_DIRECTORY == 0 => e,
             Ok(_) => continue,
             Err(e) => {
-                skipped.push(format!("skipping {}: {}", relpath, e));
+                report(format!("skipping {}: {}", relpath, e));
                 continue;
             }
         };
         let size = entry.size as u64;
-        let result = match crate::tags::FatFile::open(&mut fs, entry.first_cluster, size) {
+        let result = match crate::tags::FatFile::open(fs, entry.first_cluster, size) {
             Ok(mut file) => src.read_stream(&relpath, &mut file),
             Err(e) => library::TagResult::Unreadable(e),
         };
         match result {
-            library::TagResult::Unreadable(e) => skipped.push(format!("skipping {}: {}", relpath, e)),
+            library::TagResult::Unreadable(e) => report(format!("skipping {}: {}", relpath, e)),
             library::TagResult::Unrecognized => {}
             library::TagResult::Audio(a) => {
                 let (_, ext) = library::splitext(&relpath);
@@ -439,7 +455,7 @@ pub fn rebuild(dev: &mut dyn BlockDevice, name: &str, save: bool, src: &mut dyn 
         lib.tracks.push(t);
     }
     if save {
-        save_library(&mut fs, &lib, ent)?;
+        save_library(fs, &lib, ent)?;
     }
-    Ok(json!({"tracks": lib.tracks.len(), "skipped": skipped}))
+    Ok(lib)
 }

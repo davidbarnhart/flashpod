@@ -10,6 +10,7 @@ use flashpod_core::itunesdb::Track;
 use flashpod_core::ops;
 use flashpod_core::text::casefold;
 
+mod data;
 mod flash;
 mod term;
 
@@ -144,36 +145,6 @@ fn load_library_raw(device: &str) -> Option<flashpod_core::itunesdb::Library> {
         Ok(None) => {
             diagnose_missing_db(&mut fs, device);
             None
-        }
-    }
-}
-
-/// open_raw_target + RawTarget: a writable image, or why not (stderr).
-fn open_raw_writable(device: &str) -> Option<FileDevice> {
-    match FileDevice::open_image(device, true) {
-        Ok(d) => Some(d),
-        Err(e) => {
-            eprintln!("flashpod: couldn't open a FAT filesystem on {}: {}", device, e.message);
-            None
-        }
-    }
-}
-
-fn cmd_init_raw(device: &str, name: &str) -> i32 {
-    let mut dev = match open_raw_writable(device) {
-        Some(d) => d,
-        None => return 1,
-    };
-    let mut ent = entropy();
-    match ops::init(&mut dev, name, true, &mut ent) {
-        Ok(_) => {
-            println!("Initialized iPod directory structure on {}", device);
-            0
-        }
-        Err(e) => {
-            let msg = e.details.get("error").and_then(|v| v.as_str()).unwrap_or(&e.message).to_string();
-            eprintln!("flashpod: couldn't open a FAT filesystem on {}: {}", device, msg);
-            1
         }
     }
 }
@@ -313,13 +284,25 @@ fn main() {
                 None => 1,
             }
         }
-        Some("init") => match raw.as_deref() {
-            Some(dev) => cmd_init_raw(dev, rest.get(1).map(|s| s.as_str()).unwrap_or("iPod")),
-            None => {
-                eprintln!("flashpod: init needs --raw IMAGE in the Rust build yet");
-                2
+        Some(cmd @ ("init" | "rebuild" | "rm" | "remove" | "delete" | "erase" | "add")) => {
+            let image = raw.as_deref().filter(|r| std::fs::metadata(r).map(|m| m.is_file()).unwrap_or(false));
+            // the progress window and the add/rebuild questions on a terminal
+            // aren't ported yet
+            let tty = term::stdin_isatty() || std::io::IsTerminal::is_terminal(&std::io::stdout());
+            let args = &rest[1..];
+            match image {
+                Some(node) if !(tty && matches!(cmd, "add" | "rebuild")) => data::run_raw_image(node, match cmd {
+                    "init" => data::Cmd::Init(args.first().map(|s| s.as_str()).unwrap_or("iPod")),
+                    "rebuild" => data::Cmd::Rebuild(args.first().map(|s| s.as_str())),
+                    "add" => data::Cmd::Add(args),
+                    _ => data::Cmd::Rm(args),
+                }),
+                _ => {
+                    eprintln!("flashpod: not implemented in the Rust build yet");
+                    2
+                }
             }
-        },
+        }
         _ => {
             eprintln!("flashpod: not implemented in the Rust build yet");
             2
