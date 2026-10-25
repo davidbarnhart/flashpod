@@ -65,9 +65,17 @@ _free = int(os.environ.get("FP_DISK_FREE", str(10 << 30)))
 shutil.disk_usage = lambda p: shutil._ntuple_diskusage(_free * 2, _free, _free)
 sys.argv = ["flashpod"] + sys.argv[1:]
 from flashpod import cli
+if os.environ.get("FLASHPOD_SEED"):
+    # --rust: ids and the clock come from the SplitMix64 source the Rust
+    # binary also uses, so written images can be compared byte for byte
+    from flashpod import entropy
+    with entropy.deterministic(int(os.environ["FLASHPOD_SEED"]),
+                               int(os.environ["FLASHPOD_NOW"])):
+        sys.exit(cli.main())
 sys.exit(cli.main())
 '''
 
+RUST_MODE = False          # set by --rust
 IMG = "ipod.img"
 MNT = "ipod-mount"
 
@@ -430,7 +438,7 @@ def corrupt_db(img):
             raise RuntimeError("no iTunesDB in the image to corrupt")
 
 
-def run_scenario(name, steps, tree, work, fixtures, runner):
+def run_scenario(name, steps, tree, work, fixtures, runner, rust=None):
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(os.path.join(work, "home"))
@@ -456,8 +464,12 @@ def run_scenario(name, steps, tree, work, fixtures, runner):
             records.append({"step": i, "py": step["py"], "sha": sha(img)})
             continue
         argv = [expand_arg(a, ctx) for a in step["argv"]]
-        cmd = [sys.executable, runner] + argv
-        env = env_for(work, tree, step.get("env"))
+        cmd = ([rust] if rust else [sys.executable, runner]) + argv
+        extra = dict(step.get("env") or {})
+        if RUST_MODE:
+            extra.setdefault("FLASHPOD_SEED", "1234")
+            extra.setdefault("FLASHPOD_NOW", "1760000000")
+        env = env_for(work, tree, extra)
         before = sha(img)
         if "pty" in step:
             answers = [(rx, ans.format(**ctx)) for rx, ans in step["pty"]]
@@ -576,14 +588,14 @@ def make_fixtures(root):
     return {"music": music, "fw": fw, "badfw": badfw, "big": big}
 
 
-def run_all(tree, root, fixtures, runner, only=None):
+def run_all(tree, root, fixtures, runner, only=None, rust=None):
     out = {}
     for name, steps in SCENARIOS.items():
         if only and name not in only:
             continue
         out[name] = run_scenario(name, steps, tree,
                                  os.path.join(root, "work-" + name),
-                                 fixtures, runner)
+                                 fixtures, runner, rust)
     return out
 
 
@@ -623,6 +635,9 @@ def main():
                     help="a checkout of the pre-refactor commit")
     ap.add_argument("--tree", default=os.path.dirname(HERE),
                     help="tree under test (default: this checkout)")
+    ap.add_argument("--rust", metavar="BIN",
+                    help="run the tree-under-test side with this Rust "
+                         "flashpod binary (the baseline stays Python)")
     ap.add_argument("--self", action="store_true",
                     help="compare the baseline against itself (determinism)")
     ap.add_argument("--mutants", action="store_true",
@@ -633,6 +648,8 @@ def main():
                     help="print every baseline step's output (for writing "
                          "expectations)")
     opts = ap.parse_args()
+    global RUST_MODE
+    RUST_MODE = bool(opts.rust)
 
     baseline = os.path.abspath(opts.baseline)
     tree = os.path.abspath(baseline if opts.self else opts.tree)
@@ -674,7 +691,8 @@ def main():
         print("baseline %s: %d scenarios, %d commands, all meaningful"
               % (baseline, len(base), nsteps))
 
-        new = run_all(tree, root, fixtures, runner, opts.only)
+        new = run_all(tree, root, fixtures, runner, opts.only,
+                      os.path.abspath(opts.rust) if opts.rust else None)
         diffs = []
         for name in base:
             diffs += compare(name, base[name], new[name], SCENARIOS[name])
