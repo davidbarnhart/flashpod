@@ -14,6 +14,7 @@ use argparse::{Arg, Cli, Nargs, Ns, Val};
 mod argparse;
 mod data;
 mod flash;
+mod mount;
 mod term;
 mod window;
 mod winnow;
@@ -327,6 +328,44 @@ fn list(ns: &Ns, k: &str) -> Vec<String> {
     }
 }
 
+/// Whether `path` is a mountpoint in the OS mount table (cli._device_for_mount
+/// finds a device for it). Those take the device-side steps -- the stale-mount
+/// and FireWire-queue checks, the eject offer -- which this build doesn't
+/// have yet; a plain directory has none of them.
+fn is_mountpoint(path: &str) -> bool {
+    let table = std::env::var("FLASHPOD_MOUNTS_FILE").unwrap_or_else(|_| "/proc/mounts".into());
+    let want = match std::fs::canonicalize(path) {
+        Ok(p) => p,
+        Err(_) => std::path::PathBuf::from(path),
+    };
+    let unescape = |s: &str| -> String {
+        let b = s.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'\\' && i + 3 < b.len() && b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c)) {
+                out.push(u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 4]).unwrap(), 8).unwrap_or(0));
+                i += 4;
+            } else {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    };
+    std::fs::read_to_string(table).unwrap_or_default().lines().any(|l| {
+        let mut it = l.split_whitespace();
+        let (_dev, mnt) = (it.next(), it.next());
+        match mnt {
+            Some(m) => {
+                let m = unescape(m);
+                std::fs::canonicalize(&m).unwrap_or_else(|_| m.clone().into()) == want
+            }
+            None => false,
+        }
+    })
+}
+
 fn not_implemented() -> i32 {
     eprintln!("flashpod: not implemented in the Rust build yet");
     2
@@ -340,14 +379,26 @@ fn main() {
     };
     let command = s(&ns, "command").unwrap_or_default();
     let raw = s(&ns, "raw");
+    let mount = s(&ns, "mount").filter(|m| !m.is_empty());
     let code = match command.as_str() {
         "flash" => cmd_flash(&ns).unwrap_or_else(not_implemented),
-        "ls" | "list" => match raw.as_deref().filter(|r| !r.is_empty()) {
-            Some(r) => match load_library_raw(r) {
+        "ls" | "list" => match (raw.as_deref().filter(|r| !r.is_empty()), mount.as_deref()) {
+            (Some(r), _) => match load_library_raw(r) {
                 Some(lib) => cmd_ls(&lib.name, &lib.tracks, &s(&ns, "field").unwrap_or_default()),
                 None => 1,
             },
-            None => not_implemented(),
+            (None, Some(m)) if !is_mountpoint(m) => {
+                // cli.load_library: card.library over a MountTarget
+                let mut t = mount::MountTarget { mount: m.to_string() };
+                match ops::load(&mut t, &mut entropy()) {
+                    Ok(lib) => cmd_ls(&lib.name, &lib.tracks, &s(&ns, "field").unwrap_or_default()),
+                    Err(e) => {
+                        data::say_mount_load_error(m, &e);
+                        1
+                    }
+                }
+            }
+            _ => not_implemented(),
         },
         cmd @ ("init" | "rebuild" | "rm" | "remove" | "delete" | "erase" | "add") => {
             let image = raw.as_deref().filter(|r| std::fs::metadata(r).map(|m| m.is_file()).unwrap_or(false));
@@ -356,13 +407,16 @@ fn main() {
             let name = s(&ns, "name");
             // `add` with no paths on a terminal opens the picker: not ported yet
             let picker = cmd == "add" && files.is_empty() && term::stdin_isatty();
-            match image {
-                Some(node) if !picker => data::run_raw_image(node, match cmd {
-                    "init" => data::Cmd::Init(name.as_deref().unwrap_or("iPod")),
-                    "rebuild" => data::Cmd::Rebuild(name.as_deref()),
-                    "add" => data::Cmd::Add(&files),
-                    _ => data::Cmd::Rm(&what),
-                }),
+            let c = match cmd {
+                "init" => data::Cmd::Init(name.as_deref().unwrap_or("iPod")),
+                "rebuild" => data::Cmd::Rebuild(name.as_deref()),
+                "add" => data::Cmd::Add(&files),
+                _ => data::Cmd::Rm(&what),
+            };
+            match (image, raw.as_deref().filter(|r| !r.is_empty()), mount.as_deref()) {
+                _ if picker => not_implemented(),
+                (Some(node), _, _) => data::run_raw_image(node, c),
+                (None, None, Some(m)) if !is_mountpoint(m) => data::run_mount(m, c),
                 _ => not_implemented(),
             }
         }

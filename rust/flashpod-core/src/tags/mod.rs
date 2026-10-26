@@ -100,7 +100,7 @@ impl<'a> PyFile<'a> {
 }
 
 /// Python's OSError text for a failed open: "[Errno N] message: 'path'".
-fn os_error(e: &std::io::Error, path: &str) -> String {
+pub fn os_error(e: &std::io::Error, path: &str) -> String {
     match e.raw_os_error() {
         Some(code) => {
             let msg = e.to_string();

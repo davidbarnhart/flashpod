@@ -10,10 +10,10 @@ use crate::winnow;
 use std::cell::RefCell;
 use flashpod_core::block::FileDevice;
 use flashpod_core::error::{Error, ErrorKind};
-use flashpod_core::fat::Fat32;
 use flashpod_core::inspect::Options;
 use flashpod_core::library::{self, Hooks};
-use flashpod_core::ops;
+use flashpod_core::ops::{self, Target};
+use crate::mount::{self, MountTarget};
 use flashpod_core::tags::FileTags;
 use serde_json::Value;
 
@@ -61,6 +61,73 @@ fn error_text(e: &Error) -> String {
     e.details.get("error").and_then(|v| v.as_str()).unwrap_or(&e.message).to_string()
 }
 
+/// Which target a command runs over, for the messages that differ.
+pub struct Ctx {
+    pub node: String,
+    pub mount: bool,
+}
+
+impl Ctx {
+    /// An error from the target: over a mount, main's `except OSError`
+    /// (_report_io_error); over the raw FAT, the message.
+    fn fail(&self, e: &Error) -> i32 {
+        if self.mount {
+            report_io_error(&self.node, e);
+        } else {
+            eprintln!("flashpod: {}", e.message);
+        }
+        1
+    }
+}
+
+/// _report_io_error.
+pub fn report_io_error(mount: &str, e: &Error) {
+    if mount::errno(e) == Some(libc::EIO) {
+        eprintln!("flashpod: I/O error talking to the iPod at {} \u{2014} it likely disconnected, or the cable/connector is flaky. Reconnect it, remount, and retry. If it persists the filesystem may be damaged (reformat with `flashpod flash`).", mount);
+    } else {
+        eprintln!("flashpod: cannot access {}: {}", mount, e.message);
+    }
+}
+
+/// _say_mount_load_error.
+pub fn say_mount_load_error(mount: &str, e: &Error) {
+    if e.kind == ErrorKind::NotInitialized {
+        if !std::path::Path::new(mount).is_dir() {
+            eprintln!("flashpod: {} does not exist \u{2014} is the iPod mounted?", mount);
+        } else {
+            eprintln!("flashpod: no iTunesDB on {} (run `flashpod init` first?)", mount);
+        }
+    } else {
+        eprintln!("flashpod: failed to read iTunesDB: {}", e.message);
+    }
+}
+
+/// The --mount branch of cli.main for a directory: the command over
+/// target.MountTarget.
+pub fn run_mount(mount: &str, cmd: Cmd) -> i32 {
+    let mut t = MountTarget { mount: mount.to_string() };
+    let cx = Ctx { node: mount.to_string(), mount: true };
+    let mut ent = entropy();
+    match cmd {
+        Cmd::Init(name) => match t.init_structure(name, &mut ent) {
+            Ok(()) => {
+                println!("Initialized iPod directory structure at {}", mount);
+                0
+            }
+            Err(e) => cx.fail(&e),
+        },
+        Cmd::Rebuild(name) => {
+            if !t.music_dir_exists() {
+                eprintln!("flashpod: no iPod_Control/Music on {} \u{2014} is this an iPod?", mount);
+                return 1;
+            }
+            rebuild(&mut t, &cx, name.unwrap_or("iPod"), &mut ent)
+        }
+        Cmd::Rm(what) => rm(&mut t, &cx, what, &mut ent),
+        Cmd::Add(paths) => add(&mut t, &cx, paths, &mut ent),
+    }
+}
+
 pub enum Cmd<'a> {
     Init(&'a str),
     Rebuild(Option<&'a str>),
@@ -103,11 +170,12 @@ pub fn run_raw_image(node: &str, cmd: Cmd) -> i32 {
             return 1;
         }
     };
+    let cx = Ctx { node: node.to_string(), mount: false };
     match cmd {
         Cmd::Init(_) => unreachable!(),
-        Cmd::Rebuild(name) => rebuild(&mut fs, node, name.unwrap_or("iPod"), &mut ent),
-        Cmd::Rm(what) => rm(&mut fs, node, what, &mut ent),
-        Cmd::Add(paths) => add(&mut fs, node, paths, &mut ent),
+        Cmd::Rebuild(name) => rebuild(&mut fs, &cx, name.unwrap_or("iPod"), &mut ent),
+        Cmd::Rm(what) => rm(&mut fs, &cx, what, &mut ent),
+        Cmd::Add(paths) => add(&mut fs, &cx, paths, &mut ent),
     }
 }
 
@@ -122,7 +190,7 @@ impl Hooks for RebuildUi<'_> {
 
 /// _raw_rebuild: the library rebuilt from the files on the card, with a
 /// progress line; saved only with `save`.
-fn raw_rebuild(fs: &mut Fat32, name: &str, save: bool, ent: &mut flashpod_core::entropy::Entropy)
+fn raw_rebuild(fs: &mut dyn Target, name: &str, save: bool, ent: &mut flashpod_core::entropy::Entropy)
     -> Result<flashpod_core::itunesdb::Library, Error>
 {
     let win = RefCell::new(LineWindow::new());
@@ -132,25 +200,29 @@ fn raw_rebuild(fs: &mut Fat32, name: &str, save: bool, ent: &mut flashpod_core::
     Ok(lib)
 }
 
-/// cmd_rebuild_raw: rebuild the iTunesDB from the music on the card.
-fn rebuild(fs: &mut Fat32, node: &str, name: &str, ent: &mut flashpod_core::entropy::Entropy) -> i32 {
+/// cmd_rebuild_raw / cmd_rebuild: rebuild the iTunesDB from the music on
+/// the card.
+fn rebuild(fs: &mut dyn Target, cx: &Ctx, name: &str, ent: &mut flashpod_core::entropy::Entropy) -> i32 {
     let lib = match raw_rebuild(fs, name, true, ent) {
         Ok(l) => l,
-        Err(e) => {
-            eprintln!("flashpod: {}", e.message);
-            return 1;
-        }
+        Err(e) => return cx.fail(&e),
     };
     let n = lib.tracks.len();
-    println!("Rebuilt the iTunesDB on {}: {} track{} recovered from the card.", node, n, if n != 1 { "s" } else { "" });
+    println!("Rebuilt the iTunesDB on {}: {} track{} recovered from the {}.", cx.node, n, if n != 1 { "s" } else { "" },
+             if cx.mount { "iPod" } else { "card" });
     0
 }
 
 /// cmd_rm_raw / _cmd_rm_core / _say_no_such_track.
-fn rm(fs: &mut Fat32, node: &str, what: &[String], ent: &mut flashpod_core::entropy::Entropy) -> i32 {
+fn rm(fs: &mut dyn Target, cx: &Ctx, what: &[String], ent: &mut flashpod_core::entropy::Entropy) -> i32 {
+    let node = cx.node.as_str();
     let victims = match ops::remove_fs(fs, what, ent) {
         Ok(v) => v,
         Err(e) => match e.kind {
+            ErrorKind::CorruptLibrary | ErrorKind::NotInitialized if cx.mount => {
+                say_mount_load_error(node, &e);
+                return 1;
+            }
             ErrorKind::CorruptLibrary => {
                 eprintln!("flashpod: the iTunesDB on {} is corrupt ({}) \u{2014} run `flashpod rebuild` to rebuild it from the files on the card.", node, e.message);
                 return 1;
@@ -182,10 +254,7 @@ fn rm(fs: &mut Fat32, node: &str, what: &[String], ent: &mut flashpod_core::entr
                     }
                 };
             }
-            _ => {
-                eprintln!("flashpod: {}", e.message);
-                return 1;
-            }
+            _ => return cx.fail(&e),
         },
     };
     for t in &victims {
@@ -255,7 +324,7 @@ impl Hooks for AddUi {
 }
 
 /// cmd_add_raw / _cmd_add_core.
-fn add(fs: &mut Fat32, node: &str, paths: &[String], ent: &mut flashpod_core::entropy::Entropy) -> i32 {
+fn add(fs: &mut dyn Target, cx: &Ctx, paths: &[String], ent: &mut flashpod_core::entropy::Entropy) -> i32 {
     if paths.is_empty() {
         // prompt_for_paths -> prompt_for_path, stdin not a terminal
         eprintln!("flashpod add: no paths given and stdin is not a terminal");
@@ -269,9 +338,15 @@ fn add(fs: &mut Fat32, node: &str, paths: &[String], ent: &mut flashpod_core::en
         eprintln!("nothing to add");
         return 1;
     }
+    let node = cx.node.as_str();
     let mut rebuilt = false;
     let lib = match ops::load(fs, ent) {
         Ok(l) => l,
+        // no rebuild offer over a mount: a corrupt DB is reported, as always
+        Err(e) if cx.mount => {
+            say_mount_load_error(node, &e);
+            return 1;
+        }
         Err(e) if e.kind == ErrorKind::NotInitialized => {
             eprintln!("flashpod: no iTunesDB on {} (run `flashpod init` first?)", node);
             return 1;
@@ -304,10 +379,7 @@ fn add(fs: &mut Fat32, node: &str, paths: &[String], ent: &mut flashpod_core::en
     let mut ui = AddUi { win: LineWindow::new(), labels: Vec::new(), eta: None, batch_done: 0, cur: 0, npend: 0, last: 0.0 };
     let mut plan = match ops::plan_add_fs(fs, &files, &mut FileTags, ent, opts, false, false, Some(lib), &mut ui) {
         Ok(p) => p,
-        Err(e) => {
-            eprintln!("flashpod: {}", e.message);
-            return 1;
-        }
+        Err(e) => return cx.fail(&e),
     };
     let count = |v: &Value| v.as_array().map_or(0, |a| a.len());
     let mut failures = count(&plan.json["failed"]);
@@ -351,7 +423,7 @@ fn add(fs: &mut Fat32, node: &str, paths: &[String], ent: &mut flashpod_core::en
     if keep > 0 && opts.db_limit != 0 {
         let new: Vec<&flashpod_core::itunesdb::Track> = plan.items.iter().map(|(_, t)| t).collect();
         let mut memo = None;
-        let c = library::ceiling(&plan.lib, &new, opts, &mut || ops::probe(fs, &mut memo), ent);
+        let c = library::ceiling(&plan.lib, &new, opts, &mut || fs.probe(&mut memo), ent);
         let have = plan.lib.tracks.len();
         let (past, extra) = if c.kind == Some("tracks") {
             if c.fit == keep {
@@ -415,10 +487,7 @@ fn add(fs: &mut Fat32, node: &str, paths: &[String], ent: &mut flashpod_core::en
         .collect();
     let rep = match ops::apply_add_fs(fs, &mut plan, Some(keep), rebuilt, &mut |p| std::fs::read(p), ent, &mut ui) {
         Ok(r) => r,
-        Err(e) => {
-            eprintln!("flashpod: {}", e.message);
-            return 1;
-        }
+        Err(e) => return cx.fail(&e),
     };
     failures += count(&rep["failed"]);
     let added = count(&rep["added"]);

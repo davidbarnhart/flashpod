@@ -330,6 +330,14 @@ SCENARIOS = {
           write=True, pty=[(r"enter add", "\r")],
           expect="dropped to fit free space"),
     ],
+    # A file of many 64 KiB chunks copied over a mount in a terminal: the
+    # copy's own progress throttle shows in the window.
+    "mount_terminal_big": [
+        {"py": "mkdir"},
+        S("init --mount {mnt}", write=True),
+        S("add --mount {mnt} {big}", write=True, pty=[],
+          expect="1 track added"),
+    ],
     "wrong_confirm": [
         {"py": "image", "size": 64 << 20},
         S("flash {img} --firmware {fw}",
@@ -509,6 +517,9 @@ def run_scenario(name, steps, tree, work, fixtures, runner, rust=None):
         if RUST_MODE:
             extra.setdefault("FLASHPOD_SEED", "1234")
             extra.setdefault("FLASHPOD_NOW", "1760000000")
+            # the runner's shutil.disk_usage default, said out loud for the
+            # Rust binary, which reads FP_DISK_FREE in its place
+            extra.setdefault("FP_DISK_FREE", str(10 << 30))
         env = env_for(work, tree, extra)
         before = sha(img)
         if "pty" in step:
