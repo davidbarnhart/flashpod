@@ -14,7 +14,10 @@ use argparse::{Arg, Cli, Nargs, Ns, Val};
 mod argparse;
 mod catalog;
 mod data;
+mod detect;
 mod flash;
+mod host;
+mod rawdev;
 mod mount;
 mod term;
 mod window;
@@ -126,6 +129,9 @@ fn cmd_ls(name: &str, tracks: &[Track], field: &str) -> i32 {
 
 /// load_library_raw: the library off an image, or why not (stderr, None).
 fn load_library_raw(device: &str) -> Option<flashpod_core::itunesdb::Library> {
+    if !std::path::Path::new(device).is_file() {
+        return load_library_device(device);
+    }
     let mut dev = match FileDevice::open_image(device, false) {
         Ok(d) => d,
         Err(e) => {
@@ -145,6 +151,45 @@ fn load_library_raw(device: &str) -> Option<flashpod_core::itunesdb::Library> {
     match ops::load_library(&mut fs, &mut ent) {
         Err(e) => {
             eprintln!("flashpod: failed to parse iTunesDB from {}: {}", device, e.message);
+            None
+        }
+        Ok(Some(lib)) => Some(lib),
+        Ok(None) => {
+            diagnose_missing_db(&mut fs, device);
+            None
+        }
+    }
+}
+
+/// load_library_raw over a device node.
+fn load_library_device(device: &str) -> Option<flashpod_core::itunesdb::Library> {
+    let say = |e: &str| eprintln!("flashpod: couldn't read a FAT filesystem on {}: {}\n(pass the iPod's data partition, e.g. /dev/rdisk1s2, or its whole disk /dev/rdisk1)", device, e);
+    let xfer = rawdev::effective_xfer();
+    let mut dev = match rawdev::RawDevice::open(device, false, xfer) {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("flashpod: need root to read {}.\n  sudo {} ls --raw {}", device, host::self_cmd().join(" "), device);
+            return None;
+        }
+        Err(e) => {
+            say(&rawdev::py_os(&e).to_string());
+            return None;
+        }
+    };
+    let mut fs = match rawdev::open_raw_fat(&mut dev, xfer) {
+        Ok(f) => f,
+        Err(e) => {
+            say(&e);
+            return None;
+        }
+    };
+    match ops::load_library(&mut fs, &mut entropy()) {
+        Err(e) if e.kind == flashpod_core::error::ErrorKind::CorruptLibrary => {
+            eprintln!("flashpod: failed to parse iTunesDB from {}: {}", device, e.message);
+            None
+        }
+        Err(e) => {
+            say(&e.message);
             None
         }
         Ok(Some(lib)) => Some(lib),
@@ -356,44 +401,6 @@ fn list(ns: &Ns, k: &str) -> Vec<String> {
     }
 }
 
-/// Whether `path` is a mountpoint in the OS mount table (cli._device_for_mount
-/// finds a device for it). Those take the device-side steps -- the stale-mount
-/// and FireWire-queue checks, the eject offer -- which this build doesn't
-/// have yet; a plain directory has none of them.
-fn is_mountpoint(path: &str) -> bool {
-    let table = std::env::var("FLASHPOD_MOUNTS_FILE").unwrap_or_else(|_| "/proc/mounts".into());
-    let want = match std::fs::canonicalize(path) {
-        Ok(p) => p,
-        Err(_) => std::path::PathBuf::from(path),
-    };
-    let unescape = |s: &str| -> String {
-        let b = s.as_bytes();
-        let mut out = Vec::new();
-        let mut i = 0;
-        while i < b.len() {
-            if b[i] == b'\\' && i + 3 < b.len() && b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c)) {
-                out.push(u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 4]).unwrap(), 8).unwrap_or(0));
-                i += 4;
-            } else {
-                out.push(b[i]);
-                i += 1;
-            }
-        }
-        String::from_utf8_lossy(&out).into_owned()
-    };
-    std::fs::read_to_string(table).unwrap_or_default().lines().any(|l| {
-        let mut it = l.split_whitespace();
-        let (_dev, mnt) = (it.next(), it.next());
-        match mnt {
-            Some(m) => {
-                let m = unescape(m);
-                std::fs::canonicalize(&m).unwrap_or_else(|_| m.clone().into()) == want
-            }
-            None => false,
-        }
-    })
-}
-
 fn not_implemented() -> i32 {
     eprintln!("flashpod: not implemented in the Rust build yet");
     2
@@ -406,46 +413,126 @@ fn main() {
         Err(code) => std::process::exit(code),
     };
     let command = s(&ns, "command").unwrap_or_default();
-    let raw = s(&ns, "raw");
-    let mount = s(&ns, "mount").filter(|m| !m.is_empty());
     let code = match command.as_str() {
         "flash" => cmd_flash(&ns).unwrap_or_else(not_implemented),
-        "ls" | "list" => match (raw.as_deref().filter(|r| !r.is_empty()), mount.as_deref()) {
-            (Some(r), _) => match load_library_raw(r) {
-                Some(lib) => cmd_ls(&lib.name, &lib.tracks, &s(&ns, "field").unwrap_or_default()),
-                None => 1,
-            },
-            (None, Some(m)) if !is_mountpoint(m) => {
-                // cli.load_library: card.library over a MountTarget
-                let mut t = mount::MountTarget { mount: m.to_string() };
-                match ops::load(&mut t, &mut entropy()) {
-                    Ok(lib) => cmd_ls(&lib.name, &lib.tracks, &s(&ns, "field").unwrap_or_default()),
-                    Err(e) => {
-                        data::say_mount_load_error(m, &e);
-                        1
-                    }
-                }
-            }
-            _ => not_implemented(),
-        },
-        cmd @ ("init" | "rebuild" | "rm" | "remove" | "delete" | "erase" | "add") => {
-            let image = raw.as_deref().filter(|r| std::fs::metadata(r).map(|m| m.is_file()).unwrap_or(false));
-            let files = list(&ns, "files");
-            let what = list(&ns, "what");
-            let name = s(&ns, "name");
-            let c = match cmd {
-                "init" => data::Cmd::Init(name.as_deref().unwrap_or("iPod")),
-                "rebuild" => data::Cmd::Rebuild(name.as_deref()),
-                "add" => data::Cmd::Add(&files),
-                _ => data::Cmd::Rm(&what),
-            };
-            match (image, raw.as_deref().filter(|r| !r.is_empty()), mount.as_deref()) {
-                (Some(node), _, _) => data::run_raw_image(node, c),
-                (None, None, Some(m)) if !is_mountpoint(m) => data::run_mount(m, c),
-                _ => not_implemented(),
-            }
-        }
-        _ => not_implemented(),
+        "burn" => not_implemented(),
+        _ => data_command(&ns, &command),
     };
     std::process::exit(code);
 }
+
+fn data_cmd<'a>(cmd: &str, name: &'a Option<String>, files: &'a [String], what: &'a [String]) -> data::Cmd<'a> {
+    match cmd {
+        "init" => data::Cmd::Init(name.as_deref().unwrap_or("iPod")),
+        "rebuild" => data::Cmd::Rebuild(name.as_deref()),
+        "add" => data::Cmd::Add(files),
+        _ => data::Cmd::Rm(what),
+    }
+}
+
+/// run_raw: ls/add/rm/init/rebuild over the raw device or image `node`,
+/// elevating with sudo first when we lack root. `image`: platform.use_image
+/// took --raw for a card image (decided once, from the argument).
+fn run_raw(ns: &Ns, command: &str, node: &str, image: bool) -> i32 {
+    if !image && !host::is_admin() {
+        eprintln!("flashpod: {} over the raw device {} needs root \u{2014} elevating via sudo...", command, node);
+        let mut extra = vec!["--raw".to_string(), node.to_string()];
+        extra.extend(detect::cmd_args(ns));
+        host::sudo_reexec(&extra);
+        eprintln!("flashpod: couldn't get root for raw access to {}.", node);
+        return 1;
+    }
+    if matches!(command, "ls" | "list") {
+        return match load_library_raw(node) {
+            Some(lib) => cmd_ls(&lib.name, &lib.tracks, &s(ns, "field").unwrap_or_default()),
+            None => 1,
+        };
+    }
+    let (name, files, what) = (s(ns, "name").filter(|n| !n.is_empty()), list(ns, "files"), list(ns, "what"));
+    let c = data_cmd(command, &name, &files, &what);
+    if image {
+        data::run_raw_image(node, c)
+    } else {
+        data::run_raw_device(node, c)
+    }
+}
+
+/// cli.main from the --raw dispatch on: find the target (scan, mount
+/// table), check the mount, run the command, offer the eject.
+fn data_command(ns: &Ns, command: &str) -> i32 {
+    if let Some(raw) = s(ns, "raw").filter(|r| !r.is_empty()) {
+        let image = std::path::Path::new(&raw).is_file();
+        return run_raw(ns, command, &raw, image);
+    }
+    let mut mount = s(ns, "mount").filter(|m| !m.is_empty());
+    let data = matches!(command, "ls" | "list" | "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild");
+    if data && mount.is_none() && host::firewire_sbp2_needed() {
+        host::load_firewire_sbp2();
+    }
+    if matches!(command, "ls" | "list") && mount.is_none() {
+        match detect::detect_ls_source(ns) {
+            None => return 1,
+            Some(detect::Source::Lib(lib)) => return cmd_ls(&lib.name, &lib.tracks, &s(ns, "field").unwrap_or_default()),
+            Some(detect::Source::Mount(m)) => mount = Some(m),
+            Some(detect::Source::Raw(node)) => return run_raw(ns, command, &node, false),
+        }
+    }
+    if matches!(command, "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild") && mount.is_none() {
+        match detect::resolve_raw_target(ns) {
+            None => return 1,
+            Some(detect::Source::Raw(node)) => return run_raw(ns, command, &node, false),
+            Some(detect::Source::Mount(m)) => mount = Some(m),
+            Some(detect::Source::Lib(_)) => return 1,
+        }
+    }
+    let mount = match mount.or_else(detect::detect_mount) {
+        Some(m) => m,
+        None => return 1,
+    };
+    // the backing device vanished: a stale handle that EIOs on touch
+    if let Some(dev) = detect::device_for_mount(&mount) {
+        if !std::path::Path::new(&dev).exists() {
+            eprintln!("flashpod: {} is a stale mount \u{2014} its device ({}) is gone (did the iPod disconnect?). Unmount it (sudo umount -l {}), reconnect the iPod, and retry.", mount, dev, mount);
+            return 1;
+        }
+    }
+    let mut mount = mount;
+    let readable = std::ffi::CString::new(mount.as_bytes())
+        .map(|c| unsafe { libc::access(c.as_ptr(), libc::R_OK | libc::X_OK) } == 0).unwrap_or(false);
+    if !readable && detect::device_for_mount(&mount).is_some() {
+        match detect::remount_as_user(&mount) {
+            Some(m) => mount = m,
+            None => return 1,
+        }
+    }
+    let unsafe_queue = b(ns, "unsafe_queue");
+    let mut problem = host::firewire_queue_problem(&mount);
+    if let (Some((disk, _)), false) = (&problem, unsafe_queue) {
+        host::pin_firewire_queue(disk);
+        problem = host::firewire_queue_problem(&mount);
+    }
+    if let (Some((disk, bad)), false) = (&problem, unsafe_queue) {
+        eprintln!("flashpod: {} is a FireWire iPod and the host I/O settings are UNSAFE for it:\n  {}\nLarge/queued reads can crash early iPod FireWire bridges and corrupt the filesystem.\nFix for this attach:\n  sudo sh -c 'echo 4 >/sys/block/{d}/queue/max_sectors_kb; echo 0 >/sys/block/{d}/queue/read_ahead_kb; echo 1 >/sys/block/{d}/device/queue_depth'\nFix permanently (settings reset on every re-attach):\n  sudo cp {} /etc/udev/rules.d/ && sudo udevadm control --reload\n(--unsafe-queue overrides this check)",
+                  mount, bad.join(", "), UDEV_RULE, d = disk);
+        return 1;
+    }
+    if matches!(command, "ls" | "list") {
+        let mut t = mount::MountTarget::new(&mount);
+        return match ops::load(&mut t, &mut entropy()) {
+            Ok(lib) => cmd_ls(&lib.name, &lib.tracks, &s(ns, "field").unwrap_or_default()),
+            Err(e) => {
+                data::say_mount_load_error(&mount, &e);
+                1
+            }
+        };
+    }
+    let (name, files, what) = (s(ns, "name").filter(|n| !n.is_empty()), list(ns, "files"), list(ns, "what"));
+    let rc = data::run_mount(&mount, data_cmd(command, &name, &files, &what));
+    if matches!(command, "add" | "rm" | "remove" | "delete" | "erase") {
+        detect::offer_eject(detect::device_for_mount(&mount).as_deref(), rc);
+    }
+    rc
+}
+
+/// resources.udev_rule(): where a pip install keeps the rule.
+const UDEV_RULE: &str = "contrib/99-flashpod-firewire-ipod.rules";

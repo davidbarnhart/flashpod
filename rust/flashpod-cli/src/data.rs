@@ -105,7 +105,7 @@ pub fn say_mount_load_error(mount: &str, e: &Error) {
 /// The --mount branch of cli.main for a directory: the command over
 /// target.MountTarget.
 pub fn run_mount(mount: &str, cmd: Cmd) -> i32 {
-    let mut t = MountTarget { mount: mount.to_string() };
+    let mut t = MountTarget::new(mount);
     let cx = Ctx { node: mount.to_string(), mount: true };
     let mut ent = entropy();
     match cmd {
@@ -638,4 +638,50 @@ pub fn offer_init_after_flash_image(dev: &str, file: &mut FileDevice, data_start
         let cx = Ctx { node: dev.to_string(), mount: false };
         add(&mut fs, &cx, &[], &mut ent);
     }
+}
+
+/// run_raw for a device node (root already): open_raw_target, the command,
+/// then the eject offer.
+pub fn run_raw_device(node: &str, cmd: Cmd) -> i32 {
+    if !crate::host::ensure_firewire_disk_safe(node) {
+        eprintln!("flashpod: couldn't pin safe FireWire I/O settings for {}; the kernel may probe it unsafely after writes.", node);
+    }
+    let xfer = crate::rawdev::effective_xfer();
+    let mut dev = match crate::rawdev::RawDevice::open(node, true, xfer) {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("flashpod: need root to write {}.\n  sudo {} ... --raw {}", node, crate::host::self_cmd().join(" "), node);
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("flashpod: couldn't open a FAT filesystem on {}: {}", node, crate::rawdev::py_os(&e));
+            return 1;
+        }
+    };
+    let rc = {
+        let mut fs = match crate::rawdev::open_raw_fat(&mut dev, xfer) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("flashpod: couldn't open a FAT filesystem on {}: {}", node, e);
+                return 1;
+            }
+        };
+        let cx = Ctx { node: node.to_string(), mount: false };
+        let mut ent = entropy();
+        match cmd {
+            Cmd::Init(name) => match fs.init_structure(name, &mut ent) {
+                Ok(()) => {
+                    println!("Initialized iPod directory structure on {}", node);
+                    0
+                }
+                Err(e) => cx.fail(&e),
+            },
+            Cmd::Rebuild(name) => rebuild(&mut fs, &cx, name.unwrap_or("iPod"), &mut ent),
+            Cmd::Rm(what) => rm(&mut fs, &cx, what, &mut ent),
+            Cmd::Add(paths) => add(&mut fs, &cx, paths, &mut ent),
+        }
+    };
+    drop(dev);
+    crate::detect::offer_eject(Some(node), rc);
+    rc
 }

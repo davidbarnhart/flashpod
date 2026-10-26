@@ -59,6 +59,10 @@ pub struct MountTarget {
 }
 
 impl MountTarget {
+    pub fn new(mount: &str) -> Self {
+        MountTarget { mount: mount.to_string() }
+    }
+
     fn db(&self) -> String {
         join(&self.mount, "iPod_Control/iTunes/iTunesDB")
     }
@@ -179,12 +183,20 @@ impl Target for MountTarget {
         Ok(st.f_bavail as i64 * st.f_frsize as i64)
     }
 
-    /// A mount has no raw access of its own; the firmware is read through
-    /// the device behind it, which this build doesn't reach yet (a
-    /// directory that isn't a mountpoint has none).
+    /// cli._mount_firmware_read: the card's firmware partition through the
+    /// whole disk behind the mount, opened directly as root, else through
+    /// `sudo dd iflag=direct` (sudo -n off a terminal). A directory that
+    /// isn't a mountpoint has no device: unreadable.
     fn probe(&mut self, memo: &mut Option<Option<bool>>) -> Option<bool> {
-        *memo = Some(None);
-        None
+        if let Some(v) = memo {
+            return *v;
+        }
+        let v = crate::detect::device_for_mount(&self.mount).and_then(|node| {
+            let disk = format!("/dev/{}", crate::host::disk_of_dev(&node));
+            firmware_fix(&disk)
+        });
+        *memo = Some(v);
+        v
     }
 
     fn rebuild_library(&mut self, name: &str, src: &mut dyn TagSource, ent: &mut Entropy, hooks: &mut dyn Hooks,
@@ -220,4 +232,58 @@ impl Target for MountTarget {
         }
         Ok(lib)
     }
+}
+
+/// _sector_reader + target.firmware_reader + firmware.fix_on_card.
+fn firmware_fix(disk: &str) -> Option<bool> {
+    let xfer = crate::rawdev::effective_xfer();
+    let mut direct = crate::rawdev::RawDevice::open(disk, false, xfer).ok();
+    let sudo: Vec<String> = if crate::term::stdin_isatty() { vec!["sudo".into()] } else { vec!["sudo".into(), "-n".into()] };
+    if direct.is_none() {
+        if !crate::host::have("sudo") || !crate::host::have("dd") {
+            return None;
+        }
+        if crate::term::stdin_isatty() {
+            eprintln!("flashpod: reading the iPod's firmware (to see how large a library it can load) needs root \u{2014} elevating via sudo...");
+        }
+    }
+    let mut sectors = |lba: u64, count: u64| -> Option<Vec<u8>> {
+        match direct.as_mut() {
+            Some(d) => {
+                let mut sec = flashpod_core::fat::Sectors { dev: d, part_start: 0, max_xfer: xfer };
+                sec.read(lba, count).ok()
+            }
+            None => {
+                let mut cmd = sudo.clone();
+                cmd.extend(["dd".to_string(), format!("if={}", disk), "bs=512".into(), format!("skip={}", lba), format!("count={}", count), "iflag=direct".into()]);
+                let out = std::process::Command::new(&cmd[0]).args(&cmd[1..]).stderr(std::process::Stdio::null()).output().ok()?;
+                (out.status.success() && out.stdout.len() as u64 == count * 512).then_some(out.stdout)
+            }
+        }
+    };
+    let mbr = sectors(0, 1)?;
+    if mbr.len() < 512 || mbr[510..512] != [0x55, 0xaa] {
+        return None;
+    }
+    let mut start = None;
+    for off in [446usize, 462, 478, 494] {
+        let lba = u32::from_le_bytes(mbr[off + 8..off + 12].try_into().unwrap()) as u64;
+        let cnt = u32::from_le_bytes(mbr[off + 12..off + 16].try_into().unwrap());
+        if mbr[off + 4] == 0 && lba != 0 && cnt != 0 {
+            start = Some(lba);
+            break;
+        }
+    }
+    let start = start?;
+    let mut read = |offset: u64, n: usize| -> Option<Vec<u8>> {
+        if n == 0 {
+            return Some(Vec::new());
+        }
+        let first = offset / 512;
+        let last = (offset + n as u64 - 1) / 512;
+        let data = sectors(start + first, last - first + 1)?;
+        let skip = (offset - first * 512) as usize;
+        Some(data[skip..skip + n].to_vec())
+    };
+    flashpod_core::firmware::fix_on_card(&mut read, flashpod_core::library::LIBRARY_FIX_NAME)
 }

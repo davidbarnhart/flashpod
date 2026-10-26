@@ -3,17 +3,33 @@
 use crate::term;
 use std::collections::VecDeque;
 use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// time.monotonic. Frozen at 1000.0 when FLASHPOD_NOW pins the clock (the
 /// test harness freezes Python's at that value); otherwise counting up from
 /// 1000.0 at the first call, so a throttle seeded at 0.0 lets its first tick
 /// through as Python's does.
 pub fn monotonic() -> f64 {
-    static START: std::sync::OnceLock<Option<std::time::Instant>> = std::sync::OnceLock::new();
-    let start = START.get_or_init(|| {
-        if std::env::var_os("FLASHPOD_NOW").is_some() { None } else { Some(std::time::Instant::now()) }
-    });
-    1000.0 + start.map_or(0.0, |t| t.elapsed().as_secs_f64())
+    1000.0 + START.get_or_init(start).map_or(f64::from_bits(SLEPT.load(Ordering::Relaxed)), |t| t.elapsed().as_secs_f64())
+}
+
+static START: std::sync::OnceLock<Option<std::time::Instant>> = std::sync::OnceLock::new();
+/// Seconds slept on the frozen clock (f64 bits).
+static SLEPT: AtomicU64 = AtomicU64::new(0);
+
+fn start() -> Option<std::time::Instant> {
+    if std::env::var_os("FLASHPOD_NOW").is_some() { None } else { Some(std::time::Instant::now()) }
+}
+
+/// time.sleep. Under FLASHPOD_NOW the clock is virtual: sleeping advances
+/// it and returns at once (the fake-host harness patches Python's alike).
+pub fn sleep(secs: f64) {
+    if START.get_or_init(start).is_none() {
+        let now = f64::from_bits(SLEPT.load(Ordering::Relaxed));
+        SLEPT.store((now + secs.max(0.0)).to_bits(), Ordering::Relaxed);
+    } else {
+        std::thread::sleep(std::time::Duration::from_secs_f64(secs.max(0.0)));
+    }
 }
 
 fn clip(s: &str, width: usize) -> String {
