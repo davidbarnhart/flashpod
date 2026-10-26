@@ -207,11 +207,14 @@ fn cmd_flash(ns: &Ns) -> Option<i32> {
     if !o.arm && !b(ns, "no_arm") {
         o.arm = flash::ask_arm(&o.firmware);
     }
-    // offer_init_after_flash needs add; on a terminal that's still Python's
-    if term::stdin_isatty() && !o.dry_run && !o.no_format {
-        return None;
-    }
-    Some(match flash::flash(&o, None) {
+    // offer init on the fresh card only when it will work: interactive, a
+    // real write, a FAT32 data partition
+    let offer = term::stdin_isatty() && !o.dry_run && !o.no_format;
+    let mut hook = |dev: &str, f: &mut FileDevice, data_start: u64| -> Result<(), flash::Exit> {
+        data::offer_init_after_flash_image(dev, f, data_start);
+        Ok(())
+    };
+    Some(match flash::flash(&o, if offer { Some(&mut hook) } else { None }) {
         Ok(rc) => rc,
         Err(flash::Exit(msg)) => {
             eprintln!("{}", msg);
@@ -405,8 +408,6 @@ fn main() {
             let files = list(&ns, "files");
             let what = list(&ns, "what");
             let name = s(&ns, "name");
-            // `add` with no paths on a terminal opens the picker: not ported yet
-            let picker = cmd == "add" && files.is_empty() && term::stdin_isatty();
             let c = match cmd {
                 "init" => data::Cmd::Init(name.as_deref().unwrap_or("iPod")),
                 "rebuild" => data::Cmd::Rebuild(name.as_deref()),
@@ -414,7 +415,6 @@ fn main() {
                 _ => data::Cmd::Rm(&what),
             };
             match (image, raw.as_deref().filter(|r| !r.is_empty()), mount.as_deref()) {
-                _ if picker => not_implemented(),
                 (Some(node), _, _) => data::run_raw_image(node, c),
                 (None, None, Some(m)) if !is_mountpoint(m) => data::run_mount(m, c),
                 _ => not_implemented(),

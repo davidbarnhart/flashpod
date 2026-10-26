@@ -325,11 +325,18 @@ impl Hooks for AddUi {
 
 /// cmd_add_raw / _cmd_add_core.
 fn add(fs: &mut dyn Target, cx: &Ctx, paths: &[String], ent: &mut flashpod_core::entropy::Entropy) -> i32 {
-    if paths.is_empty() {
-        // prompt_for_paths -> prompt_for_path, stdin not a terminal
-        eprintln!("flashpod add: no paths given and stdin is not a terminal");
-        return 1;
-    }
+    let prompted;
+    let paths = if paths.is_empty() {
+        match prompt_for_paths() {
+            Some(p) => {
+                prompted = p;
+                &prompted[..]
+            }
+            None => return 1,
+        }
+    } else {
+        paths
+    };
     if paths[0].is_empty() {
         return 1;
     }
@@ -539,5 +546,96 @@ fn commas(n: i64) -> String {
         format!("-{}", out)
     } else {
         out
+    }
+}
+
+/// os.path.expanduser for "~" and "~/...".
+fn expanduser(p: &str) -> String {
+    match (p.strip_prefix('~'), std::env::var("HOME")) {
+        (Some(rest), Ok(home)) if rest.is_empty() || rest.starts_with('/') => {
+            let home = home.trim_end_matches('/');
+            format!("{}{}", if home.is_empty() { "/" } else { home }, rest)
+        }
+        _ => p.to_string(),
+    }
+}
+
+/// cli.prompt_for_paths: on a terminal, a typed path (Enter alone opens the
+/// directory picker, which this build doesn't have yet); else prompt_for_path.
+pub fn prompt_for_paths() -> Option<Vec<String>> {
+    if term::stdin_isatty() && term::stdout_isatty() {
+        let typed = match term::input_line("\nPress ENTER to select content to add to the iPod (or type a path): ") {
+            Some(t) => t.trim().to_string(),
+            None => {
+                println!();
+                eprintln!("flashpod add: cancelled");
+                return None;
+            }
+        };
+        if !typed.is_empty() {
+            let path = expanduser(&typed);
+            if !std::path::Path::new(&path).exists() {
+                eprintln!("flashpod add: no such file or directory: {}", path);
+                return None;
+            }
+            return Some(vec![path]);
+        }
+        eprintln!("flashpod: not implemented in the Rust build yet (the directory picker); type a path instead.");
+        return None;
+    }
+    prompt_for_path().map(|p| vec![p])
+}
+
+/// cli.prompt_for_path (no tab completion).
+fn prompt_for_path() -> Option<String> {
+    if !term::stdin_isatty() {
+        eprintln!("flashpod add: no paths given and stdin is not a terminal");
+        return None;
+    }
+    let path = match term::input_line("File or directory to add (TAB to complete): ") {
+        Some(p) => expanduser(p.trim()),
+        None => {
+            println!();
+            return None;
+        }
+    };
+    if path.is_empty() {
+        eprintln!("flashpod add: nothing entered");
+        return None;
+    }
+    if !std::path::Path::new(&path).exists() {
+        eprintln!("flashpod add: no such file or directory: {}", path);
+        return None;
+    }
+    Some(path)
+}
+
+/// _offer_init_after_flash_win, which images take (platform.image): init
+/// and then add through the flash's still-open handle, the partition table
+/// not yet written.
+pub fn offer_init_after_flash_image(dev: &str, file: &mut FileDevice, data_start: u64) {
+    let max_xfer = std::env::var("FLASHPOD_RAW_MAX_XFER").ok().and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(flashpod_core::fat::IMAGE_MAX_XFER).max(1);
+    let sec = flashpod_core::fat::Sectors { dev: file, part_start: data_start, max_xfer };
+    let mut fs = match flashpod_core::fat::Fat32::open(sec) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("flashpod: couldn't open a FAT filesystem on {}: {}", dev, e);
+            return;
+        }
+    };
+    if !term::ask_yes(&format!("\nThe card still needs the iPod database before it can take music (\"flashpod init\").\nRun init on {} now? [Y/n] ", dev), true) {
+        eprintln!("Skipped. Later: run `flashpod init --raw {}`.", dev);
+        return;
+    }
+    let mut ent = entropy();
+    if let Err(e) = fs.init_structure("iPod", &mut ent) {
+        eprintln!("flashpod: {}", e.message);
+        return;
+    }
+    println!("Initialized iPod directory structure on {}", dev);
+    if term::ask_yes("\nMusic can be loaded onto the card now, or later when it is in the iPod.\nLoad music onto the card now? [Y/n] ", true) {
+        let cx = Ctx { node: dev.to_string(), mount: false };
+        add(&mut fs, &cx, &[], &mut ent);
     }
 }

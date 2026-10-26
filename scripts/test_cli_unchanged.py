@@ -330,6 +330,32 @@ SCENARIOS = {
           write=True, pty=[(r"enter add", "\r")],
           expect="dropped to fit free space"),
     ],
+    # `terminal`'s flash -> init -> add offers, judged against the current
+    # tree (that scenario's expectations are the 2686d4a baseline's), plus
+    # the answers that decline each offer and a mistyped path.
+    "terminal_flash": [
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --firmware {fw}", write=True, pty=[
+            (r'Type "ERASE ipod\.img" to proceed: ', "ERASE ipod.img\r"),
+            (r"Run init on .* now\? \[Y/n\] ", "y\r"),
+            (r"Load music onto the card now\? \[Y/n\] ", "y\r"),
+            (r"or type a path\): ", "{music}\r"),
+        ], expect="tracks added"),
+        S("add --raw {img}", pty=[(r"or type a path\): ", "{music}/nope\r")],
+          expect="no such file"),
+        S("add --raw {img}", pty=[(r"or type a path\): ", "{music}\r")],
+          expect="already on iPod"),
+        S("flash {img} --firmware {fw}", write=True, pty=[
+            (r'Type "ERASE ipod\.img" to proceed: ', "ERASE ipod.img\r"),
+            (r"Run init on .* now\? \[Y/n\] ", "n\r"),
+        ], expect="Skipped"),
+        S("flash {img} --firmware {fw}", write=True, pty=[
+            (r'Type "ERASE ipod\.img" to proceed: ', "ERASE ipod.img\r"),
+            (r"Run init on .* now\? \[Y/n\] ", "\r"),
+            (r"Load music onto the card now\? \[Y/n\] ", "n\r"),
+        ], expect="Initialized"),
+        S("ls --raw {img}", expect='"iPod": 0 tracks'),
+    ],
     # A file of many 64 KiB chunks copied over a mount in a terminal: the
     # copy's own progress throttle shows in the window.
     "mount_terminal_big": [
