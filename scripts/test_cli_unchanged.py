@@ -65,6 +65,9 @@ _free = int(os.environ.get("FP_DISK_FREE", str(10 << 30)))
 shutil.disk_usage = lambda p: shutil._ntuple_diskusage(_free * 2, _free, _free)
 sys.argv = ["flashpod"] + sys.argv[1:]
 from flashpod import cli
+# the flash_catalog scenario's firmware catalog, served from 127.0.0.1
+if os.environ.get("FP_MANIFEST"):
+    cli.FIRMWARE_MANIFEST = os.environ["FP_MANIFEST"]
 if os.environ.get("FLASHPOD_SEED"):
     # --rust: ids and the clock come from the SplitMix64 source the Rust
     # binary also uses, so written images can be compared byte for byte
@@ -364,6 +367,28 @@ SCENARIOS = {
         S("add --mount {mnt} {big}", write=True, pty=[],
           expect="1 track added"),
     ],
+    # flash without --firmware: the model and firmware choosers over a
+    # catalog served from 127.0.0.1, the download, the cache, checksums.
+    "flash_catalog": [
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --yes", env={"FP_MANIFEST": "{manifest}"}, write=True,
+          expect="verified and cached"),
+        S("flash {img} --yes --dry-run", env={"FP_MANIFEST": "{manifest}"},
+          expect="using default firmware"),
+        S("flash {img} --yes --model 9G", env={"FP_MANIFEST": "{manifest}"},
+          expect="unknown model"),
+        S("flash {img} --yes --dry-run --model 2G", env={"FP_MANIFEST": "{manifest}"},
+          pty=[(r"Select firmware \[1\]: ", "0\r")], expect="checksum"),
+        S("flash {img} --yes --dry-run --model 2g", env={"FP_MANIFEST": "{manifest}"},
+          pty=[(r"Select firmware \[1\]: ", "2\r")], expect="404"),
+        S("flash {img} --dry-run", env={"FP_MANIFEST": "{manifest}"},
+          pty=[(r"Select model: ", "1\r"), (r"Select firmware \[1\]: ", "\r")],
+          expect="dry-run"),
+        S("flash {img} --dry-run", env={"FP_MANIFEST": "{manifest}"},
+          pty=[(r"Select model: ", "x\r")], expect="invalid selection"),
+        S("flash {img} --dry-run --model 1G", env={"FP_MANIFEST": "{manifest}"},
+          pty=[(r"Select firmware \[0\]: ", "7\r")], expect="invalid selection"),
+    ],
     "wrong_confirm": [
         {"py": "image", "size": 64 << 20},
         S("flash {img} --firmware {fw}",
@@ -519,6 +544,7 @@ def run_scenario(name, steps, tree, work, fixtures, runner, rust=None):
     shutil.copytree(fixtures["music"], os.path.join(work, "music"))
     ctx = {"img": IMG, "mnt": MNT, "fw": fixtures["fw"],
            "badfw": fixtures["badfw"], "music": os.path.join(work, "music"),
+           "manifest": fixtures["manifest"],
            "big": fixtures["big"]}
     # the target whose bytes each step is judged by: the image, or for the
     # --mount scenarios the directory standing in for a mounted iPod
@@ -539,7 +565,7 @@ def run_scenario(name, steps, tree, work, fixtures, runner, rust=None):
             continue
         argv = [expand_arg(a, ctx) for a in step["argv"]]
         cmd = ([rust] if rust else [sys.executable, runner]) + argv
-        extra = dict(step.get("env") or {})
+        extra = {k: v.format(**ctx) for k, v in (step.get("env") or {}).items()}
         if RUST_MODE:
             extra.setdefault("FLASHPOD_SEED", "1234")
             extra.setdefault("FLASHPOD_NOW", "1760000000")
@@ -656,13 +682,70 @@ def compare(name, a, b, steps=None):
     return diffs
 
 
+def serve_catalog(root, fw):
+    """A firmware catalog like firmware/firmware.json, its images served by
+    a local HTTP server for the run's lifetime: a good default, one whose
+    sha256 is wrong, one the server doesn't have. Returns the manifest."""
+    import hashlib
+    import http.server
+    import json
+    import threading
+    site = os.path.join(root, "site")
+    os.makedirs(site, exist_ok=True)
+    with open(fw, "rb") as f:
+        data = f.read()
+    for name in ("good.bin", "tampered.bin"):
+        with open(os.path.join(site, name), "wb") as f:
+            f.write(data)
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=site, **kw)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = "http://127.0.0.1:%d" % srv.server_address[1]
+    sha = hashlib.sha256(data).hexdigest()
+    manifest = {
+        "base_url": base,
+        "models": [
+            {"id": "1G", "name": "1st generation", "years": "2001-02",
+             "tell": "scroll wheel physically turns"},
+            {"id": "2G", "name": "2nd generation", "years": "2002-03",
+             "tell": "touch wheel, four buttons ring the wheel; a "
+                     "description long enough that the table has to wrap"},
+        ],
+        "firmwares": [
+            {"file": "tampered.bin", "sha256": "0" * 64, "size": len(data),
+             "generation": "synthetic", "models": ["2G"], "version": "9.9",
+             "maker": "test", "description": "checksum will not match"},
+            {"file": "good.bin", "sha256": sha, "size": len(data),
+             "generation": "synthetic", "models": ["1G", "2G"],
+             "version": "1.5", "build_date": "2005-02-18",
+             "description": "the synthetic image, the default",
+             "default": True},
+            {"file": "missing.bin", "generation": "synthetic",
+             "models": ["2G"], "version": "0.1",
+             "description": "the server has no such file"},
+        ],
+    }
+    path = os.path.join(root, "manifest.json")
+    with open(path, "w") as f:
+        json.dump(manifest, f)
+    return path
+
+
 def make_fixtures(root):
     music = synth.make_music(os.path.join(root, "music"))
     fw = synth.write_firmware(os.path.join(root, "fw.bin"))
     badfw = synth.write_firmware(os.path.join(root, "badfw.bin"),
                                  bad_checksum=True)
     big = synth.big_wav(os.path.join(root, "big.wav"), 60)
-    return {"music": music, "fw": fw, "badfw": badfw, "big": big}
+    return {"music": music, "fw": fw, "badfw": badfw, "big": big,
+            "manifest": serve_catalog(root, fw)}
 
 
 def run_all(tree, root, fixtures, runner, only=None, rust=None):

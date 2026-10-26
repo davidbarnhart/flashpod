@@ -8,6 +8,8 @@ description = "the flashpod command line in Rust (M6): same commands, flags and 
 [dependencies]
 flashpod-core = { path = "../flashpod-core" }
 libc = "0.2"
+ureq = { version = "2", default-features = false, features = ["tls"] }
+sha2 = "0.10"
 serde_json = { version = "1", features = ["preserve_order"] }
 
 [[bin]]

@@ -995,7 +995,7 @@ fn wrap_chunks(text: &str) -> Vec<String> {
 }
 
 /// textwrap.wrap(text, width) (argparse has already collapsed whitespace).
-fn wrap(text: &str, width: usize) -> Vec<String> {
+pub fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut chunks: Vec<String> = wrap_chunks(text);
     chunks.reverse();
     let mut lines: Vec<String> = Vec::new();

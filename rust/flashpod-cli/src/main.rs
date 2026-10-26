@@ -12,6 +12,7 @@ use flashpod_core::text::casefold;
 use argparse::{Arg, Cli, Nargs, Ns, Val};
 
 mod argparse;
+mod catalog;
 mod data;
 mod flash;
 mod mount;
@@ -190,19 +191,43 @@ fn cmd_flash(ns: &Ns) -> Option<i32> {
     if !std::fs::metadata(&device).map(|m| m.is_file()).unwrap_or(false) || b(ns, "self_test") {
         return None;
     }
+    // the firmware is picked (and fetched) first, as the invoking user
+    let mut max_data_gb = None;
+    let firmware = match s(ns, "firmware").filter(|f| !f.is_empty()) {
+        Some(f) => f,
+        None => {
+            let manifest = match catalog::load_manifest() {
+                Some(m) => m,
+                None => return Some(1),
+            };
+            let model = match catalog::choose_model(&manifest, s(ns, "model").as_deref().filter(|m| !m.is_empty())) {
+                catalog::Model::Bail => return Some(1),
+                catalog::Model::Any => None,
+                catalog::Model::One(m) => Some(m),
+            };
+            let entry = match catalog::choose_firmware(&manifest, model.as_ref()) {
+                Some(e) => e,
+                None => return Some(1),
+            };
+            max_data_gb = entry["max_data_gb"].as_f64();
+            match catalog::ensure_firmware(&entry, manifest["base_url"].as_str().unwrap_or("")) {
+                Some(f) => f,
+                None => return Some(1),
+            }
+        }
+    };
+    if let Some(Val::Float(f)) = ns.get("max_data_gb") {
+        max_data_gb = Some(*f);
+    }
     let mut o = flash::Opts {
         device,
-        // without --firmware: the manifest chooser and download, not ported
-        firmware: s(ns, "firmware")?,
+        firmware,
         yes: b(ns, "yes"),
         dry_run: b(ns, "dry_run"),
         no_format: b(ns, "no_format"),
         arm: b(ns, "arm"),
         lba48: b(ns, "lba48"),
-        max_data_gb: match ns.get("max_data_gb") {
-            Some(Val::Float(f)) => Some(*f),
-            _ => None,
-        },
+        max_data_gb,
     };
     if !o.arm && !b(ns, "no_arm") {
         o.arm = flash::ask_arm(&o.firmware);
