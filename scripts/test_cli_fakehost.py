@@ -739,7 +739,8 @@ SCENARIOS = {
         "steps": [
             {"argv": ["ls"], "pty": []},
             {"argv": ["ls", "--raw", "/dev/sdb2"], "pty": []},
-            {"argv": ["rm", "--raw", "/dev/sdb", "53"], "pty": []},
+            {"argv": ["rm", "--raw", "/dev/sdb", "53"],
+             "pty": [(r"Eject the iPod now\? \[Y/n\] ", "n\r")]},
         ],
     },
     # add/rm with no --mount on a USB card: found by its database, then
@@ -819,12 +820,42 @@ def normalize(text, run, selfcmd):
     """What may differ between the builds and the runs: the scratch path,
     and how flashpod re-invokes itself (python -m flashpod + PYTHONPATH vs
     the binary's path)."""
-    text = text.replace(run, "<host>")
+    import re
+    # the self command first: Python's wrapper lives under the scratch path
     for s in selfcmd:
         text = text.replace(s, "<flashpod>")
-    import re
+    text = text.replace(run, "<host>")
+    # as a JSON list element ("PYTHONPATH=...", ) or in plain text
+    text = re.sub(r'"PYTHONPATH=[^"]*", ', "", text)
     text = re.sub(r"PYTHONPATH=\S+ ?", "", text)
     return text
+
+
+def disk_digest(image, mounted):
+    """The disk's sha256, or, once the kernel has written it through a mount,
+    a digest of what its FAT holds (every path, directory flag, size and
+    content): the kernel stamps entries with the real clock, which neither
+    build controls, so the raw bytes differ between any two runs."""
+    if not mounted:
+        return tcu.sha(image)
+    if TREE not in sys.path:
+        sys.path.insert(0, TREE)
+    from flashpod import fatfs, target
+    h = hashlib.sha256()
+    with open(image, "rb") as f:
+        fat = target.open_image_fat(f)
+
+        def walk(path):
+            for e in sorted(fat.listdir(path), key=lambda e: e.name):
+                p = path + "/" + e.name if path else e.name
+                isdir = bool(e.attr & fatfs.ATTR_DIRECTORY)
+                h.update(("%s %d %d\n" % (p, isdir, e.size)).encode())
+                if isdir:
+                    walk(p)
+                else:
+                    h.update(hashlib.sha256(fat.read_file(p)).digest())
+        walk("")
+    return "fat:" + h.hexdigest()
 
 
 def run_scenario(name, sc, mode, cards, build, rust, root):
@@ -845,6 +876,7 @@ def run_scenario(name, sc, mode, cards, build, rust, root):
         os.symlink(os.path.abspath(rust), os.path.join(run, "bin", "flashpod"))
         selfcmd = [os.path.realpath(rust)]
     recs = []
+    mounted = False
     try:
         for i, step in enumerate(sc["steps"]):
             if mode not in step.get("modes", (mode,)):
@@ -855,6 +887,8 @@ def run_scenario(name, sc, mode, cards, build, rust, root):
                 calls = [json.loads(l) for l in f if l.strip()]
             with open(os.path.join(run, "state.json")) as f:
                 state = json.load(f)
+            mounted = mounted or any(c["tool"] == "mount" or c["tool"] == "udisksctl" and c["argv"][:1] == ["mount"]
+                                     for c in calls)
             recs.append({
                 "step": i, "argv": step["argv"], "rc": rc,
                 "stdout": normalize(out, run, selfcmd), "stderr": normalize(err, run, selfcmd),
@@ -862,7 +896,7 @@ def run_scenario(name, sc, mode, cards, build, rust, root):
                           for c in calls],
                 "mounts": [(m["dev"], m["mnt"]) for m in state["mounts"]],
                 "gone": [d["name"] for d in state["disks"] if d.get("gone")],
-                "disks": {d["name"]: tcu.sha(d["image"]) for d in state["disks"]},
+                "disks": {d["name"]: disk_digest(d["image"], mounted) for d in state["disks"]},
             })
     finally:
         teardown(st)
@@ -905,6 +939,9 @@ def main():
                 continue
             if opts.mode not in sc["modes"]:
                 continue
+            # progress on stderr: a step waiting at a prompt takes its full timeout
+            sys.stderr.write("%s ...\n" % name)
+            sys.stderr.flush()
             a = run_scenario(name, sc, opts.mode, cards, "python", None, root)
             b = run_scenario(name, sc, opts.mode, cards, "rust", opts.rust, root)
             for ra, rb in zip(a, b):
