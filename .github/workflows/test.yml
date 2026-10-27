@@ -241,3 +241,54 @@ jobs:
           else
             sudo "$(which python)" scripts/simulate_card.py --size-gb 2
           fi
+
+  # The Rust flashpod CLI (rust/flashpod-cli) is a byte-for-byte clone of
+  # the Python one; it doesn't ship yet. These run both on the same
+  # synthetic cards and inputs and compare exit codes, output and the bytes
+  # written, so a Python change that the Rust build doesn't follow fails
+  # here. Python 3.14: the Rust argument parser clones 3.14's argparse
+  # wording. The fake host's root mode (loop devices, setuid stubs) and the
+  # mutant runs stay manual. rust_parity.py (the shared library) already
+  # runs in `source` above.
+  rust-cli:
+    name: Rust CLI matches Python
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install mutagen
+          command -v ffmpeg >/dev/null || { sudo apt-get update -q && sudo apt-get install -yq ffmpeg; }
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Build the Rust CLI
+        run: cd rust && cargo build --release -p flashpod-cli
+
+      - name: Arguments, help and usage errors (732 runs)
+        run: python scripts/test_cli_args.py --rust rust/target/release/flashpod
+
+      # `terminal` is left out: its expectations are written against the
+      # 2686d4a baseline, not this tree.
+      - name: Every command on card images, the picker key by key
+        run: |
+          python scripts/test_cli_unchanged.py --baseline . --rust rust/target/release/flashpod \
+            --only lifecycle rejections limits terminal_dblimit terminal_space terminal_keys \
+                   terminal_lines terminal_rebuild terminal_flash flash_catalog wrong_confirm \
+                   mount mount_terminal_db mount_terminal_space mount_terminal_big picker
+
+      # Ubuntu 24.04 confines unprivileged user namespaces through AppArmor;
+      # the fake host is one (unshare -rm, a private mount namespace).
+      - name: Device paths on a fake Linux host (user mode)
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          python scripts/test_cli_fakehost.py --mode user --rust rust/target/release/flashpod
