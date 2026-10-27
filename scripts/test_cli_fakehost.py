@@ -844,6 +844,57 @@ SCENARIOS = {
              "pty": []},
         ],
     },
+    # burn's checks, all before a byte is written. In user mode /dev/sdb is a
+    # plain file, so "not a block device"; in root mode a dry run's plan
+    "burn_checks": {
+        "modes": ("user", "root"),
+        "host": {"disks": [dict(USB_IPOD, card="blank")]},
+        "steps": [
+            {"argv": ["burn", "{ipod_img}", "/dev/sdb", "--dry-run"]},
+            {"argv": ["burn", "{blank_img}", "/dev/sdb", "--dry-run"]},
+            {"argv": ["burn", "/nonexistent.img", "/dev/sdb", "--dry-run"]},
+            {"argv": ["burn", "{ipod_img}", "--dry-run"], "pty": [(r"to quit\): ", "0\r")]},
+            # no root, no terminal: the sudo command to run instead
+            {"argv": ["burn", "{ipod_img}", "/dev/sdb", "--yes", "--no-verify"]},
+        ],
+    },
+    # ROOT MODE: an image burned onto a card, read back, ejected
+    "burn_device": {
+        "modes": ("root",),
+        "host": {"disks": [dict(USB_IPOD, card="blank", size_mb=96)]},
+        "steps": [
+            {"argv": ["burn", "{ipod_img}", "/dev/sdb", "--yes"], "pty": []},
+        ],
+    },
+    # the typed confirmation: a mismatch, then the real thing without verify
+    "burn_device_typed": {
+        "modes": ("root",),
+        "host": {"disks": [dict(USB_IPOD, card="blank")],
+                 "mounts": [{"dev": "/dev/sdb2", "mnt": "/media/david/IPOD", "fstype": "vfat"}]},
+        "steps": [
+            {"argv": ["burn", "{ipod_img}", "/dev/sdb"], "root": True, "pty": [(r"to proceed: ", "ERASE sdc\r")]},
+            {"argv": ["burn", "{ipod_img}", "/dev/sdb", "--no-verify"], "root": True,
+             "pty": [(r"to proceed: ", "ERASE sdb\r")]},
+        ],
+    },
+    # what burn refuses: a partition, FireWire, a fixed disk, too small,
+    # an empty slot, nothing there
+    "burn_refusals": {
+        "modes": ("root",),
+        "host": {"disks": [{"name": "sdb", "card": "blank", "tran": "sbp", "type": "disk", "rm": 1},
+                           {"name": "sdc", "card": "blank", "tran": "sata", "type": "disk", "rm": 0, "hotplug": 0},
+                           dict(USB_IPOD, name="sdd", card="blank", size_mb=40),
+                           dict(USB_IPOD, name="sde", card="blank", zero=True),
+                           dict(USB_IPOD, name="sdf")]},
+        "steps": [
+            {"argv": ["burn", "{ipod_img}", "/dev/sdf1", "--yes"], "root": True},
+            {"argv": ["burn", "{ipod_img}", "/dev/sdb", "--yes"], "root": True},
+            {"argv": ["burn", "{ipod_img}", "/dev/sdc", "--yes"], "root": True},
+            {"argv": ["burn", "{ipod_img}", "/dev/sdd", "--yes"], "root": True},
+            {"argv": ["burn", "{ipod_img}", "/dev/sde", "--yes"], "root": True},
+            {"argv": ["burn", "{ipod_img}", "/dev/sdz", "--yes"], "root": True},
+        ],
+    },
     # nothing attached at all
     "nothing": {
         "modes": ("user", "root"),
@@ -964,7 +1015,8 @@ def run_scenario(name, sc, mode, cards, build, rust, root):
             if mode not in step.get("modes", (mode,)):
                 continue
             open(os.path.join(run, "calls.log"), "w").close()
-            step = dict(step, argv=[a.format(fw=FIXTURE_FW) for a in step["argv"]])
+            step = dict(step, argv=[a.format(fw=FIXTURE_FW, ipod_img=cards["ipod"], blank_img=cards["blank"])
+                                    for a in step["argv"]])
             rc, out, err = run_step(run, step, ["flashpod"])
             with open(os.path.join(run, "calls.log")) as f:
                 calls = [json.loads(l) for l in f if l.strip()]

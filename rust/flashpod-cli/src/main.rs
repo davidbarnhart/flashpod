@@ -12,6 +12,7 @@ use flashpod_core::text::casefold;
 use argparse::{Arg, Cli, Nargs, Ns, Val};
 
 mod argparse;
+mod burn;
 mod catalog;
 mod data;
 mod detect;
@@ -309,6 +310,28 @@ fn cmd_flash(ns: &mut Ns) -> i32 {
     }
 }
 
+/// The `burn` branch of cli.main: root via sudo unless it's a dry run.
+fn cmd_burn(ns: &Ns) -> i32 {
+    if !b(ns, "dry_run") && !host::is_admin() {
+        let args = detect::cmd_args(ns);
+        if term::stdin_isatty() {
+            eprintln!("flashpod burn: writing to a disk needs root \u{2014} elevating via sudo...");
+            host::sudo_reexec(&args);
+        }
+        eprintln!("flashpod burn: needs root.\n  sudo {}", host::self_cmd().into_iter().chain(args).collect::<Vec<_>>().join(" "));
+        return 1;
+    }
+    let image = s(ns, "image").unwrap_or_default();
+    let device = s(ns, "device").filter(|d| !d.is_empty());
+    match burn::burn(&image, device.as_deref(), b(ns, "yes"), b(ns, "dry_run"), !b(ns, "no_verify")) {
+        Ok(rc) => rc,
+        Err(flash::Exit(msg)) => {
+            eprintln!("{}", msg);
+            1
+        }
+    }
+}
+
 /// cli.__doc__, the top-level help's description.
 const DOC: &str = "flashpod - manage music on the iPod.
 
@@ -417,10 +440,6 @@ fn list(ns: &Ns, k: &str) -> Vec<String> {
     }
 }
 
-fn not_implemented() -> i32 {
-    eprintln!("flashpod: not implemented in the Rust build yet");
-    2
-}
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -431,7 +450,7 @@ fn main() {
     let command = s(&ns, "command").unwrap_or_default();
     let code = match command.as_str() {
         "flash" => cmd_flash(&mut ns),
-        "burn" => not_implemented(),
+        "burn" => cmd_burn(&ns),
         _ => data_command(&ns, &command),
     };
     std::process::exit(code);

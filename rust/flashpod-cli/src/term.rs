@@ -23,6 +23,10 @@ pub fn stdin_isatty() -> bool {
     std::io::stdin().is_terminal()
 }
 
+pub fn stderr_isatty() -> bool {
+    std::io::stderr().is_terminal()
+}
+
 pub fn stdout_isatty() -> bool {
     std::io::stdout().is_terminal()
 }

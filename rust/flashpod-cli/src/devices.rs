@@ -55,7 +55,7 @@ pub fn root_disk_names() -> Result<Vec<String>, Exit> {
 }
 
 /// ipod_flash.list_candidates: removable / USB whole disks.
-fn list_candidates() -> Result<Vec<Value>, Exit> {
+pub fn list_candidates() -> Result<Vec<Value>, Exit> {
     let v = lsblk_json(&["-b", "-o", "NAME,SIZE,MODEL,VENDOR,SERIAL,TRAN,RM,HOTPLUG,TYPE,MOUNTPOINT,FSTYPE,LABEL,PTTYPE"])?;
     let protected = root_disk_names()?;
     let mut out = Vec::new();

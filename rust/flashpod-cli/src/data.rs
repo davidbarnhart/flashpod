@@ -39,7 +39,7 @@ fn fmt_duration(secs: f64) -> String {
 }
 
 /// library._db_size_limit and whether FLASHPOD_DB_LIMIT is set at all.
-fn options() -> Options {
+pub fn options() -> Options {
     let mut o = Options::default();
     if let Ok(v) = std::env::var("FLASHPOD_DB_LIMIT") {
         o.db_limit_set = true;

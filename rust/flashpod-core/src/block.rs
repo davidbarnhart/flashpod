@@ -34,7 +34,7 @@ pub trait BlockDevice {
 
 /// A card image file.
 pub struct FileDevice {
-    file: std::fs::File,
+    pub file: std::fs::File,
 }
 
 impl FileDevice {
