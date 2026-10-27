@@ -282,33 +282,176 @@ def _mk_mhsd(sd_type, payload):
 # CHECKS the order with the firmware's own comparison, repairing whatever is
 # out of place -- so a mistake here costs time on the iPod, never a wrong list.
 #
-# The string order below is the firmware's for names made of letters, digits,
-# space, '!' and '.': leading blanks ignored, a-z compared as A-Z, an empty
-# name after every other. Other characters send the firmware to a fuller
-# Unicode comparison we do not reproduce; those names may land a little out of
-# place and are put right on the iPod.
+# The string order below is the firmware's own, read out of the 1.5 firmware
+# and checked against it (openpod, docs/wiki/24): 500,000 comparisons run through
+# the firmware's routine under emulation, none answered differently.
+#
+# It is two rules, and that is why it is not a true order:
+#
+#   * QUICK. Walk both names a character at a time. While both characters are
+#     a letter, a digit, space, '!' or '.', compare them as capitals; the first
+#     difference decides.
+#   * FULL. If a character outside that set turns up before any difference,
+#     start again and compare the whole names by weight: punctuation and
+#     spaces weigh nothing and are skipped, an accented letter weighs the same
+#     as the plain one, and a character above U+00FF weighs its own number.
+#     The name with fewer weighted characters comes first on a tie.
+#
+# Before either: blanks at the front are dropped, and an empty name comes last.
+# The two rules disagree about where a space goes, so three names can go round
+# in a circle (a < b < c < a). There is then no one right list; we produce one
+# the firmware accepts, and check that below.
 SORT_POS_MAX = 0xFFFF
 
+# The weight of each character below U+0100, from the firmware's table
+# (0 = weighs nothing). Digits, then the Latin letters with their accents.
+_PRIMARY = (
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0x6c5, 0x6c6, 0x6c7, 0x6c8, 0x6c9, 0x6ca, 0x6cb, 0x6cc, 0x6cd, 0x6ce, 0, 0,
+    0, 0, 0, 0, 0, 0x6cf, 0x6e3, 0x6f7, 0x703, 0x71f, 0x74b, 0x753,
+    0x773, 0x78d, 0x7a1, 0x7b1, 0x7bd, 0x7e5, 0x7ed, 0x805, 0x81d, 0x829, 0x835, 0x85d,
+    0x875, 0x88d, 0x8a5, 0x8b1, 0x8b9, 0x8bd, 0x8c9, 0, 0, 0, 0, 0,
+    0, 0x6cf, 0x6e3, 0x6f7, 0x703, 0x71f, 0x74b, 0x753, 0x773, 0x78d, 0x7a1, 0x7b1,
+    0x7bd, 0x7e5, 0x7ed, 0x805, 0x81d, 0x829, 0x835, 0x85d, 0x875, 0x88d, 0x8a5, 0x8b1,
+    0x8b9, 0x8bd, 0x8c9, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0x6cf, 0, 0, 0, 0, 0, 0, 0, 0x6c7, 0x6c8,
+    0, 0x944, 0, 0, 0, 0x6c6, 0x805, 0, 0, 0, 0, 0,
+    0x6cf, 0x6cf, 0x6cf, 0x6cf, 0x6cf, 0x6cf, 0x6d3, 0x6f7, 0x71f, 0x71f, 0x71f, 0x71f,
+    0x78d, 0x78d, 0x78d, 0x78d, 0x717, 0x7ed, 0x805, 0x805, 0x805, 0x805, 0x805, 0,
+    0x80d, 0x88d, 0x88d, 0x88d, 0x88d, 0x8bd, 0x8e9, 0, 0x6cf, 0x6cf, 0x6cf, 0x6cf,
+    0x6cf, 0x6cf, 0x6d3, 0x6f7, 0x71f, 0x71f, 0x71f, 0x71f, 0x78d, 0x78d, 0x78d, 0x78d,
+    0x717, 0x7ed, 0x805, 0x805, 0x805, 0x805, 0x805, 0, 0x80d, 0x88d, 0x88d, 0x88d,
+    0x88d, 0x8bd, 0x8e9, 0x8bd,
+)
+_QUICK = frozenset(b" !.0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+# The leading words the firmware moves to the back of an ARTIST's name, in the
+# order it tries them; the first that fits wins and capitals must match as
+# written. This is the list an iPod set to English uses -- which is every
+# language's articles, not only "The": De La Soul is filed as "La Soul, De".
+# (German, Finnish, French, Italian and Dutch iPods use a slightly longer
+# list; a name that differs there is put right on the iPod.)
+_ARTICLES = tuple(w + " " for w in """
+    The the THE De de DE Den den DEN Det det DET En en EN Et et ET Die die
+    DIE Der der DER Das das DAS El el EL La la LA Los los LOS Las las LAS Le
+    le LE Les les LES Il il IL Lo lo LO I i Gli gli GLI Het het HET Een een
+    EEN O o A a Os os OS As as AS
+""".split())
 
-def _collate(s):
-    s = (s or "").lstrip("".join(map(chr, range(0x21))))
-    return (not s, "".join(chr(ord(c) - 32) if "a" <= c <= "z" else c for c in s))
+
+def _units(s):
+    """A name as the firmware holds it: UTF-16 code units, front blanks off."""
+    b = (s or "").encode("utf-16-le", "surrogatepass")
+    u = struct.unpack("<%dH" % (len(b) // 2), b)
+    i = 0
+    while i < len(u) and u[i] <= 0x20:
+        i += 1
+    return u[i:]
 
 
-def _no_article(s):
-    """The firmware files an ARTIST without a leading "The": The Sines comes
-    before Square One."""
-    s = (s or "").lstrip("".join(map(chr, range(0x21))))
-    return s[4:] if s[:4].lower() == "the " else s
+# openpod firmware 1.6 (its `sortunk` part) files a character the iPod cannot
+# draw after every letter: from U+0100 to U+0944 the font has only the fifteen
+# below, and every other character in that range weighs its number + 0xF000.
+# Stock firmware weighs them by their own number, but stock ignores the order
+# written here anyway; a 1.6 without that part finds the few affected names
+# out of place and sorts them itself.
+_DRAWN = ((0x131, 0x131), (0x152, 0x153), (0x178, 0x178), (0x192, 0x192),
+          (0x2c6, 0x2c7), (0x2d8, 0x2dd), (0x3a9, 0x3a9), (0x3c0, 0x3c0))
+
+
+def _weight(c):
+    if c < 256:
+        return _PRIMARY[c]
+    if c <= 0x944 and not any(a <= c <= b for a, b in _DRAWN):
+        return c + 0xF000
+    return c
+
+
+def _full(a, b):
+    wa = [_weight(c) for c in a]
+    wb = [_weight(c) for c in b]
+    wa = [w for w in wa if w]
+    wb = [w for w in wb if w]
+    for x, y in zip(wa, wb):
+        if x != y:
+            return -1 if x < y else 1
+    return (len(wa) > len(wb)) - (len(wa) < len(wb))
+
+
+def _name_cmp(a, b):
+    """The firmware's comparison of two names given as _units(): -1, 0 or 1."""
+    if not a or not b:
+        return (not a) - (not b)
+    for x, y in zip(a, b):
+        if x not in _QUICK or y not in _QUICK:
+            return _full(a, b)
+        if 0x61 <= x <= 0x7A:
+            x -= 0x20
+        if 0x61 <= y <= 0x7A:
+            y -= 0x20
+        if x != y:
+            return -1 if x < y else 1
+    return (len(a) > len(b)) - (len(a) < len(b))
+
+
+def _sort_artist(s):
+    """The firmware files "The Sines" as "Sines, The" (artists only)."""
+    s = s or ""
+    for art in _ARTICLES:
+        if s.startswith(art):
+            return s[len(art):] + ", " + art.rstrip()
+    return s
+
+
+def _settle(order, cmp, passes=50):
+    """A comparison that goes in circles can leave neighbours the wrong way
+    round after a sort. Carry each such item back until it sits after its new
+    neighbour, and repeat until no pair is left (or give up: the iPod repairs
+    whatever remains). Swapping neighbours once a pass was not enough: a title
+    60 places late needed 60 passes, and one pair survived in a 27,488-track
+    library, which cost the iPod a full sort of Songs."""
+    for _ in range(passes):
+        moved = False
+        for i in range(len(order) - 1):
+            j = i + 1
+            while j > 0 and cmp(order[j - 1], order[j]) > 0:
+                order[j - 1], order[j] = order[j], order[j - 1]
+                j -= 1
+                moved = True
+        if not moved:
+            break
+    return order
 
 
 def sort_order(tracks):
     """`tracks` in the order to write them (the Artists order), with each
     track's `sort_pos` set to its 1-based place in (the album view, Songs)."""
-    artist = lambda t: _collate(_no_article(t.artist))
-    album = lambda t: (_collate(t.album), getattr(t, "disc_nr", 0), t.track_nr)
-    title = lambda t: _collate(t.title)
-    ordered = sorted(tracks, key=lambda t: (artist(t), album(t), title(t)))
+    import functools
+    key = {id(t): (_units(_sort_artist(t.artist)), _units(t.album),
+                   getattr(t, "disc_nr", 0), t.track_nr, _units(t.title))
+           for t in tracks}
+
+    def chain(*parts):
+        # parts: indexes into the key; names by the firmware's rule, numbers plainly
+        def cmp(s, t):
+            ks, kt = key[id(s)], key[id(t)]
+            for p in parts:
+                x, y = ks[p], kt[p]
+                r = (x > y) - (x < y) if p in (2, 3) else _name_cmp(x, y)
+                if r:
+                    return r
+            return 0
+        return cmp
+
+    def ordered_by(seq, cmp):
+        return _settle(sorted(seq, key=functools.cmp_to_key(cmp)), cmp)
+
+    ordered = ordered_by(tracks, chain(0, 1, 2, 3, 4))
     for t in ordered:
         t.sort_pos = (0, 0)
     if len(ordered) <= SORT_POS_MAX:
@@ -316,8 +459,8 @@ def sort_order(tracks):
         # handed, so saving a library twice gives every track the same place
         # and the same numbers both times (the timestamps and the playlist's
         # random ids, stamped on every save as before, still differ).
-        by_album = sorted(ordered, key=lambda t: (album(t), artist(t), title(t)))
-        by_title = sorted(ordered, key=title)
+        by_album = ordered_by(ordered, chain(1, 2, 3, 0, 4))
+        by_title = ordered_by(ordered, chain(4))
         place = {id(t): i for i, t in enumerate(by_album, 1)}
         for i, t in enumerate(by_title, 1):
             t.sort_pos = (place[id(t)], i)

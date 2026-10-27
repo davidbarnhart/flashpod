@@ -2936,6 +2936,22 @@ def _db_size_limit():
     return IPOD_DB_SIZE_LIMIT
 
 
+#: Tracks the iPod's firmware will list. Measured on real 1G hardware
+#: (2026-10-11): a 35,000-track database shows the first 32,000 only.
+#: FLASHPOD_TRACK_LIMIT overrides; 0 disables the check.
+IPOD_TRACK_LIMIT = 32000
+
+
+def _track_limit():
+    env = os.environ.get("FLASHPOD_TRACK_LIMIT")
+    if env is not None:
+        try:
+            return int(env)
+        except ValueError:
+            pass
+    return IPOD_TRACK_LIMIT
+
+
 def _projected_db_size(lib, new_tracks):
     """Serialized iTunesDB size after adding ``new_tracks`` to ``lib``."""
     tmp = itunesdb.Library(lib.name)
@@ -3095,6 +3111,37 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
                 print("flashpod add: nothing added.")
                 return 0
 
+    # Pre-flight 3: the firmware's track cap. Measured on real 1G hardware
+    # (2026-10-11, 256 GB card, patched firmware): with 35,000 tracks in
+    # the database the iPod boots, reports 32,000 songs and lists only the
+    # first 32,000 in file order — the rest are hidden, with no error.
+    track_dropped = 0
+    cap = _track_limit()
+    if pending and cap and len(lib.tracks) + len(pending) > cap:
+        fit = max(0, cap - len(lib.tracks))
+        print(f"flashpod add: this batch would bring the library to "
+              f"{len(lib.tracks) + len(pending):,} tracks — the iPod lists "
+              f"only the first {cap:,} and silently hides the rest.",
+              file=sys.stderr)
+        if fit <= 0:
+            print("  The library is already at the cap; remove tracks "
+                  "(`flashpod rm`) or set FLASHPOD_TRACK_LIMIT=0 to "
+                  "override.", file=sys.stderr)
+            return 1
+        if not sys.stdin.isatty():
+            print(f"  {fit} of the {len(pending)} new tracks would fit; "
+                  "trim the batch, or set FLASHPOD_TRACK_LIMIT=0 to "
+                  "override (can't prompt here).", file=sys.stderr)
+            return 1
+        if ask_yes(f"  {fit} of {len(pending)} new tracks fit under the "
+                   "cap. Add just those? [Y/n] "):
+            track_dropped = len(pending) - fit
+            pending = pending[:fit]
+        elif not ask_yes("  Add ALL anyway — some tracks will not appear "
+                         "on the iPod? [y/N] ", default_yes=False):
+            print("flashpod add: nothing added.")
+            return 0
+
     # Pass 2: copy what survived.
     start = time.monotonic()
     npend = len(pending)
@@ -3147,6 +3194,8 @@ def _cmd_add_core(paths, load, copy, save, free_space=None, rebuild=None):
         parts.append(f"{dropped} dropped to fit free space")
     if db_dropped:
         parts.append(f"{db_dropped} dropped to fit the database ceiling")
+    if track_dropped:
+        parts.append(f"{track_dropped} dropped to fit the track cap")
     if skipped:
         parts.append(f"{skipped} skipped (already on iPod)")
     if failures:
