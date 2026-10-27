@@ -503,7 +503,21 @@ def make_cards(root, fw, music):
                 fs.remove("iPod_Control/iTunes/iTunesDB")
                 fs.sync()
         cards[kind] = path
+    # for burn: the iPod card plus 1 MiB + 7 sectors of non-zero bytes past
+    # its partitions, so the image ends off a 4 MiB chunk boundary and its
+    # last chunk isn't zeros (a dropped tail must show)
+    tail = os.path.join(root, "card-burntail.img")
+    shutil.copyfile(cards["ipod"], tail)
+    with open(tail, "ab") as f:
+        f.write(pattern((1 << 20) + 7 * 512, 0x5A))
+    cards["burntail"] = tail
     return cards
+
+
+def pattern(n, seed):
+    """n bytes that are never zero and never repeat within a sector."""
+    one = bytes(((i * 7 + seed) % 255) + 1 for i in range(512 * 3 + 1))
+    return (one * (n // len(one) + 1))[:n]
 
 
 def build_host(run, spec, cards, mode, music):
@@ -530,6 +544,11 @@ def build_host(run, spec, cards, mode, music):
         if d.get("size_mb"):
             with open(img, "r+b") as f:
                 f.truncate(d["size_mb"] << 20)
+        if d.get("fill"):
+            # a used card: old data everywhere, nothing the burn can leave as zeros
+            size = os.path.getsize(img)
+            with open(img, "r+b") as f:
+                f.write(pattern(size, 0x33))
         d["image"] = img
         d["size"] = 0 if d.get("zero") else os.path.getsize(img)
         if d.get("needs_sbp2") and not st["sbp2"]:
@@ -866,6 +885,15 @@ SCENARIOS = {
             {"argv": ["burn", "{ipod_img}", "/dev/sdb", "--yes"], "pty": []},
         ],
     },
+    # a used card (old data everywhere) and an image whose last chunk is
+    # short and non-zero: every byte of the image must reach the card
+    "burn_device_tail": {
+        "modes": ("root",),
+        "host": {"disks": [dict(USB_IPOD, card="blank", size_mb=96, fill=True)]},
+        "steps": [
+            {"argv": ["burn", "{burntail_img}", "/dev/sdb", "--yes"], "pty": []},
+        ],
+    },
     # the typed confirmation: a mismatch, then the real thing without verify
     "burn_device_typed": {
         "modes": ("root",),
@@ -1015,7 +1043,8 @@ def run_scenario(name, sc, mode, cards, build, rust, root):
             if mode not in step.get("modes", (mode,)):
                 continue
             open(os.path.join(run, "calls.log"), "w").close()
-            step = dict(step, argv=[a.format(fw=FIXTURE_FW, ipod_img=cards["ipod"], blank_img=cards["blank"])
+            step = dict(step, argv=[a.format(fw=FIXTURE_FW, ipod_img=cards["ipod"], blank_img=cards["blank"],
+                                             burntail_img=cards["burntail"])
                                     for a in step["argv"]])
             rc, out, err = run_step(run, step, ["flashpod"])
             with open(os.path.join(run, "calls.log")) as f:
