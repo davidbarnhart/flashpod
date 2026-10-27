@@ -98,6 +98,10 @@ impl Target for MountTarget {
         itunesdb::parse_bytes_with(&data, ent).map(Some).map_err(|e| Error::new(ErrorKind::CorruptLibrary, e))
     }
 
+    fn db_bytes(&mut self) -> Option<Vec<u8>> {
+        std::fs::read(self.db()).ok()
+    }
+
     fn save_library(&mut self, lib: &Library, ent: &mut Entropy) -> Result<(), Error> {
         self.save(lib, ent)?;
         // the kernel's FAT keeps directory entries in the page cache until a

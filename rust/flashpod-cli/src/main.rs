@@ -21,6 +21,7 @@ mod flash;
 mod host;
 mod rawdev;
 mod mount;
+mod pathpicker;
 mod term;
 mod window;
 mod winnow;

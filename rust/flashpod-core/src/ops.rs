@@ -30,6 +30,9 @@ pub trait Target {
     fn free_bytes(&mut self) -> Result<i64, String>;
     /// The library-fix probe of the card's firmware, memoized in `memo`.
     fn probe(&mut self, memo: &mut Option<Option<bool>>) -> Option<bool>;
+    /// The iTunesDB file's bytes, None when it can't be read (the picker's
+    /// status bar: cli._raw_db_facts / _mounted_db_facts).
+    fn db_bytes(&mut self) -> Option<Vec<u8>>;
     /// The library rebuilt from the music files on the card (not saved).
     fn rebuild_library(&mut self, name: &str, src: &mut dyn TagSource, ent: &mut Entropy, hooks: &mut dyn Hooks,
                        report: &mut dyn FnMut(String)) -> Result<Library, Error>;
@@ -54,6 +57,9 @@ impl Target for Fat32<'_> {
     fn copy(&mut self, src: &str, read_source: &mut dyn FnMut(&str) -> std::io::Result<Vec<u8>>,
             ent: &mut Entropy, progress: &mut dyn FnMut(u64, u64)) -> Result<String, String> {
         copy(self, src, read_source, ent, progress)
+    }
+    fn db_bytes(&mut self) -> Option<Vec<u8>> {
+        self.read_file(DB).ok().flatten()
     }
     fn free_bytes(&mut self) -> Result<i64, String> {
         Fat32::free_bytes(self).map(|v| v as i64).ok_or_else(|| "free-cluster count unavailable (FSInfo has none)".to_string())

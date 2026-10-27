@@ -124,7 +124,7 @@ pub fn run_mount(mount: &str, cmd: Cmd) -> i32 {
             rebuild(&mut t, &cx, name.unwrap_or("iPod"), &mut ent)
         }
         Cmd::Rm(what) => rm(&mut t, &cx, what, &mut ent),
-        Cmd::Add(paths) => add(&mut t, &cx, paths, &mut ent),
+        Cmd::Add(paths) => add(&mut t, &cx, paths, &mut ent, false),
     }
 }
 
@@ -175,7 +175,7 @@ pub fn run_raw_image(node: &str, cmd: Cmd) -> i32 {
         Cmd::Init(_) => unreachable!(),
         Cmd::Rebuild(name) => rebuild(&mut fs, &cx, name.unwrap_or("iPod"), &mut ent),
         Cmd::Rm(what) => rm(&mut fs, &cx, what, &mut ent),
-        Cmd::Add(paths) => add(&mut fs, &cx, paths, &mut ent),
+        Cmd::Add(paths) => add(&mut fs, &cx, paths, &mut ent, false),
     }
 }
 
@@ -324,10 +324,13 @@ impl Hooks for AddUi {
 }
 
 /// cmd_add_raw / _cmd_add_core.
-fn add(fs: &mut dyn Target, cx: &Ctx, paths: &[String], ent: &mut flashpod_core::entropy::Entropy) -> i32 {
+/// `fresh`: the card was inited a moment ago (the post-flash offer), so
+/// the picker is told (0, None) instead of reading the database.
+fn add(fs: &mut dyn Target, cx: &Ctx, paths: &[String], ent: &mut flashpod_core::entropy::Entropy, fresh: bool) -> i32 {
     let prompted;
     let paths = if paths.is_empty() {
-        match prompt_for_paths() {
+        let (existing, db_bytes) = if fresh { (Some(0), None) } else { db_facts(fs, ent) };
+        match prompt_for_paths(existing, db_bytes) {
             Some(p) => {
                 prompted = p;
                 &prompted[..]
@@ -550,7 +553,7 @@ fn commas(n: i64) -> String {
 }
 
 /// os.path.expanduser for "~" and "~/...".
-fn expanduser(p: &str) -> String {
+pub fn expanduser(p: &str) -> String {
     match (p.strip_prefix('~'), std::env::var("HOME")) {
         (Some(rest), Ok(home)) if rest.is_empty() || rest.starts_with('/') => {
             let home = home.trim_end_matches('/');
@@ -560,10 +563,24 @@ fn expanduser(p: &str) -> String {
     }
 }
 
-/// cli.prompt_for_paths: on a terminal, a typed path (Enter alone opens the
-/// directory picker, which this build doesn't have yet); else prompt_for_path.
-pub fn prompt_for_paths() -> Option<Vec<String>> {
+/// cli._raw_db_facts / _mounted_db_facts: best-effort (track count, DB
+/// file bytes) for the picker's status bar.
+fn db_facts(fs: &mut dyn Target, ent: &mut flashpod_core::entropy::Entropy) -> (Option<i64>, Option<i64>) {
+    match fs.db_bytes() {
+        Some(raw) if !raw.is_empty() => match flashpod_core::itunesdb::parse_bytes_with(&raw, ent) {
+            Ok(lib) => (Some(lib.tracks.len() as i64), Some(raw.len() as i64)),
+            Err(_) => (None, None),
+        },
+        _ => (None, None),
+    }
+}
+
+/// cli.prompt_for_paths: on a terminal, a typed path or (Enter alone) the
+/// directory picker, starting at the user's home; else prompt_for_path.
+pub fn prompt_for_paths(existing: Option<i64>, db_bytes: Option<i64>) -> Option<Vec<String>> {
     if term::stdin_isatty() && term::stdout_isatty() {
+        // The picker takes over the whole screen; pause first so what was
+        // just printed can be read before it disappears.
         let typed = match term::input_line("\nPress ENTER to select content to add to the iPod (or type a path): ") {
             Some(t) => t.trim().to_string(),
             None => {
@@ -580,8 +597,34 @@ pub fn prompt_for_paths() -> Option<Vec<String>> {
             }
             return Some(vec![path]);
         }
-        eprintln!("flashpod: not implemented in the Rust build yet (the directory picker); type a path instead.");
-        return None;
+        let picked = crate::pathpicker::DirectoryPicker::new(
+            &crate::pathpicker::invoking_home(),
+            Some(Box::new(crate::pathpicker::count_audio)),
+            Some(crate::pathpicker::picker_status(existing, db_bytes)),
+        ).run();
+        let picked = match picked {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("flashpod: directory picker failed ({}); type a path instead.", e);
+                return prompt_for_path().map(|p| vec![p]);
+            }
+        };
+        let picked = match picked {
+            None => {
+                eprintln!("flashpod add: cancelled");
+                return None;
+            }
+            Some(p) if p.is_empty() => {
+                eprintln!("flashpod add: nothing selected");
+                return None;
+            }
+            Some(p) => p,
+        };
+        println!("Adding {} selected path{}:", picked.len(), if picked.len() != 1 { "s" } else { "" });
+        for p in &picked {
+            println!("  {}", p);
+        }
+        return Some(picked);
     }
     prompt_for_path().map(|p| vec![p])
 }
@@ -636,7 +679,7 @@ pub fn offer_init_after_flash_image(dev: &str, file: &mut FileDevice, data_start
     println!("Initialized iPod directory structure on {}", dev);
     if term::ask_yes("\nMusic can be loaded onto the card now, or later when it is in the iPod.\nLoad music onto the card now? [Y/n] ", true) {
         let cx = Ctx { node: dev.to_string(), mount: false };
-        add(&mut fs, &cx, &[], &mut ent);
+        add(&mut fs, &cx, &[], &mut ent, true);
     }
 }
 
@@ -678,7 +721,7 @@ pub fn run_raw_device(node: &str, cmd: Cmd) -> i32 {
             },
             Cmd::Rebuild(name) => rebuild(&mut fs, &cx, name.unwrap_or("iPod"), &mut ent),
             Cmd::Rm(what) => rm(&mut fs, &cx, what, &mut ent),
-            Cmd::Add(paths) => add(&mut fs, &cx, paths, &mut ent),
+            Cmd::Add(paths) => add(&mut fs, &cx, paths, &mut ent, false),
         }
     };
     drop(dev);
@@ -767,7 +810,7 @@ pub fn offer_init_after_flash_unix(dev: &str) {
                 println!("Initialized iPod directory structure on {}", part);
                 if term::ask_yes("\nMusic can be loaded onto the card now, or later when it is in the iPod.\nLoad music onto the card now? [Y/n] ", true) {
                     let cx = Ctx { node: mnt.clone(), mount: true };
-                    add(&mut t, &cx, &[], &mut ent);
+                    add(&mut t, &cx, &[], &mut ent, true);
                 }
                 let _ = crate::host::call(&["sync".to_string()]);
             }

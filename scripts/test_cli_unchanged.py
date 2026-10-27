@@ -93,6 +93,16 @@ MNT = "ipod-mount"
 #   py       name of a harness action instead of a command (same for both)
 #   size     (for "image" py action) bytes
 
+ESC, UP, DN, RT, LT = "\x1b", "\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D"
+SUP, SDN, PGUP, PGDN = "\x1b[1;2A", "\x1b[1;2B", "\x1b[5~", "\x1b[6~"
+
+
+def K(*keys):
+    """pty answers for the picker: Enter at the typed-path prompt, then one
+    key per drawn frame ("" just waits for a frame)."""
+    return [(r"or type a path\): ", "\r")] + [(r"\x1b\[J", k) for k in keys]
+
+
 def S(argv, **kw):
     d = {"argv": shlex.split(argv)}
     d.update(kw)
@@ -333,6 +343,55 @@ SCENARIOS = {
           write=True, pty=[(r"enter add", "\r")],
           expect="dropped to fit free space"),
     ],
+    # add with no paths: the directory picker, driven key by key. Each key
+    # is sent once a frame has been drawn (a frame ends with ESC[J).
+    "picker": [
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --firmware {fw} --yes", write=True),
+        S("init --raw {img}", write=True),
+        S('add --raw {img} "{music}/Beta Group"', write=True),
+        {"py": "picker_home"},
+        S("add --raw {img}", pty=K(ESC), expect="cancelled"),
+        S("add --raw {img}", pty=K("q"), expect="cancelled"),
+        S("add --raw {img}", pty=K("\x03"), expect="cancelled"),
+        S("add --raw {img}", pty=K("\r"), expect="nothing selected"),
+        # a tour of every key, ending in a cancel
+        S("add --raw {img}", pty=K(
+            DN, DN, DN, RT,                     # Empty: nothing to open
+            DN, RT,                             # HiddenOnly: only a dotfile
+            ".", RT, LT, ".",                   # shown, opened, hidden again
+            DN, DN, RT,                         # Many
+            PGDN, PGDN, "\x1b[F", PGUP, "\x1b[H",
+            "\x1b[4~", "\x1b[1~", "\x1b[6~", "\x1b[5~", "\x1bOB", "\x1bOA",
+            "\x1bOF", "\x1bOH", "\x1b[B", "\x1b[A",
+            SDN, SDN, SDN, SUP, "\x1b[b", "\x1b[a", " ",
+            "v", DN, DN, "v", DN, "v", UP, UP, UP, "v",
+            "x", "\x1bOP", "\x1b[Z", "\x1b[1;5A", "\x1bq", "\u00e9", "",
+            RT,                                 # a file: nothing to open
+            LT, "\x1b[H", RT, RT, " ", LT, LT,     # into the long name
+            RT,                                 # (now up in work/) back down the trail
+            "\x1b[H", DN, DN, RT, RT, RT, RT, RT, RT, RT,   # deep/one/.../five
+            LT, LT, LT, LT, LT, LT, LT, RT,
+            ESC), expect="cancelled"),
+        # pick an album and a track that's already on the iPod, then add
+        S("add --raw {img}", write=True, pty=K(
+            "\x1b[F", UP, UP, UP, UP, RT, RT, " ", LT, DN, RT, RT, " ", "\r"),
+          expect="Adding 2 selected paths"),
+        # a small terminal: columns scroll off, the header path is cut
+        S("add --raw {img}", env={"COLUMNS": "60", "LINES": "12"}, pty=K(
+            RT, LT, DN, DN, RT, RT, RT, RT, RT, RT, PGDN, LT, LT, LT, LT, LT, LT,
+            "\x1b[H", DN, DN, DN, DN, DN, DN, RT, PGDN, PGDN, ESC),
+          expect="cancelled"),
+        S("add --raw {img}", env={"COLUMNS": "25", "LINES": "6"},
+          pty=K(DN, RT, DN, " ", LT, ESC), expect="cancelled"),
+        # a home whose parent can't be listed
+        S("add --raw {img}", env={"HOME": "{work}/locked/home2"},
+          pty=K(DN, " ", LT, LT, RT, RT, ESC), expect="unreadable: [Errno 13]"),
+        # a small DB budget: the status bar goes red as the selection grows
+        S("add --raw {img}", env={"FLASHPOD_DB_LIMIT": "6000"}, pty=K(
+            "\x1b[F", UP, UP, UP, UP, " ", DN, DN, " ", UP, UP, UP, UP, UP, " ",
+            " ", ESC), expect="of DB budget"),
+    ],
     # `terminal`'s flash -> init -> add offers, judged against the current
     # tree (that scenario's expectations are the 2686d4a baseline's), plus
     # the answers that decline each offer and a mistyped path.
@@ -508,6 +567,37 @@ def run_pty(cmd, env, cwd, answers, timeout=120):
     return rc, out.decode("utf-8", "replace") + note, ""
 
 
+def picker_home(work):
+    """The home directory the picker opens on: dirs and files to sort
+    (case, Unicode), an empty directory, one holding only a dotfile, a
+    dotdir, a long name, a deep chain, a page-overflowing listing, a
+    broken symlink and a symlinked directory, plus the synthetic music.
+    work/locked (no read permission) holds a second home whose parent
+    can't be listed."""
+    home = os.path.join(work, "home")
+    shutil.copytree(os.path.join(work, "music"), os.path.join(home, "Music"))
+
+    def touch(*parts):
+        path = os.path.join(home, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").close()
+    os.makedirs(os.path.join(home, "Empty"))
+    touch("HiddenOnly", ".keep")
+    touch(".config", "settings.txt")
+    touch("A folder whose name is far too long to fit one column", "song.mp3")
+    touch("Caf\u00e9 \u00fcn\u00efcode", "na\u00efve.mp3")
+    for i in range(1, 31):
+        touch("Many", "Track %02d.mp3" % i)
+    touch("deep", "one", "two", "three", "four", "five", "end.mp3")
+    for name in ("alpha.txt", "Beta.MP3", "._junk.mp3", "notes.txt"):
+        touch(name)
+    os.symlink("nowhere", os.path.join(home, "dangling"))
+    os.symlink("Music", os.path.join(home, "linkdir"))
+    os.makedirs(os.path.join(work, "locked", "home2", "inner"))
+    open(os.path.join(work, "locked", "home2", "x.mp3"), "w").close()
+    os.chmod(os.path.join(work, "locked"), 0o311)
+
+
 def corrupt_db_dir(mnt):
     """The --mount twin of corrupt_db: break the magic of the DB file."""
     db = os.path.join(mnt, "iPod_Control", "iTunes", "iTunesDB")
@@ -538,11 +628,14 @@ def corrupt_db(img):
 
 
 def run_scenario(name, steps, tree, work, fixtures, runner, rust=None):
+    locked = os.path.join(work, "locked")
+    if os.path.isdir(locked):
+        os.chmod(locked, 0o755)          # picker_home's unreadable directory
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(os.path.join(work, "home"))
     shutil.copytree(fixtures["music"], os.path.join(work, "music"))
-    ctx = {"img": IMG, "mnt": MNT, "fw": fixtures["fw"],
+    ctx = {"img": IMG, "mnt": MNT, "fw": fixtures["fw"], "work": work,
            "badfw": fixtures["badfw"], "music": os.path.join(work, "music"),
            "manifest": fixtures["manifest"],
            "big": fixtures["big"]}
@@ -561,6 +654,8 @@ def run_scenario(name, steps, tree, work, fixtures, runner, rust=None):
                 (corrupt_db_dir if os.path.isdir(img) else corrupt_db)(img)
             elif step["py"] == "mkdir":
                 os.makedirs(img)
+            elif step["py"] == "picker_home":
+                picker_home(work)
             records.append({"step": i, "py": step["py"], "sha": sha(img)})
             continue
         argv = [expand_arg(a, ctx) for a in step["argv"]]
