@@ -999,6 +999,9 @@ def main():
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--dump", action="store_true")
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--mutants", metavar="DIR",
+                    help="after the comparison, run every binary in DIR (each a deliberately broken "
+                         "build) against the same Python results; each must differ somewhere")
     opts = ap.parse_args()
     if opts.mode == "root" and os.geteuid() != 0:
         sys.exit("--mode root needs root (sudo)")
@@ -1017,31 +1020,47 @@ def main():
         global FIXTURE_FW
         FIXTURE_FW = fw
         cards = make_cards(fx, fw, music)
-        bad = []
-        n = 0
-        for name, sc in SCENARIOS.items():
-            if opts.only and name not in opts.only:
-                continue
-            if opts.mode not in sc["modes"]:
-                continue
-            # progress on stderr: a step waiting at a prompt takes its full timeout
-            sys.stderr.write("%s ...\n" % name)
-            sys.stderr.flush()
-            a = run_scenario(name, sc, opts.mode, cards, "python", None, root)
-            b = run_scenario(name, sc, opts.mode, cards, "rust", opts.rust, root)
-            for ra, rb in zip(a, b):
-                n += 1
-                if opts.dump:
-                    print("==== %s step %d %s rc=%s" % (name, ra["step"], ra["argv"], ra["rc"]))
-                    print(ra["stdout"] + ra["stderr"])
-                    print("calls:", *ra["calls"], sep="\n  ")
-                for key in ("rc", "stdout", "stderr", "calls", "mounts", "gone", "disks"):
-                    if ra[key] != rb[key]:
-                        bad.append((name, ra["step"], ra["argv"], key, ra[key], rb[key]))
-                        break
+        chosen = [(name, sc) for name, sc in SCENARIOS.items()
+                  if (not opts.only or name in opts.only) and opts.mode in sc["modes"]]
+        ref = {}
+
+        def compare(rust, label, dump=False):
+            bad, n = [], 0
+            for name, sc in chosen:
+                # progress on stderr: a step waiting at a prompt takes its full timeout
+                sys.stderr.write("%s%s ...\n" % (label, name))
+                sys.stderr.flush()
+                if name not in ref:
+                    ref[name] = run_scenario(name, sc, opts.mode, cards, "python", None, root)
+                a = ref[name]
+                b = run_scenario(name, sc, opts.mode, cards, "rust", rust, root)
+                shutil.rmtree(os.path.join(root, "%s-%s-rust" % (name, opts.mode)), ignore_errors=True)
+                for ra, rb in zip(a, b):
+                    n += 1
+                    if dump:
+                        print("==== %s step %d %s rc=%s" % (name, ra["step"], ra["argv"], ra["rc"]))
+                        print(ra["stdout"] + ra["stderr"])
+                        print("calls:", *ra["calls"], sep="\n  ")
+                    for key in ("rc", "stdout", "stderr", "calls", "mounts", "gone", "disks"):
+                        if ra[key] != rb[key]:
+                            bad.append((name, ra["step"], ra["argv"], key, ra[key], rb[key]))
+                            break
+            return bad, n
+
+        bad, n = compare(opts.rust, "", opts.dump)
+        missed = []
+        if opts.mutants:
+            for m in sorted(os.listdir(opts.mutants)):
+                mbad, _ = compare(os.path.join(opts.mutants, m), "[mutant %s] " % m)
+                if mbad:
+                    name, i, argv, key = mbad[0][:4]
+                    print("mutant %s: CAUGHT (%d steps differ; first %s step %d, %s)" % (m, len(mbad), name, i, key))
+                else:
+                    print("mutant %s: MISSED" % m)
+                    missed.append(m)
         if not bad:
             print("IDENTICAL: %d steps on the fake host (%s mode)" % (n, opts.mode))
-            return 0
+            return 1 if missed else 0
         print("DIFFERENT: %d of %d steps (%s mode)" % (len(bad), n, opts.mode))
         for name, i, argv, key, x, y in bad:
             print("  %s step %d %s: %s differs" % (name, i, " ".join(argv), key))
