@@ -40,9 +40,75 @@ pub fn cmd_args(ns: &Ns) -> Vec<String> {
         "add" => a.extend(ns_list(ns, "files")),
         "rm" | "remove" | "delete" | "erase" => a.extend(ns_list(ns, "what")),
         "init" | "rebuild" => a.extend(ns_s(ns, "name").filter(|s| !s.is_empty())),
+        "burn" => {
+            a.extend(ns_s(ns, "image"));
+            a.extend(ns_s(ns, "device").filter(|s| !s.is_empty()));
+            for (flag, k) in [("--yes", "yes"), ("--dry-run", "dry_run"), ("--no-verify", "no_verify")] {
+                if ns_b(ns, k) {
+                    a.push(flag.into());
+                }
+            }
+        }
+        "flash" => {
+            a.extend(ns_s(ns, "device").filter(|s| !s.is_empty()));
+            if let Some(f) = ns_s(ns, "firmware").filter(|s| !s.is_empty()) {
+                a.extend(["--firmware".into(), f]);
+            }
+            if let Some(Val::Float(g)) = ns.get("max_data_gb") {
+                a.extend(["--max-data-gb".into(), py_float_str(*g)]);
+            }
+            for (flag, k) in [("--yes", "yes"), ("--no-format", "no_format"), ("--lba48", "lba48")] {
+                if ns_b(ns, k) {
+                    a.push(flag.into());
+                }
+            }
+            if ns_b(ns, "arm") {
+                a.push("--arm".into());
+            } else if ns_b(ns, "no_arm") {
+                a.push("--no-arm".into());
+            }
+        }
         _ => {}
     }
     a
+}
+
+fn ns_b(ns: &Ns, k: &str) -> bool {
+    matches!(ns.get(k), Some(Val::Bool(true)))
+}
+
+/// Python's str(float): the shortest round-trip digits, positional for
+/// exponents -4..16, else d.ddde+XX.
+pub fn py_float_str(x: f64) -> String {
+    if x.is_nan() {
+        return "nan".into();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "inf".into() } else { "-inf".into() };
+    }
+    let e = format!("{:e}", x); // shortest digits: "-1.25e3"
+    let (mant, exp) = e.split_once('e').unwrap();
+    let exp: i32 = exp.parse().unwrap();
+    let neg = mant.starts_with('-');
+    let digits: String = mant.chars().filter(|c| c.is_ascii_digit()).collect();
+    let sign = if neg { "-" } else { "" };
+    if (-4..16).contains(&exp) {
+        let n = digits.len() as i32;
+        let body = if exp >= 0 {
+            if n - 1 <= exp {
+                format!("{}{}.0", digits, "0".repeat((exp - (n - 1)) as usize))
+            } else {
+                let p = (exp + 1) as usize;
+                format!("{}.{}", &digits[..p], &digits[p..])
+            }
+        } else {
+            format!("0.{}{}", "0".repeat((-exp - 1) as usize), digits)
+        };
+        format!("{}{}", sign, body)
+    } else {
+        let m = if digits.len() > 1 { format!("{}.{}", &digits[..1], &digits[1..]) } else { digits };
+        format!("{}{}e{}{:02}", sign, m, if exp < 0 { '-' } else { '+' }, exp.abs())
+    }
 }
 
 fn with_desc(node: &str, desc: &str) -> String {
@@ -221,7 +287,7 @@ pub fn choose_mounted(cands: &[(i32, String)]) -> Option<String> {
 // ------------------------------------------------------------------ mounting
 
 /// _run_quiet_mount: mount(8)'s stderr minus the fstab/daemon-reload nag.
-fn run_quiet_mount(cmd: &[String]) -> i32 {
+pub fn run_quiet_mount(cmd: &[String]) -> i32 {
     let out = std::process::Command::new(&cmd[0]).args(&cmd[1..]).stderr(std::process::Stdio::piped()).output();
     match out {
         Ok(o) => {

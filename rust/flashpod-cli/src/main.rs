@@ -15,6 +15,7 @@ mod argparse;
 mod catalog;
 mod data;
 mod detect;
+mod devices;
 mod flash;
 mod host;
 mod rawdev;
@@ -228,43 +229,61 @@ fn diagnose_missing_db(fs: &mut flashpod_core::fat::Fat32, device: &str) {
     eprintln!("flashpod: no iTunesDB on {} (iPod_Control is present but iPod_Control/iTunes/iTunesDB is missing). If this iPod should have music, that's unexpected \u{2014} otherwise run `flashpod init`.", device);
 }
 
-/// `flashpod flash ...` on an image file. None: not something the Rust
-/// build handles yet.
-fn cmd_flash(ns: &Ns) -> Option<i32> {
-    let device = s(ns, "device")?;
-    // platform.use_image: only a regular file is an image
-    if !std::fs::metadata(&device).map(|m| m.is_file()).unwrap_or(false) || b(ns, "self_test") {
-        return None;
+/// The `flash` branch of cli.main: the firmware is picked (and fetched)
+/// first, as the invoking user; then, for a device, root via sudo, the
+/// resolved choices carried across as flags.
+fn cmd_flash(ns: &mut Ns) -> i32 {
+    if b(ns, "self_test") {
+        return flash::self_test();
     }
-    // the firmware is picked (and fetched) first, as the invoking user
+    let device = s(ns, "device").filter(|d| !d.is_empty());
+    let image = device.as_deref().map(flash::is_image).unwrap_or(false);
     let mut max_data_gb = None;
     let firmware = match s(ns, "firmware").filter(|f| !f.is_empty()) {
         Some(f) => f,
         None => {
             let manifest = match catalog::load_manifest() {
                 Some(m) => m,
-                None => return Some(1),
+                None => return 1,
             };
             let model = match catalog::choose_model(&manifest, s(ns, "model").as_deref().filter(|m| !m.is_empty())) {
-                catalog::Model::Bail => return Some(1),
+                catalog::Model::Bail => return 1,
                 catalog::Model::Any => None,
                 catalog::Model::One(m) => Some(m),
             };
             let entry = match catalog::choose_firmware(&manifest, model.as_ref()) {
                 Some(e) => e,
-                None => return Some(1),
+                None => return 1,
             };
             max_data_gb = entry["max_data_gb"].as_f64();
             match catalog::ensure_firmware(&entry, manifest["base_url"].as_str().unwrap_or("")) {
                 Some(f) => f,
-                None => return Some(1),
+                None => return 1,
             }
         }
     };
     if let Some(Val::Float(f)) = ns.get("max_data_gb") {
         max_data_gb = Some(*f);
     }
-    let mut o = flash::Opts {
+    // carry both resolved choices across the sudo boundary
+    ns.insert("firmware".into(), Val::Str(firmware.clone()));
+    ns.insert("max_data_gb".into(), max_data_gb.map(Val::Float).unwrap_or(Val::None));
+    if !b(ns, "arm") && !b(ns, "no_arm") {
+        let armed = flash::ask_arm(&firmware);
+        ns.insert("arm".into(), Val::Bool(armed));
+        ns.insert("no_arm".into(), Val::Bool(!armed));
+    }
+    if !image && !b(ns, "dry_run") && !host::is_admin() {
+        let args = detect::cmd_args(ns);
+        if term::stdin_isatty() {
+            eprintln!("flashpod flash: writing to a disk needs root \u{2014} elevating via sudo...");
+            host::sudo_reexec(&args);
+        }
+        eprintln!("flashpod flash: Run as root (sudo) to write to a block device.\n  sudo {}",
+                  host::self_cmd().into_iter().chain(args).collect::<Vec<_>>().join(" "));
+        return 1;
+    }
+    let o = flash::Opts {
         device,
         firmware,
         yes: b(ns, "yes"),
@@ -274,23 +293,20 @@ fn cmd_flash(ns: &Ns) -> Option<i32> {
         lba48: b(ns, "lba48"),
         max_data_gb,
     };
-    if !o.arm && !b(ns, "no_arm") {
-        o.arm = flash::ask_arm(&o.firmware);
-    }
     // offer init on the fresh card only when it will work: interactive, a
     // real write, a FAT32 data partition
     let offer = term::stdin_isatty() && !o.dry_run && !o.no_format;
-    let mut hook = |dev: &str, f: &mut FileDevice, data_start: u64| -> Result<(), flash::Exit> {
-        data::offer_init_after_flash_image(dev, f, data_start);
-        Ok(())
+    let mut hook = |dev: &str, open: Option<(&mut FileDevice, u64)>| match open {
+        Some((f, data_start)) => data::offer_init_after_flash_image(dev, f, data_start),
+        None => data::offer_init_after_flash_unix(dev),
     };
-    Some(match flash::flash(&o, if offer { Some(&mut hook) } else { None }) {
+    match flash::flash(&o, if offer { Some(&mut hook) } else { None }) {
         Ok(rc) => rc,
         Err(flash::Exit(msg)) => {
             eprintln!("{}", msg);
             1
         }
-    })
+    }
 }
 
 /// cli.__doc__, the top-level help's description.
@@ -408,13 +424,13 @@ fn not_implemented() -> i32 {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let ns = match build_cli().parse_args(&args) {
+    let mut ns = match build_cli().parse_args(&args) {
         Ok(ns) => ns,
         Err(code) => std::process::exit(code),
     };
     let command = s(&ns, "command").unwrap_or_default();
     let code = match command.as_str() {
-        "flash" => cmd_flash(&ns).unwrap_or_else(not_implemented),
+        "flash" => cmd_flash(&mut ns),
         "burn" => not_implemented(),
         _ => data_command(&ns, &command),
     };

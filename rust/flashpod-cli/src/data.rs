@@ -685,3 +685,99 @@ pub fn run_raw_device(node: &str, cmd: Cmd) -> i32 {
     crate::detect::offer_eject(Some(node), rc);
     rc
 }
+
+/// tempfile.mkdtemp(prefix): a fresh 0700 directory under $TMPDIR.
+fn mkdtemp(prefix: &str) -> std::io::Result<String> {
+    use std::os::unix::fs::DirBuilderExt;
+    let tmp = std::env::temp_dir();
+    let mut seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+        ^ (std::process::id() as u128) << 64;
+    let chars = b"abcdefghijklmnopqrstuvwxyz0123456789_";
+    loop {
+        let mut name = String::from(prefix);
+        for _ in 0..8 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            name.push(chars[((seed >> 64) % chars.len() as u128) as usize] as char);
+        }
+        let path = tmp.join(&name);
+        match std::fs::DirBuilder::new().mode(0o700).create(&path) {
+            Ok(()) => return Ok(path.to_string_lossy().into_owned()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// _offer_init_after_flash_unix: mount the fresh data partition at a temp
+/// dir (root here), init, offer add, unmount; the eject follows.
+pub fn offer_init_after_flash_unix(dev: &str) {
+    let part = crate::devices::partition_node(dev, 2);
+    // the node appears once udev has re-probed the table just committed
+    let mut found = false;
+    for _ in 0..50 {
+        if std::path::Path::new(&part).exists() {
+            found = true;
+            break;
+        }
+        window::sleep(0.1);
+    }
+    if !found {
+        eprintln!("init skipped: {} never appeared after the partition table was re-read.\n  Mount the card and run `flashpod init` instead.", part);
+        return;
+    }
+    if !term::ask_yes(&format!("\nThe card still needs the iPod database before it can take music (\"flashpod init\").\nRun init on {} now? [Y/n] ", part), true) {
+        eprintln!("Skipped. Later: mount the card and run `flashpod init`.");
+        return;
+    }
+    let base = |p: &str| p.rsplit('/').next().unwrap_or(p).to_string();
+    let existing: Vec<String> = crate::detect::device_mountpoints(&part)
+        .into_iter()
+        .filter(|(p, _)| base(p) == base(&part))
+        .map(|(_, mp)| mp)
+        .collect();
+    let ours = existing.is_empty();
+    let mnt = match existing.into_iter().next() {
+        Some(m) => m,
+        None => match mkdtemp("flashpod-init-") {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("flashpod: {}", e);
+                return;
+            }
+        },
+    };
+    let mounted = if ours {
+        let cmd: Vec<String> = vec!["mount".into(), part.clone(), mnt.clone()];
+        let rc = crate::detect::run_quiet_mount(&cmd);
+        if rc != 0 {
+            let argv: Vec<String> = cmd.iter().map(|a| crate::argparse::py_repr(a)).collect();
+            eprintln!("init skipped: mounting {} failed (Command '[{}]' returned non-zero exit status {}.); mount the card and run `flashpod init` instead.", part, argv.join(", "), rc);
+            false
+        } else {
+            true
+        }
+    } else {
+        true
+    };
+    if mounted {
+        let mut t = MountTarget::new(&mnt);
+        let mut ent = entropy();
+        match t.init_structure("iPod", &mut ent) {
+            Ok(()) => {
+                println!("Initialized iPod directory structure on {}", part);
+                if term::ask_yes("\nMusic can be loaded onto the card now, or later when it is in the iPod.\nLoad music onto the card now? [Y/n] ", true) {
+                    let cx = Ctx { node: mnt.clone(), mount: true };
+                    add(&mut t, &cx, &[], &mut ent);
+                }
+                let _ = crate::host::call(&["sync".to_string()]);
+            }
+            Err(e) => eprintln!("flashpod: {}", e.message),
+        }
+        if ours {
+            let _ = crate::host::call(&["umount".to_string(), mnt.clone()]);
+        }
+    }
+    if ours {
+        let _ = std::fs::remove_dir(&mnt);
+    }
+}

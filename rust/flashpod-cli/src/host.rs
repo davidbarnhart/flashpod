@@ -65,6 +65,26 @@ pub fn capture(cmd: &[&str]) -> Option<Out> {
     })
 }
 
+/// subprocess.run(cmd, timeout=secs) with captured output: None when the
+/// tool can't be run, Some(None) when it ran past the timeout (killed, as
+/// subprocess does), else Some(exit code).
+pub fn capture_timeout(cmd: &[&str], secs: f64) -> Option<Option<i32>> {
+    let mut child = Command::new(cmd[0]).args(&cmd[1..]).stdin(Stdio::null())
+        .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(secs);
+    loop {
+        if let Ok(Some(st)) = child.try_wait() {
+            return Some(Some(st.code().unwrap_or(1)));
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Some(None);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 /// subprocess.run(cmd) with the terminal inherited; the exit code, None
 /// when it couldn't be started.
 pub fn call(cmd: &[String]) -> Option<i32> {

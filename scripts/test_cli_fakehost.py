@@ -689,6 +689,28 @@ USB_IPOD = {"name": "sdb", "card": "ipod", "tran": "usb", "rm": 1, "hotplug": 1,
             "model": "Card Reader", "vendor": "Generic"}
 
 SCENARIOS = {
+    # flash with no device named: the chooser over removable disks (a
+    # generic-class model, an empty reader slot), then a dry run on the pick
+    "flash_chooser": {
+        "modes": ("user", "root"),
+        "host": {"disks": [dict(USB_IPOD, model="MassStorageClass", vendor="Generic"),
+                           dict(USB_IPOD, name="sdc", card="blank", zero=True, model="Card Reader",
+                                idvendor="0bda", product="USB3.0-CRW")],
+                 "mounts": [{"dev": "/dev/sdb2", "mnt": "/media/david/IPOD", "fstype": "vfat"}]},
+        "steps": [
+            {"argv": ["flash", "--dry-run", "--firmware", "{fw}", "--no-arm"],
+             "pty": [(r"to quit\): ", "9\r"), (r"to quit\): ", "1\r"), (r"to quit\): ", "r\r"),
+                     (r"to quit\): ", "0\r")]},
+            {"argv": ["flash", "--dry-run", "--firmware", "{fw}", "--no-arm"],
+             "pty": [(r"to quit\): ", "q\r")]},
+            # end of input at the chooser
+            {"argv": ["flash", "--dry-run", "--firmware", "{fw}", "--no-arm"]},
+            # --no-format keeps a matching data partition; a dry run without
+            # root can't read the card to check, and says so
+            {"argv": ["flash", "--dry-run", "--no-format", "--firmware", "{fw}", "--no-arm"],
+             "pty": [(r"to quit\): ", "0\r")]},
+        ],
+    },
     # one iPod card in a USB reader, not mounted: ls finds it by its database
     "usb_ls_scan": {
         "modes": ("user", "root"),
@@ -766,6 +788,62 @@ SCENARIOS = {
             {"argv": ["rm", "52"], "root": True},
         ],
     },
+    # ROOT MODE: flashing a real block device. Elevates through sudo,
+    # writes, verifies, re-reads the table, offers init on the new data
+    # partition (mounted at a temp dir), then ejects.
+    "flash_device": {
+        "modes": ("root",),
+        "host": {"disks": [dict(USB_IPOD, card="blank")]},
+        "steps": [
+            {"argv": ["flash", "/dev/sdb", "--firmware", "{fw}", "--yes", "--no-arm"],
+             "pty": [(r"Run init on /dev/sdb2 now\? \[Y/n\] ", "\r"),
+                     (r"Load music onto the card now\? \[Y/n\] ", "n\r")]},
+        ],
+    },
+    # the typed confirmation, a mounted card unmounted first, init declined
+    "flash_device_typed": {
+        "modes": ("root",),
+        "host": {"disks": [dict(USB_IPOD)],
+                 "mounts": [{"dev": "/dev/sdb2", "mnt": "/media/david/IPOD", "fstype": "vfat"}]},
+        "steps": [
+            {"argv": ["flash", "/dev/sdb", "--firmware", "{fw}", "--no-arm"], "root": True,
+             "pty": [(r"to proceed: ", "ERASE sdb\r"),
+                     (r"Run init on /dev/sdb2 now\? \[Y/n\] ", "n\r")]},
+        ],
+    },
+    # --no-format on an iPod card: the data partition is checked and kept,
+    # no init offer; and on a blank card it is refused
+    "flash_device_keep": {
+        "modes": ("root",),
+        "host": {"disks": [dict(USB_IPOD), dict(USB_IPOD, name="sdc", card="blank")]},
+        "steps": [
+            {"argv": ["flash", "/dev/sdc", "--no-format", "--firmware", "{fw}", "--yes", "--no-arm"], "root": True},
+            {"argv": ["flash", "/dev/sdb", "--no-format", "--firmware", "{fw}", "--yes", "--no-arm"], "root": True,
+             "pty": []},
+        ],
+    },
+    # what flash refuses before writing anything
+    "flash_device_refusals": {
+        "modes": ("root",),
+        "host": {"disks": [dict(USB_IPOD), dict(USB_IPOD, name="sdc", card="blank", zero=True)]},
+        "steps": [
+            {"argv": ["flash", "/dev/sdb1", "--firmware", "{fw}", "--yes", "--no-arm"], "root": True},
+            {"argv": ["flash", "/dev/sdz", "--firmware", "{fw}", "--yes", "--no-arm"], "root": True},
+            {"argv": ["flash", "/dev/sdc", "--firmware", "{fw}", "--yes", "--no-arm"], "root": True},
+            # no root and no terminal: the sudo command to run instead
+            {"argv": ["flash", "/dev/sdb", "--firmware", "{fw}", "--yes", "--no-arm"]},
+            {"argv": ["flash", "--self-test"]},
+        ],
+    },
+    # a terminal, sudo refused: the resolved choices were carried in its argv
+    "flash_sudo_denied": {
+        "modes": ("root",),
+        "host": {"disks": [dict(USB_IPOD)], "sudo": "deny"},
+        "steps": [
+            {"argv": ["flash", "/dev/sdb", "--firmware", "{fw}", "--yes", "--max-data-gb", "0.5", "--no-arm"],
+             "pty": []},
+        ],
+    },
     # nothing attached at all
     "nothing": {
         "modes": ("user", "root"),
@@ -774,6 +852,8 @@ SCENARIOS = {
             {"argv": ["ls"], "root": True},
             {"argv": ["add", "x"], "root": True},
             {"argv": ["init"], "root": True},
+            # flash with no device: the chooser has nothing to offer
+            {"argv": ["flash", "--dry-run", "--firmware", "{fw}", "--no-arm"], "pty": []},
         ],
     },
     # a disk reporting 0 bytes on FireWire: the bridge-collapse hint
@@ -825,6 +905,8 @@ def normalize(text, run, selfcmd):
     for s in selfcmd:
         text = text.replace(s, "<flashpod>")
     text = text.replace(run, "<host>")
+    # the post-flash init's mount point: tempfile.mkdtemp's random name
+    text = re.sub(r"/tmp/flashpod-init-[a-z0-9_]+", "<initdir>", text)
     # as a JSON list element ("PYTHONPATH=...", ) or in plain text
     text = re.sub(r'"PYTHONPATH=[^"]*", ', "", text)
     text = re.sub(r"PYTHONPATH=\S+ ?", "", text)
@@ -882,6 +964,7 @@ def run_scenario(name, sc, mode, cards, build, rust, root):
             if mode not in step.get("modes", (mode,)):
                 continue
             open(os.path.join(run, "calls.log"), "w").close()
+            step = dict(step, argv=[a.format(fw=FIXTURE_FW) for a in step["argv"]])
             rc, out, err = run_step(run, step, ["flashpod"])
             with open(os.path.join(run, "calls.log")) as f:
                 calls = [json.loads(l) for l in f if l.strip()]
@@ -931,6 +1014,8 @@ def main():
         os.makedirs(fx)
         music = synth.make_music(os.path.join(fx, "music"))
         fw = synth.write_firmware(os.path.join(fx, "fw.bin"))
+        global FIXTURE_FW
+        FIXTURE_FW = fw
         cards = make_cards(fx, fw, music)
         bad = []
         n = 0
