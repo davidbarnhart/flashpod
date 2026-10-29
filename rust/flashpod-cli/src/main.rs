@@ -673,6 +673,8 @@ fn inspect_text(v: &serde_json::Value) -> String {
                 let what = match p["type"].as_u64() {
                     Some(0) => "firmware",
                     Some(0x0b) | Some(0x0c) => "FAT32 data",
+                    Some(0xaf) => "HFS data",
+                    Some(0xfe) => "partition map",
                     _ => "other",
                 };
                 o += &format!("    {}: {} (type 0x{:02x}), sectors {}..{} ({})\n", p["index"], what, p["type"].as_u64().unwrap_or(0),
@@ -693,8 +695,14 @@ fn inspect_text(v: &serde_json::Value) -> String {
     let fs = &v["filesystem"];
     if fs.is_object() {
         let n = |k: &str| fs[k].as_u64().unwrap_or(0);
-        o += &format!("  data: {} {:?}, {}, {} free, {} clusters\n", st(&fs["type"]), fs["label"].as_str().unwrap_or(""),
-                      fmt_bytes(n("total_bytes")), fmt_bytes(n("free_bytes")), fmt_bytes(n("cluster_bytes")));
+        if fs["type"].as_str() == Some("HFS+") {
+            o += &format!("  data: HFS+{}, {}, {} free, {} blocks\n",
+                          if fs["wrapped"] == serde_json::json!(true) { " in an HFS wrapper" } else { "" },
+                          fmt_bytes(n("total_bytes")), fmt_bytes(n("free_bytes")), fmt_bytes(n("block_bytes")));
+        } else {
+            o += &format!("  data: {} {:?}, {}, {} free, {} clusters\n", st(&fs["type"]), fs["label"].as_str().unwrap_or(""),
+                          fmt_bytes(n("total_bytes")), fmt_bytes(n("free_bytes")), fmt_bytes(n("cluster_bytes")));
+        }
     }
     let db = &v["itunesdb"];
     match db["state"].as_str() {
@@ -724,7 +732,15 @@ fn inspect_text(v: &serde_json::Value) -> String {
     for p in v["problems"].as_array().into_iter().flatten() {
         o += &format!("  problem: {}\n", st(p));
     }
-    o += &format!("  {}\n", if v["ready"] == serde_json::json!(true) { "ready for an iPod" } else { "not ready for an iPod" });
+    if v["partition_table"].as_str() == Some("apm") {
+        o += &format!("  {}\n", if v["ipod_compatible"] == serde_json::json!(true) {
+            "a Mac card: firmware and HFS+ volume in place; mount it to add music (flashpod music init/add --mount)"
+        } else {
+            "a Mac card, with problems (above)"
+        });
+    } else {
+        o += &format!("  {}\n", if v["ready"] == serde_json::json!(true) { "ready for an iPod" } else { "not ready for an iPod" });
+    }
     o
 }
 

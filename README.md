@@ -639,6 +639,17 @@ partition reaches past 128 GiB (only LBA48 firmware can address that).
 `--dry-run` runs every check and writes nothing; `--no-verify` skips the
 read-back. Linux only for now.
 
+### A Mac card: `flashpod firmware write --format hfs`
+
+`--format hfs` makes a Mac-formatted card instead of a FAT32 one: an Apple
+Partition Map, the firmware, and an HFS+ volume inside the HFS wrapper early
+iPods boot from (the layout of a real Mac-formatted iPod). macOS mounts it as a
+normal disk. flashpod does not write HFS+ files itself, so the music goes on
+through that mount: `flashpod music init --mount /Volumes/iPod` once, then
+`flashpod music add --mount /Volumes/iPod ...`. `flashpod inspect` reports the
+map, the firmware and the HFS+ volume. A small wrapped card has booted and
+played on a 1st-gen iPod; large Mac cards have not yet been tried on hardware.
+
 ### `flashpod card new IMAGE SIZE`
 
 Makes a blank card image to flash: a sparse file, so it takes no disk

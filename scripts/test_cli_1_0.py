@@ -361,6 +361,17 @@ def mac_card_checks(binary, work):
         check(r.returncode == 0 and "appears to be OK" in r.stdout, "fsck.hfsplus passes on the data partition")
     else:
         print("  skip fsck.hfsplus not installed (hfsprogs)")
+    rc, out, err = run(binary, "inspect", img, "--json")
+    try:
+        info = json.loads(out)
+    except ValueError:
+        info = {}
+    fsys = info.get("filesystem") or {}
+    check(info.get("partition_table") == "apm" and [p["start"] for p in info.get("partitions", [])] == [1, 63, 65599]
+          and info.get("firmware", {}).get("present") is True and fsys.get("type") == "HFS+" and fsys.get("wrapped") is True
+          and 0 < fsys.get("free_bytes", 0) < fsys.get("total_bytes", 0) <= data_n * 512
+          and info.get("ipod_compatible") is True and info.get("itunesdb", {}).get("state") == "not_read",
+          "inspect reads the Mac card: apm, firmware present, a wrapped HFS+ volume no bigger than its partition")
     rc, out, err = run(binary, "firmware", "write", img, "--firmware", fw, "--yes", "--no-format", "--format", "hfs")
     check(rc == 1 and "--no-format" in err, "--no-format with --format hfs is refused")
 
