@@ -210,7 +210,7 @@ mod tests {
     #[test]
     fn layout_fallbacks_collisions_and_others() {
         let lib = Library {
-            name: "iPod".into(), dbid: 0,
+            name: "iPod".into(), dbid: 0, playlists: Vec::new(),
             tracks: vec![
                 track(1, Some("Blue Monday"), Some("New Order"), Some("Singles"), 3, ":iPod_Control:Music:F00:fp1.mp3"),
                 track(2, None, None, None, 0, ":iPod_Control:Music:F01:fp2.m4a"),

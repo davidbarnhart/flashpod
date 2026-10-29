@@ -21,6 +21,7 @@ pub mod itunesdb;
 pub mod layout;
 pub mod library;
 pub mod ops;
+pub mod playlist;
 pub mod tags;
 pub mod text;
 

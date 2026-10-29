@@ -92,7 +92,7 @@ fn cmd_ls(name: &str, tracks: &[Track], field: &str) -> i32 {
     let key = |t: &Track| (casefold(&orunknown(&t.artist)), casefold(&orunknown(&t.album)), t.track_nr, casefold(&orunknown(&t.title)));
     let mut sorted: Vec<&Track> = tracks.iter().collect();
     sorted.sort_by_key(|t| key(t));
-    let lib = flashpod_core::itunesdb::Library { name: name.to_string(), tracks: tracks.to_vec(), dbid: 0 };
+    let lib = flashpod_core::itunesdb::Library { name: name.to_string(), tracks: tracks.to_vec(), dbid: 0, playlists: Vec::new() };
     let (nt, na, nb) = inspect::counts(&lib);
     println!("iPod \"{}\": {} tracks, {} artists, {} albums", name, nt, na, nb);
     let mut prev_artist: Option<String> = None;

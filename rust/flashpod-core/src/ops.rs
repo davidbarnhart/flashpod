@@ -180,6 +180,8 @@ pub fn remove_fs(fs: &mut dyn Target, what: &[String], ent: &mut Entropy) -> Res
         k += 1;
         keep
     });
+    let gone: Vec<u32> = victims.iter().map(|t| t.id).collect();
+    crate::playlist::forget_tracks(&mut lib, &gone);
     fs.save_library(&lib, ent)?;
     Ok(victims)
 }

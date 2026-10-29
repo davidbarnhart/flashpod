@@ -28,6 +28,18 @@ a struct literal keeps today's behaviour with `..Default::default()`
 after its four fields. emupod's server (cards.rs:933) names all four
 fields and no default, so it needs that one addition at the bump.
 
+### Library gains user playlists (#106)
+
+`itunesdb::Library` has a new field `playlists: Vec<Playlist>` (the user
+playlists; `itunesdb::Playlist { name, ids }`). Code that builds a
+Library with a struct literal must add `playlists: Vec::new()`;
+`Library::new` sets it. emupod does not build one. A database with no
+user playlists serializes to the same bytes as before; one with them now
+keeps them through add and rm (rm also takes removed tracks out of every
+playlist) instead of dropping them; rebuild still starts without them.
+New module `playlist` edits them: `create`, `add`, `take`, `delete`,
+`forget_tracks`.
+
 ### Now crate-private (no consumer named them)
 
 `api::{run, firmware_of}`;
