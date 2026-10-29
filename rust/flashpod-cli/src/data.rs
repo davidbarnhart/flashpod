@@ -754,7 +754,7 @@ fn mkdtemp(prefix: &str) -> std::io::Result<String> {
 /// _offer_init_after_flash_unix: mount the fresh data partition at a temp
 /// dir (root here), init, offer add, unmount; the eject follows.
 pub fn offer_init_after_flash_unix(dev: &str) {
-    let part = crate::devices::partition_node(dev, 2);
+    let part = crate::platform::current().partition_node(dev, 2);
     // the node appears once udev has re-probed the table just committed
     let mut found = false;
     for _ in 0..50 {
@@ -773,7 +773,7 @@ pub fn offer_init_after_flash_unix(dev: &str) {
         return;
     }
     let base = |p: &str| p.rsplit('/').next().unwrap_or(p).to_string();
-    let existing: Vec<String> = crate::detect::device_mountpoints(&part)
+    let existing: Vec<String> = crate::platform::current().device_mountpoints(&part)
         .into_iter()
         .filter(|(p, _)| base(p) == base(&part))
         .map(|(_, mp)| mp)
@@ -790,7 +790,7 @@ pub fn offer_init_after_flash_unix(dev: &str) {
         },
     };
     let mounted = if ours {
-        let cmd: Vec<String> = vec!["mount".into(), part.clone(), mnt.clone()];
+        let cmd: Vec<String> = crate::platform::current().fat_mount_cmd(&part, &mnt);
         let rc = crate::detect::run_quiet_mount(&cmd);
         if rc != 0 {
             let argv: Vec<String> = cmd.iter().map(|a| crate::argparse::py_repr(a)).collect();

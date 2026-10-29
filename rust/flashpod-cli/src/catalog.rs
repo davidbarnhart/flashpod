@@ -231,10 +231,22 @@ fn sha256(path: &str) -> Option<String> {
     Some(h.finalize().iter().map(|b| format!("{:02x}", b)).collect())
 }
 
+#[cfg(target_os = "linux")]
+fn agent() -> Result<ureq::Agent, String> {
+    Ok(ureq::agent())
+}
+
+/// The system TLS stack (Security.framework, SChannel) and its trust store.
+#[cfg(not(target_os = "linux"))]
+fn agent() -> Result<ureq::Agent, String> {
+    let tls = native_tls::TlsConnector::new().map_err(|e| format!("<urlopen error {}>", e))?;
+    Ok(ureq::AgentBuilder::new().tls_connector(std::sync::Arc::new(tls)).build())
+}
+
 /// _download: stream `url` to `dst`, a progress line on a terminal. Err is
 /// worded like the urllib exception Python prints.
 fn download(url: &str, dst: &str, total: Option<u64>) -> Result<(), String> {
-    let resp = ureq::get(url).set("User-Agent", "flashpod").call().map_err(|e| match e {
+    let resp = agent()?.get(url).set("User-Agent", "flashpod").call().map_err(|e| match e {
         ureq::Error::Status(code, r) => format!("HTTP Error {}: {}", code, r.status_text()),
         ureq::Error::Transport(t) => format!("<urlopen error {}>", t),
     })?;

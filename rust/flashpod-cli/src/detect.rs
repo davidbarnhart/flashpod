@@ -139,7 +139,7 @@ fn ask(prompt: &str) -> Option<String> {
 /// candidate_mounts: (score, mountpoint), best first.
 pub fn candidate_mounts() -> Vec<(i32, String)> {
     let mut cands = Vec::new();
-    for (dev, mnt, fstype) in host::mounted_filesystems() {
+    for (dev, mnt, fstype) in crate::platform::current().mounted_filesystems() {
         let ft = fstype.to_lowercase();
         if !(ft.contains("fat") || ft.contains("msdos") || ft.contains("hfs")) {
             continue;
@@ -217,7 +217,7 @@ pub fn unmounted_candidates() -> Vec<(i32, String, String, String)> {
 /// _unmounted_disks: the candidates not mounted (a whole disk counts as
 /// mounted when one of its partitions is).
 fn unmounted_disks(disks: &[(String, String)]) -> Vec<(String, String)> {
-    let mounted: Vec<String> = host::mounted_filesystems().into_iter()
+    let mounted: Vec<String> = crate::platform::current().mounted_filesystems().into_iter()
         .filter(|(d, _, _)| d.starts_with("/dev/")).map(|(d, _, _)| host::realpath(&d)).collect();
     let part_suffix = |t: &str| {
         let t = t.strip_prefix('p').unwrap_or(t);
@@ -519,7 +519,7 @@ fn pick_among_sources(ns: &Ns, mounts: &[(i32, String)], unmounted: &[(String, S
     if !is_admin() {
         if term::stdin_isatty() {
             eprintln!("flashpod: another disk is attached alongside the mounted iPod; checking whether it's a second iPod means reading it raw, which needs root \u{2014} elevating via sudo...");
-            host::sudo_reexec(&cmd_args(ns));
+            crate::platform::current().elevate(&cmd_args(ns));
         }
         eprintln!("flashpod: couldn't get root to check the other attached disk(s); using the mounted iPod. Pass --raw <device> to target another:");
         for (node, desc) in unmounted {
@@ -561,7 +561,7 @@ pub fn detect_ls_source(ns: &Ns) -> Option<Source> {
     }
     if !is_admin() {
         eprintln!("flashpod: looking for an iPod means reading attached disks, which needs root \u{2014} elevating via sudo...");
-        host::sudo_reexec(&cmd_args(ns));
+        crate::platform::current().elevate(&cmd_args(ns));
         eprintln!("flashpod: couldn't get root to scan. Re-run with sudo, or pass --raw <device>. Candidate disk(s):");
         for (node, desc) in &disks {
             eprintln!("  {}", with_desc(node, desc));
@@ -661,7 +661,7 @@ pub fn resolve_raw_target(ns: &Ns) -> Option<Source> {
     }
     if !is_admin() {
         eprintln!("flashpod: {} over the iPod's raw device needs root \u{2014} elevating via sudo...", command);
-        host::sudo_reexec(&cmd_args(ns));
+        crate::platform::current().elevate(&cmd_args(ns));
         eprintln!("flashpod: couldn't get root. Re-run with sudo, or pass --raw <device>. Candidate disk(s):");
         for (node, desc) in &disks {
             eprintln!("  {}", with_desc(node, desc));
@@ -698,7 +698,7 @@ pub fn device_for_mount(mount: &str) -> Option<String> {
         return None;
     }
     let want = host::realpath(mount);
-    host::mounted_filesystems().into_iter().find(|(_, m, _)| host::realpath(m) == want).map(|(d, _, _)| d)
+    crate::platform::current().mounted_filesystems().into_iter().find(|(_, m, _)| host::realpath(m) == want).map(|(d, _, _)| d)
 }
 
 /// ipod_flash.device_mountpoints.
@@ -783,8 +783,8 @@ pub fn offer_eject(dev: Option<&str>, rc: i32) {
         return;
     }
     for attempt in 0..3 {
-        eject(dev);
-        if device_mountpoints(dev).is_empty() {
+        crate::platform::current().eject(dev);
+        if crate::platform::current().device_mountpoints(dev).is_empty() {
             println!("Ejected \u{2014} safe to disconnect.");
             return;
         }

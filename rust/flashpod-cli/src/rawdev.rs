@@ -6,7 +6,9 @@
 use flashpod_core::block::BlockDevice;
 use flashpod_core::fat::{Fat32, Sectors};
 use std::io;
-use std::os::unix::fs::{FileExt, FileTypeExt, OpenOptionsExt};
+use std::os::unix::fs::{FileExt, FileTypeExt};
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::OpenOptionsExt;
 
 const SECTOR: usize = 512;
 const ALIGN: usize = 4096;
@@ -62,6 +64,7 @@ pub fn py_os(e: &io::Error) -> io::Error {
 impl RawDevice {
     /// BlockDev(path, writable): O_DIRECT when it's a block device (and the
     /// kernel takes the flag), else a plain open.
+    #[cfg(target_os = "linux")]
     pub fn open(path: &str, writable: bool, max_xfer: u64) -> io::Result<Self> {
         let is_blk = std::fs::metadata(path)?.file_type().is_block_device();
         let mut o = std::fs::OpenOptions::new();
@@ -72,6 +75,22 @@ impl RawDevice {
             }
         }
         Ok(RawDevice { file: o.open(path)?, bounce: None })
+    }
+
+    /// macOS has no O_DIRECT: the unbuffered node is the raw character
+    /// device, so /dev/diskN is opened as /dev/rdiskN (platform.macos
+    /// raw_read_node), with F_NOCACHE on whatever is opened.
+    #[cfg(not(target_os = "linux"))]
+    pub fn open(path: &str, writable: bool, max_xfer: u64) -> io::Result<Self> {
+        let node = match path.strip_prefix("/dev/disk") {
+            Some(rest) => format!("/dev/rdisk{}", rest),
+            None => path.to_string(),
+        };
+        let raw = std::fs::metadata(&node)?.file_type().is_char_device();
+        let file = std::fs::OpenOptions::new().read(true).write(writable).open(&node)?;
+        unsafe { libc::fcntl(std::os::fd::AsRawFd::as_raw_fd(&file), libc::F_NOCACHE, 1) };
+        let bounce = if raw { Some(Bounce::new(max_xfer as usize * SECTOR)) } else { None };
+        Ok(RawDevice { file, bounce })
     }
 }
 

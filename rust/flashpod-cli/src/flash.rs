@@ -1,7 +1,7 @@
 //! `flashpod flash` onto a disk image: ipod_flash.flash with the image
 //! platform (platform/image.py), message for message.
 
-use crate::devices::{self, capacity_warning};
+use crate::devices::capacity_warning;
 use crate::term::{color, input_line, C_DIM, C_GRN, C_RED, C_YEL};
 use flashpod_core::block::{BlockDevice, FileDevice};
 use flashpod_core::fat32fmt::{self, FormatError};
@@ -172,12 +172,12 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
         Some(gb) if gb != 0.0 => Some((gb * 1_000_000_000.0 / SECTOR as f64).floor() as u64),
         _ => None,
     };
-    if !image && !crate::host::is_admin() && !o.dry_run {
+    if !image && !crate::platform::current().is_admin() && !o.dry_run {
         return Err(Exit(color("Run as root (sudo) to write to a block device.", C_RED)));
     }
     let dev = match &o.device {
         Some(d) => d.clone(),
-        None => devices::choose_device()?,
+        None => crate::platform::current().choose_device()?,
     };
     let dev = dev.as_str();
     let total = if image {
@@ -188,8 +188,8 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
         }
         size / SECTOR
     } else {
-        devices::validate_target(dev)?;
-        devices::device_sectors(dev)
+        crate::platform::current().validate_target(dev)?;
+        crate::platform::current().device_sectors(dev)
     };
     if total == 0 {
         return Err(Exit(color(&format!("could not determine size of {} \u{2014} is a card inserted? An empty slot in a multi-slot reader still appears as a disk, but reports size 0.", dev), C_RED)));
@@ -201,10 +201,10 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
     if !do_format {
         check_kept_data(dev, total, o.dry_run, o.lba48, max_data_sectors)?;
     }
-    let mounted = if image { Vec::new() } else { crate::detect::device_mountpoints(dev) };
+    let mounted = if image { Vec::new() } else { crate::platform::current().device_mountpoints(dev) };
     confirm(dev, total, o.yes || o.dry_run, o.lba48, max_data_sectors, do_format, armed, &mounted)?;
     if !image {
-        devices::unmount_all(dev, o.dry_run);
+        crate::platform::current().unmount_all(dev, o.dry_run);
     }
     let (header, data_start, data_blocks) = layout::build_mbr_layout(total, o.lba48, max_data_sectors).map_err(Exit)?;
     let io = |e: std::io::Error| Exit(e.to_string());
@@ -218,7 +218,7 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
         }
     } else {
         if !image {
-            devices::wipe_signatures(dev);
+            crate::platform::current().wipe_signatures(dev);
         }
         let mut f = FileDevice::open(std::path::Path::new(dev), true).map_err(|e| Exit(os_error_text(&e, dev)))?;
         layout::write_layout_body(&mut f, &fw, total, data_start).map_err(io)?;
@@ -263,7 +263,7 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
         h => {
             commit(raw)?;
             if !image {
-                devices::reread_partition_table(dev);
+                crate::platform::current().reread_partition_table(dev);
             }
             if let Some(h) = h {
                 h(dev, None);
@@ -274,7 +274,7 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
         if o.dry_run {
             eprintln!("{}", color(&format!("  flushing + ejecting {}", dev), C_DIM));
         } else {
-            crate::detect::eject(dev);
+            crate::platform::current().eject(dev);
         }
     }
     eprintln!("{}", color(&format!("\nDone. {} is ready \u{2014} insert it into the iPod.", dev), C_GRN));
@@ -290,7 +290,7 @@ fn verify_firmware(dev: &str, fw: &[u8], dry: bool, image: bool) -> Result<(), E
     }
     eprintln!("{}", color(&format!("  verifying firmware on the card byte-for-byte ({} bytes @ sector {}) ...", fw.len(), FW_START), C_DIM));
     if !image {
-        devices::flush_buffers(dev);
+        crate::platform::current().flush_buffers(dev);
     }
     let mut f = FileDevice::open(std::path::Path::new(dev), false).map_err(|e| Exit(os_error_text(&e, dev)))?;
     if let Err(e) = layout::verify_region(&mut f, fw) {

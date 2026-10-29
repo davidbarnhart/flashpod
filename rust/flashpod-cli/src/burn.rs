@@ -65,6 +65,9 @@ fn py_str(v: &Value) -> String {
 }
 
 pub fn burn(image: &str, device: Option<&str>, assume_yes: bool, dry_run: bool, verify: bool) -> Result<i32, Exit> {
+    if !cfg!(target_os = "linux") {
+        return Err(fail("burn is Linux-only for now. Elsewhere, write the image with your system's disk imager."));
+    }
     // card.inspect: the image under a shared lock, read-only
     let info = {
         let dev = FileDevice::open_image(image, false).and_then(|d| d.try_lock(false, image).map(|_| d));

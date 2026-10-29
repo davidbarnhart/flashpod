@@ -22,6 +22,7 @@ mod host;
 mod rawdev;
 mod mount;
 mod pathpicker;
+mod platform;
 mod term;
 mod window;
 mod winnow;
@@ -275,11 +276,11 @@ fn cmd_flash(ns: &mut Ns) -> i32 {
         ns.insert("arm".into(), Val::Bool(armed));
         ns.insert("no_arm".into(), Val::Bool(!armed));
     }
-    if !image && !b(ns, "dry_run") && !host::is_admin() {
+    if !image && !b(ns, "dry_run") && !crate::platform::current().is_admin() {
         let args = detect::cmd_args(ns);
         if term::stdin_isatty() {
             eprintln!("flashpod flash: writing to a disk needs root \u{2014} elevating via sudo...");
-            host::sudo_reexec(&args);
+            crate::platform::current().elevate(&args);
         }
         eprintln!("flashpod flash: Run as root (sudo) to write to a block device.\n  sudo {}",
                   host::self_cmd().into_iter().chain(args).collect::<Vec<_>>().join(" "));
@@ -313,11 +314,11 @@ fn cmd_flash(ns: &mut Ns) -> i32 {
 
 /// The `burn` branch of cli.main: root via sudo unless it's a dry run.
 fn cmd_burn(ns: &Ns) -> i32 {
-    if !b(ns, "dry_run") && !host::is_admin() {
+    if !b(ns, "dry_run") && !crate::platform::current().is_admin() {
         let args = detect::cmd_args(ns);
         if term::stdin_isatty() {
             eprintln!("flashpod burn: writing to a disk needs root \u{2014} elevating via sudo...");
-            host::sudo_reexec(&args);
+            crate::platform::current().elevate(&args);
         }
         eprintln!("flashpod burn: needs root.\n  sudo {}", host::self_cmd().into_iter().chain(args).collect::<Vec<_>>().join(" "));
         return 1;
@@ -470,11 +471,11 @@ fn data_cmd<'a>(cmd: &str, name: &'a Option<String>, files: &'a [String], what: 
 /// elevating with sudo first when we lack root. `image`: platform.use_image
 /// took --raw for a card image (decided once, from the argument).
 fn run_raw(ns: &Ns, command: &str, node: &str, image: bool) -> i32 {
-    if !image && !host::is_admin() {
+    if !image && !crate::platform::current().is_admin() {
         eprintln!("flashpod: {} over the raw device {} needs root \u{2014} elevating via sudo...", command, node);
         let mut extra = vec!["--raw".to_string(), node.to_string()];
         extra.extend(detect::cmd_args(ns));
-        host::sudo_reexec(&extra);
+        crate::platform::current().elevate(&extra);
         eprintln!("flashpod: couldn't get root for raw access to {}.", node);
         return 1;
     }

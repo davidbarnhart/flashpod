@@ -13,11 +13,13 @@ pub fn mounts_file() -> String {
 }
 
 /// linux._unescape: the four codes /proc/mounts uses.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn unescape(field: &str) -> String {
     field.replace("\\040", " ").replace("\\011", "\t").replace("\\012", "\n").replace("\\134", "\\")
 }
 
 /// LinuxPlatform.mounted_filesystems: (device, mountpoint, fstype).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn mounted_filesystems() -> Vec<(String, String, String)> {
     let text = match std::fs::read(mounts_file()) {
         Ok(b) => String::from_utf8_lossy(&b).into_owned(),

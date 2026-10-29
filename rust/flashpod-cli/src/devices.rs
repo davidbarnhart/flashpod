@@ -345,6 +345,7 @@ pub fn device_sectors(dev: &str) -> u64 {
 }
 
 /// LinuxPlatform.partition_node: sdb -> sdb2, mmcblk0 -> mmcblk0p2.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn partition_node(dev: &str, index: u32) -> String {
     let sep = if dev.ends_with(|c: char| c.is_ascii_digit()) { "p" } else { "" };
     format!("{}{}{}", dev, sep, index)
@@ -361,6 +362,7 @@ pub fn unmount_all(dev: &str, dry: bool) {
 }
 
 /// LinuxPlatform.wipe_signatures (not dry).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn wipe_signatures(dev: &str) {
     if have("wipefs") {
         let _ = capture(&["wipefs", "-a", dev]);
