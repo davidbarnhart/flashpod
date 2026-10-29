@@ -102,6 +102,38 @@ pub fn build_mbr_layout(total: u64, lba48: bool, max_data_sectors: Option<u64>)
     Ok((mbr, DATA_START, blocks as u64))
 }
 
+/// The Mac layout (openpod tools/ipod_flash.py build_partition_layout, read
+/// off a real 5 GB Mac iPod): block 0 a driverless Driver Descriptor Record,
+/// blocks 1..3 the three Apple Partition Map entries ("partition map",
+/// "firmware" Apple_MDFW at 63, "disk" Apple_HFS after it), blocks 4..62
+/// zero. Every boot/status field is zero, as on the real iPod. The data
+/// partition ends where build_mbr_layout's does (TAIL_RESERVE, LBA28), which
+/// openpod's does not. Returns (blocks 0..62, data_start, data_blocks).
+pub fn build_apm_layout(total: u64, lba48: bool, max_data_sectors: Option<u64>)
+    -> Result<(Vec<u8>, u64, u64), String>
+{
+    let (_, data_start, blocks) = build_mbr_layout(total, lba48, max_data_sectors)?;
+    let mut hdr = vec![0u8; (FW_START * SECTOR) as usize];
+    hdr[0..2].copy_from_slice(b"ER");
+    hdr[2..4].copy_from_slice(&(SECTOR as u16).to_be_bytes());
+    hdr[4..8].copy_from_slice(&(total as u32).to_be_bytes());
+    let entries: [(u64, u64, &str, &str); 3] = [
+        (1, 62, "partition map", "Apple_partition_map"),
+        (FW_START, FW_BLOCKS, "firmware", "Apple_MDFW"),
+        (data_start, blocks, "disk", "Apple_HFS"),
+    ];
+    for (i, (start, count, name, ptype)) in entries.iter().enumerate() {
+        let e = &mut hdr[(i + 1) * SECTOR as usize..(i + 2) * SECTOR as usize];
+        e[0..2].copy_from_slice(b"PM");
+        e[4..8].copy_from_slice(&3u32.to_be_bytes());
+        e[8..12].copy_from_slice(&(*start as u32).to_be_bytes());
+        e[12..16].copy_from_slice(&(*count as u32).to_be_bytes());
+        e[16..16 + name.len()].copy_from_slice(name.as_bytes());
+        e[48..48 + ptype.len()].copy_from_slice(ptype.as_bytes());
+    }
+    Ok((hdr, data_start, blocks))
+}
+
 /// layout.fat_sectors_per_cluster.
 pub fn fat_sectors_per_cluster(data_blocks: u64) -> u64 {
     let mut spc = 32;
@@ -183,4 +215,30 @@ pub fn kept_data_problems(dev: &mut dyn crate::BlockDevice, total: u64, lba48: b
         problems.push(format!("no FAT32 filesystem at sector {}", start));
     }
     problems
+}
+
+#[cfg(test)]
+mod apm_tests {
+    use super::*;
+
+    #[test]
+    fn apm_header_matches_openpod_but_for_the_tail() {
+        // openpod tools/ipod_flash.py build_partition_layout(3906250), with
+        // the data count it gives (3906250 - 65599) cut by TAIL_RESERVE
+        let (hdr, start, n) = build_apm_layout(3_906_250, false, None).unwrap();
+        assert_eq!((start, n), (65599, 3_906_250 - 65599 - TAIL_RESERVE));
+        assert_eq!(hdr.len(), 63 * 512);
+        assert_eq!(&hdr[0..8], b"ER\x02\x00\x00\x3b\x9a\xca");
+        let e = |k: usize| &hdr[k * 512..(k + 1) * 512];
+        assert_eq!(&e(1)[0..16], b"PM\0\0\0\0\0\x03\0\0\0\x01\0\0\0\x3e");
+        assert_eq!(&e(1)[16..29], b"partition map");
+        assert_eq!(&e(1)[48..67], b"Apple_partition_map");
+        assert_eq!(&e(2)[8..16], b"\0\0\0\x3f\0\x01\0\0");
+        assert_eq!(&e(2)[48..58], b"Apple_MDFW");
+        assert_eq!(&e(3)[8..12], &65599u32.to_be_bytes());
+        assert_eq!(&e(3)[12..16], &(n as u32).to_be_bytes());
+        assert_eq!(&e(3)[16..20], b"disk");
+        assert_eq!(&e(3)[48..57], b"Apple_HFS");
+        assert!(hdr[4 * 512..].iter().all(|&b| b == 0));
+    }
 }
