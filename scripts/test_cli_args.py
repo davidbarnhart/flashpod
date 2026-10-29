@@ -16,6 +16,7 @@ import fcntl
 import os
 import pty
 import select
+import shlex
 import struct
 import subprocess
 import sys
@@ -90,41 +91,47 @@ def run_pty(cmd, env, cols=80):
     return p.wait(), out, b""
 
 
+# 1.0 layout (#97): the new groups, their help and their usage errors
+CASES_1_0 = [
+    "music", "music -h", "music bogus", "music ls bogus", "music ls -h", "music list -h",
+    "music rm", "music add --foo", "music export -h", "music playlist -h",
+    "firmware", "firmware -h", "firmware bogus", "firmware write -h", "firmware write a b",
+    "firmware write --arm --no-arm x", "firmware extract -h", "firmware list -h", "firmware list x",
+    "firmware patch -h", "card", "card -h", "card burn", "card burn -h", "card new -h",
+    "inspect -h", "emulate -h", "flash -h", "ls", "--mount x rm 5", "burn a",
+]
+
+
 def compare(rust, layout_1=False):
-    py = [sys.executable, "-m", "flashpod"]
+    """Every case at every width in both builds. With layout_1 the Rust
+    binary runs the 1.0 spelling of each case (and CASES_1_0 besides), and
+    the reference is scripts/layout1_parser.py: the same 1.0 tree declared
+    with Python's own argparse."""
+    if layout_1:
+        py = [sys.executable, os.path.join(HERE, "scripts", "layout1_parser.py")]
+        cases = [shlex.join(layout1.argv_1_0(split(c))) for c in CASES] + CASES_1_0
+    else:
+        py = [sys.executable, "-m", "flashpod"]
+        cases = CASES
     bad = []
     n = 0
-
-    def rs(argv):
-        return [rust] + (layout1.argv_1_0(argv) if layout_1 else argv)
-
-    def back(r):
-        # (rc, out, err) with 1.0 program names read back
-        if not layout_1:
-            return r
-        def n(x):
-            if isinstance(x, bytes):
-                return layout1.normalize(x.decode("utf-8", "surrogateescape"))[0].encode("utf-8", "surrogateescape")
-            return layout1.normalize(x)[0]
-        return tuple(n(x) if i else x for i, x in enumerate(r))
-
-    for line in CASES:
+    for line in cases:
         argv = split(line)
         for cols in WIDTHS:
             env = env_for(cols)
             a = run_pipe(py + argv, env)
-            b = back(run_pipe(rs(argv), env))
+            b = run_pipe([rust] + argv, env)
             n += 1
             if a != b:
                 bad.append((line, "COLUMNS=%s" % cols, a, b))
         for cols in (80, 44):
             env = env_for(None)
             a = run_pty(py + argv, env, cols)
-            b = back(run_pty(rs(argv), env, cols))
+            b = run_pty([rust] + argv, env, cols)
             n += 1
             if a != b:
                 bad.append((line, "pty %d cols" % cols, a, b))
-    return n, bad
+    return n, bad, len(cases)
 
 
 def main():
@@ -135,10 +142,11 @@ def main():
     ap.add_argument("--show", action="store_true",
                     help="print the first difference in full")
     opts = ap.parse_args()
-    n, bad = compare(os.path.abspath(opts.rust), opts.layout_1)
+    n, bad, ncases = compare(os.path.abspath(opts.rust), opts.layout_1)
     if not bad:
         print("IDENTICAL: %d runs (%d argument lines x %d pipe widths + 2 "
-              "pty widths)" % (n, len(CASES), len(WIDTHS)))
+              "pty widths)%s" % (n, ncases, len(WIDTHS),
+                                 ", 1.0 layout against scripts/layout1_parser.py" if opts.layout_1 else ""))
         return 0
     print("DIFFERENT: %d of %d runs" % (len(bad), n))
     for line, how, a, b in bad[:20]:

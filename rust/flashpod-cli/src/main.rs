@@ -336,29 +336,10 @@ fn cmd_burn(ns: &Ns) -> i32 {
 }
 
 /// cli.__doc__, the top-level help's description.
-const DOC: &str = "flashpod - manage music on the iPod.
-
-Subcommands:
-  flashpod ls (or: list)          artist/album tree with track counts
-  flashpod ls all                 same tree, with every track listed (ids shown)
-  flashpod ls artist|album        flat per-artist or per-album track counts
-  flashpod add [path1 path2 ...]  add audio files; directories are scanned
-                                  recursively (tags read via mutagen);
-                                  with no paths, opens a directory picker
-  flashpod rm id [id ...]         remove tracks by id (see `flashpod ls`)
-  flashpod rm artist|album <name> remove all tracks by an artist / in an album
-  flashpod init [name]            create iPod_Control structure + empty DB
-  flashpod flash [/dev/sdX]       write iPod firmware + partition layout to a
-                                  CF/SD card (1G/2G iPod; needs sudo)
-  flashpod burn IMAGE [/dev/sdX]  write a card image file onto a removable
-                                  SD/CF card (needs sudo)
-
-The mountpoint is auto-detected from mounted filesystems (FAT-family
-mounts under /media, ranked by iPod_Control presence), and a detected
-mount is always confirmed first: Y/n for a single candidate, a numbered
-chooser for several. Non-interactive runs must pass --mount.
-The iTunesDB is read/written natively (itunesdb.py) \u{2014} no libgpod.
-";
+/// The top-level description: the 1.0 command layout (#97), shared with
+/// scripts/layout1_parser.py, the argparse reference test_cli_args checks
+/// the Rust parser against.
+const DOC: &str = include_str!("doc1.txt");
 
 /// cli.main's ArgumentParser, argument for argument.
 fn build_cli() -> Cli {
