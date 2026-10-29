@@ -497,7 +497,7 @@ fn ls_from_raw(node: &str, desc: &str) -> Option<Source> {
     match flashpod_core::ops::load_library(&mut fs, &mut crate::entropy()) {
         Err(e) if e.kind == flashpod_core::error::ErrorKind::CorruptLibrary => {
             let n = count_music_files(&mut fs);
-            eprintln!("{} \u{2014} {} music file(s) on the card, but its iTunesDB is corrupt ({}).\n  The library can't be listed until the database is rebuilt \u{2014} run `flashpod rebuild` (or `flashpod add`, which offers to rebuild first).", found, n, e.message);
+            eprintln!("{} \u{2014} {} music file(s) on the card, but its iTunesDB is corrupt ({}).\n  The library can't be listed until the database is rebuilt \u{2014} run `flashpod music rebuild` (or `flashpod music add`, which offers to rebuild first).", found, n, e.message);
             None
         }
         Err(e) => {
@@ -505,7 +505,7 @@ fn ls_from_raw(node: &str, desc: &str) -> Option<Source> {
             None
         }
         Ok(None) => {
-            eprintln!("flashpod: {} has an iPod directory structure but no iTunesDB \u{2014} run `flashpod rebuild` (or `flashpod init` for an empty library).", node);
+            eprintln!("flashpod: {} has an iPod directory structure but no iTunesDB \u{2014} run `flashpod music rebuild` (or `flashpod music init` for an empty library).", node);
             None
         }
         Ok(Some(lib)) => {
@@ -690,7 +690,7 @@ pub fn resolve_raw_target(ns: &Ns) -> Option<Source> {
     }
     let found = scan_for_ipod(&disks);
     if found.is_empty() {
-        eprintln!("flashpod: scanned {} disk(s); none held an iPod database. For a fresh card, run `flashpod init` first.", disks.len());
+        eprintln!("flashpod: scanned {} disk(s); none held an iPod database. For a fresh card, run `flashpod music init` first.", disks.len());
         host::hint_if_bridge_collapsed();
         return None;
     }

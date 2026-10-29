@@ -18,7 +18,7 @@ fn say(msg: &str, c: Option<&str>) {
 }
 
 fn fail(msg: &str) -> Exit {
-    Exit(color(&format!("flashpod burn: {}", msg), C_RED))
+    Exit(color(&format!("flashpod card burn: {}", msg), C_RED))
 }
 
 #[cfg(unix)]
@@ -47,7 +47,7 @@ fn check_target(dev: &str, image_bytes: u64) -> Result<(u64, Value), Exit> {
     let entry = devices::list_candidates()?
         .into_iter()
         .find(|d| d["name"].as_str() == Some(name.as_str()))
-        .ok_or_else(|| fail(&format!("{} is not a removable disk (USB, MMC or hot-plug, per lsblk); flashpod burn only writes those. `lsblk -o NAME,SIZE,TRAN,RM` shows what is attached.", dev)))?;
+        .ok_or_else(|| fail(&format!("{} is not a removable disk (USB, MMC or hot-plug, per lsblk); flashpod card burn only writes those. `lsblk -o NAME,SIZE,TRAN,RM` shows what is attached.", dev)))?;
     if matches!(entry["tran"].as_str(), Some("sbp" | "ieee1394")) {
         return Err(fail(&format!("{} is on FireWire; early iPod FireWire bridges crash on large writes. Put the card in a USB reader instead.", dev)));
     }

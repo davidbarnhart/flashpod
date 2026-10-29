@@ -275,13 +275,13 @@ jobs:
         run: cd rust && cargo build --release -p flashpod-cli
 
       - name: Arguments, help and usage errors (732 runs)
-        run: python scripts/test_cli_args.py --rust rust/target/release/flashpod
+        run: python scripts/test_cli_args.py --rust rust/target/release/flashpod --layout-1
 
       # `terminal` is left out: its expectations are written against the
       # 2686d4a baseline, not this tree.
       - name: Every command on card images, the picker key by key
         run: |
-          python scripts/test_cli_unchanged.py --baseline . --rust rust/target/release/flashpod \
+          python scripts/test_cli_unchanged.py --baseline . --rust rust/target/release/flashpod --layout-1 \
             --only lifecycle rejections limits terminal_dblimit terminal_space terminal_keys \
                    terminal_lines terminal_rebuild terminal_flash flash_catalog wrong_confirm \
                    mount mount_terminal_db mount_terminal_space mount_terminal_big picker
@@ -291,7 +291,12 @@ jobs:
       - name: Device paths on a fake Linux host (user mode)
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-          python scripts/test_cli_fakehost.py --mode user --rust rust/target/release/flashpod
+          python scripts/test_cli_fakehost.py --mode user --rust rust/target/release/flashpod --layout-1
+
+      # The 1.0 commands with no 0.x counterpart (#97), on synthetic cards,
+      # each against an expectation computed without the binary.
+      - name: The 1.0-only commands (extract, export, playlist, inspect, card new)
+        run: PYTHONPATH=. python scripts/test_cli_1_0.py --rust rust/target/release/flashpod
 
   # The Rust CLI's Platform layer (rust/flashpod-cli/src/platform) driving a
   # real block device: simulate_card.py attaches a backing file (losetup,
@@ -334,9 +339,9 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            python scripts/simulate_card.py --size-gb 2 --flashpod rust/target/release/flashpod.exe
+            python scripts/simulate_card.py --size-gb 2 --layout-1 --flashpod rust/target/release/flashpod.exe
           else
-            sudo "$(which python)" scripts/simulate_card.py --size-gb 2 --flashpod rust/target/release/flashpod
+            sudo "$(which python)" scripts/simulate_card.py --size-gb 2 --layout-1 --flashpod rust/target/release/flashpod
           fi
 
   # A Mac card (#104): the Rust library's APM + wrapped HFS+ image, attached

@@ -218,7 +218,7 @@ fn diagnose_missing_db(fs: &mut flashpod_core::fat::Fat32, device: &str) {
         if !root.iter().any(|n| casefold(n) == "ipod_control") {
             eprintln!("flashpod: {} has no iPod_Control directory \u{2014} it looks freshly flashed/formatted, not yet set up.", device);
             eprintln!("  root contains: {}", if root.is_empty() { "(empty)".to_string() } else { root.join(", ") });
-            eprintln!("  Initialize it (on Linux: `flashpod init`), then add music.");
+            eprintln!("  Initialize it (on Linux: `flashpod music init`), then add music.");
             return;
         }
     }
@@ -231,7 +231,7 @@ fn diagnose_missing_db(fs: &mut flashpod_core::fat::Fat32, device: &str) {
             Some(l) => eprintln!("  {}/ contains: {}", path, if l.is_empty() { "(empty)".to_string() } else { l.join(", ") }),
         }
     }
-    eprintln!("flashpod: no iTunesDB on {} (iPod_Control is present but iPod_Control/iTunes/iTunesDB is missing). If this iPod should have music, that's unexpected \u{2014} otherwise run `flashpod init`.", device);
+    eprintln!("flashpod: no iTunesDB on {} (iPod_Control is present but iPod_Control/iTunes/iTunesDB is missing). If this iPod should have music, that's unexpected \u{2014} otherwise run `flashpod music init`.", device);
 }
 
 /// The `flash` branch of cli.main: the firmware is picked (and fetched)
@@ -319,10 +319,10 @@ fn cmd_burn(ns: &Ns) -> i32 {
     if !b(ns, "dry_run") && !crate::platform::current().is_admin() {
         let args = detect::cmd_args(ns);
         if term::stdin_isatty() {
-            eprintln!("flashpod burn: writing to a disk needs root \u{2014} elevating via sudo...");
+            eprintln!("flashpod card burn: writing to a disk needs root \u{2014} elevating via sudo...");
             crate::platform::current().elevate(&args);
         }
-        eprintln!("flashpod burn: needs root.\n  sudo {}", host::self_cmd().into_iter().chain(args).collect::<Vec<_>>().join(" "));
+        eprintln!("flashpod card burn: needs root.\n  sudo {}", host::self_cmd().into_iter().chain(args).collect::<Vec<_>>().join(" "));
         return 1;
     }
     let image = s(ns, "image").unwrap_or_default();

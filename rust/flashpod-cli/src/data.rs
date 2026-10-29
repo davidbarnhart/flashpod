@@ -95,7 +95,7 @@ pub fn say_mount_load_error(mount: &str, e: &Error) {
         if !std::path::Path::new(mount).is_dir() {
             eprintln!("flashpod: {} does not exist \u{2014} is the iPod mounted?", mount);
         } else {
-            eprintln!("flashpod: no iTunesDB on {} (run `flashpod init` first?)", mount);
+            eprintln!("flashpod: no iTunesDB on {} (run `flashpod music init` first?)", mount);
         }
     } else {
         eprintln!("flashpod: failed to read iTunesDB: {}", e.message);
@@ -309,32 +309,32 @@ fn rm(fs: &mut dyn Target, cx: &Ctx, what: &[String], ent: &mut flashpod_core::e
                 return 1;
             }
             ErrorKind::CorruptLibrary => {
-                eprintln!("flashpod: the iTunesDB on {} is corrupt ({}) \u{2014} run `flashpod rebuild` to rebuild it from the files on the card.", node, e.message);
+                eprintln!("flashpod: the iTunesDB on {} is corrupt ({}) \u{2014} run `flashpod music rebuild` to rebuild it from the files on the card.", node, e.message);
                 return 1;
             }
             ErrorKind::NotInitialized => {
-                eprintln!("flashpod: no iTunesDB on {} (run `flashpod init` first?)", node);
+                eprintln!("flashpod: no iTunesDB on {} (run `flashpod music init` first?)", node);
                 return 1;
             }
             ErrorKind::NoSuchTrack => {
                 let why = e.details.get("reason").and_then(|v| v.as_str()).unwrap_or("");
                 return match why {
                     "name_required" => {
-                        eprintln!("flashpod rm {}: name required", what[0]);
+                        eprintln!("flashpod music rm {}: name required", what[0]);
                         2
                     }
                     "no_match" => {
-                        eprintln!("flashpod rm: no tracks match that name (see `flashpod ls`)");
+                        eprintln!("flashpod music rm: no tracks match that name (see `flashpod music ls`)");
                         1
                     }
                     "bad_ids" => {
-                        eprintln!("flashpod rm: expected track ids, or `artist <name>` / `album <name>`");
+                        eprintln!("flashpod music rm: expected track ids, or `artist <name>` / `album <name>`");
                         2
                     }
                     _ => {
                         let missing: Vec<String> = e.details.get("missing").and_then(|v| v.as_array())
                             .map(|a| a.iter().map(|i| i.to_string()).collect()).unwrap_or_default();
-                        eprintln!("flashpod rm: no track with id {} (see `flashpod ls all`)", missing.join(", "));
+                        eprintln!("flashpod music rm: no track with id {} (see `flashpod music ls all`)", missing.join(", "));
                         1
                     }
                 };
@@ -443,12 +443,12 @@ fn add(fs: &mut dyn Target, cx: &Ctx, paths: &[String], ent: &mut flashpod_core:
             return 1;
         }
         Err(e) if e.kind == ErrorKind::NotInitialized => {
-            eprintln!("flashpod: no iTunesDB on {} (run `flashpod init` first?)", node);
+            eprintln!("flashpod: no iTunesDB on {} (run `flashpod music init` first?)", node);
             return 1;
         }
         Err(e) if e.kind == ErrorKind::CorruptLibrary => {
             if !term::stdin_isatty() {
-                eprintln!("flashpod: the iTunesDB is corrupt and can't be read ({}). Run `flashpod rebuild` to rebuild it from the files on the card.", e.message);
+                eprintln!("flashpod: the iTunesDB is corrupt and can't be read ({}). Run `flashpod music rebuild` to rebuild it from the files on the card.", e.message);
                 return 1;
             }
             println!("Arrr! Blow me down \u{2014} yer iPod's song-ledger be scuttled, naught but bilgewater where the music log oughta be. We'll not be stowin' fresh booty aboard till she's careened an' a new log writ proper.");
@@ -484,29 +484,29 @@ fn add(fs: &mut dyn Target, cx: &Ctx, paths: &[String], ent: &mut flashpod_core:
 
     if !plan.items.is_empty() {
         if let Some(err) = plan.json["free_error"].as_str() {
-            ui.win.note(&format!("flashpod add: couldn't check free space ({}); proceeding anyway", err));
+            ui.win.note(&format!("flashpod music add: couldn't check free space ({}); proceeding anyway", err));
         }
         if let Some(budget) = plan.json["budget"].as_i64() {
             let batch: i64 = plan.items.iter().map(|(_, t)| t.size as i64).sum();
             if batch <= budget {
-                println!("flashpod add: this batch is {}. You've got {} more than you need, Dude. That's gnarly!",
+                println!("flashpod music add: this batch is {}. You've got {} more than you need, Dude. That's gnarly!",
                          fmt_size(batch), fmt_size(budget - batch));
             } else if !term::stdin_isatty() {
-                eprintln!("flashpod add: batch is {} but only {} free; trim the selection or free space (can't prompt here).",
+                eprintln!("flashpod music add: batch is {} but only {} free; trim the selection or free space (can't prompt here).",
                           fmt_size(batch), fmt_size(budget));
                 return 1;
             } else {
                 let kept = match winnow::winnow(&plan.items, budget) {
                     Some(k) => k,
                     None => {
-                        println!("flashpod add: nothing added.");
+                        println!("flashpod music add: nothing added.");
                         return 0;
                     }
                 };
                 dropped = plan.items.len() - kept.len();
                 plan.items = kept.iter().map(|&i| plan.items[i].clone()).collect();
                 if plan.items.is_empty() {
-                    println!("flashpod add: nothing selected; nothing added.");
+                    println!("flashpod music add: nothing selected; nothing added.");
                     return 0;
                 }
             }
@@ -522,25 +522,25 @@ fn add(fs: &mut dyn Target, cx: &Ctx, paths: &[String], ent: &mut flashpod_core:
         let have = plan.lib.tracks.len();
         let (past, extra) = if c.kind == Some("tracks") {
             if c.fit == keep {
-                println!("flashpod add: the iPod's database will be {} bytes \u{2014} more than stock firmware loads, but this card's firmware has the large-library fix ({} of {} tracks).",
+                println!("flashpod music add: the iPod's database will be {} bytes \u{2014} more than stock firmware loads, but this card's firmware has the large-library fix ({} of {} tracks).",
                          commas(c.projected.unwrap_or(0)), commas((have + keep) as i64), commas(c.limit));
                 (false, "")
             } else {
-                eprintln!("flashpod add: that is past the {} tracks the firmware lists; the rest would be on the card but never shown.", commas(c.limit));
+                eprintln!("flashpod music add: that is past the {} tracks the firmware lists; the rest would be on the card but never shown.", commas(c.limit));
                 if c.fit == 0 {
-                    eprintln!("  The library already holds {}; remove tracks (`flashpod rm`) or set FLASHPOD_DB_LIMIT=0 to override.", commas(have as i64));
+                    eprintln!("  The library already holds {}; remove tracks (`flashpod music rm`) or set FLASHPOD_DB_LIMIT=0 to override.", commas(have as i64));
                     return 1;
                 }
                 (true, "cap")
             }
         } else if c.projected.unwrap_or(0) > c.limit {
-            eprintln!("flashpod add: this batch would grow the iPod's database to {} bytes \u{2014} past the ~{}-byte ceiling early iPod firmware can load (the iPod would then show ZERO songs).",
+            eprintln!("flashpod music add: this batch would grow the iPod's database to {} bytes \u{2014} past the ~{}-byte ceiling early iPod firmware can load (the iPod would then show ZERO songs).",
                       commas(c.projected.unwrap_or(0)), commas(c.limit));
             if c.firmware.is_none() && !opts.db_limit_set {
                 eprintln!("  (Couldn't read the card's firmware to check for the large-library fix that flashpod 1.6 has; assuming stock.)");
             }
             if c.fit == 0 {
-                eprintln!("  The library alone already exceeds the ceiling; remove tracks (`flashpod rm`) or set FLASHPOD_DB_LIMIT=0 to override.");
+                eprintln!("  The library alone already exceeds the ceiling; remove tracks (`flashpod music rm`) or set FLASHPOD_DB_LIMIT=0 to override.");
                 return 1;
             }
             (true, "ceiling")
@@ -561,7 +561,7 @@ fn add(fs: &mut dyn Target, cx: &Ctx, paths: &[String], ent: &mut flashpod_core:
                 db_dropped = keep - c.fit;
                 keep = c.fit;
             } else if !term::ask_yes(all, false) {
-                println!("flashpod add: nothing added.");
+                println!("flashpod music add: nothing added.");
                 return 0;
             }
         }
@@ -670,14 +670,14 @@ pub fn prompt_for_paths(existing: Option<i64>, db_bytes: Option<i64>) -> Option<
             Some(t) => t.trim().to_string(),
             None => {
                 println!();
-                eprintln!("flashpod add: cancelled");
+                eprintln!("flashpod music add: cancelled");
                 return None;
             }
         };
         if !typed.is_empty() {
             let path = expanduser(&typed);
             if !std::path::Path::new(&path).exists() {
-                eprintln!("flashpod add: no such file or directory: {}", path);
+                eprintln!("flashpod music add: no such file or directory: {}", path);
                 return None;
             }
             return Some(vec![path]);
@@ -696,11 +696,11 @@ pub fn prompt_for_paths(existing: Option<i64>, db_bytes: Option<i64>) -> Option<
         };
         let picked = match picked {
             None => {
-                eprintln!("flashpod add: cancelled");
+                eprintln!("flashpod music add: cancelled");
                 return None;
             }
             Some(p) if p.is_empty() => {
-                eprintln!("flashpod add: nothing selected");
+                eprintln!("flashpod music add: nothing selected");
                 return None;
             }
             Some(p) => p,
@@ -717,7 +717,7 @@ pub fn prompt_for_paths(existing: Option<i64>, db_bytes: Option<i64>) -> Option<
 /// cli.prompt_for_path (no tab completion).
 fn prompt_for_path() -> Option<String> {
     if !term::stdin_isatty() {
-        eprintln!("flashpod add: no paths given and stdin is not a terminal");
+        eprintln!("flashpod music add: no paths given and stdin is not a terminal");
         return None;
     }
     let path = match term::input_line("File or directory to add (TAB to complete): ") {
@@ -728,11 +728,11 @@ fn prompt_for_path() -> Option<String> {
         }
     };
     if path.is_empty() {
-        eprintln!("flashpod add: nothing entered");
+        eprintln!("flashpod music add: nothing entered");
         return None;
     }
     if !std::path::Path::new(&path).exists() {
-        eprintln!("flashpod add: no such file or directory: {}", path);
+        eprintln!("flashpod music add: no such file or directory: {}", path);
         return None;
     }
     Some(path)
@@ -752,8 +752,8 @@ pub fn offer_init_after_flash_image(dev: &str, file: &mut dyn flashpod_core::blo
             return;
         }
     };
-    if !term::ask_yes(&format!("\nThe card still needs the iPod database before it can take music (\"flashpod init\").\nRun init on {} now? [Y/n] ", dev), true) {
-        eprintln!("Skipped. Later: run `flashpod init --raw {}`.", dev);
+    if !term::ask_yes(&format!("\nThe card still needs the iPod database before it can take music (\"flashpod music init\").\nRun init on {} now? [Y/n] ", dev), true) {
+        eprintln!("Skipped. Later: run `flashpod music init --raw {}`.", dev);
         return;
     }
     let mut ent = entropy();
@@ -838,11 +838,11 @@ pub fn offer_init_after_flash_unix(dev: &str) {
         window::sleep(0.1);
     }
     if !found {
-        eprintln!("init skipped: {} never appeared after the partition table was re-read.\n  Mount the card and run `flashpod init` instead.", part);
+        eprintln!("init skipped: {} never appeared after the partition table was re-read.\n  Mount the card and run `flashpod music init` instead.", part);
         return;
     }
-    if !term::ask_yes(&format!("\nThe card still needs the iPod database before it can take music (\"flashpod init\").\nRun init on {} now? [Y/n] ", part), true) {
-        eprintln!("Skipped. Later: mount the card and run `flashpod init`.");
+    if !term::ask_yes(&format!("\nThe card still needs the iPod database before it can take music (\"flashpod music init\").\nRun init on {} now? [Y/n] ", part), true) {
+        eprintln!("Skipped. Later: mount the card and run `flashpod music init`.");
         return;
     }
     let base = |p: &str| p.rsplit('/').next().unwrap_or(p).to_string();
@@ -867,7 +867,7 @@ pub fn offer_init_after_flash_unix(dev: &str) {
         let rc = crate::detect::run_quiet_mount(&cmd);
         if rc != 0 {
             let argv: Vec<String> = cmd.iter().map(|a| crate::argparse::py_repr(a)).collect();
-            eprintln!("init skipped: mounting {} failed (Command '[{}]' returned non-zero exit status {}.); mount the card and run `flashpod init` instead.", part, argv.join(", "), rc);
+            eprintln!("init skipped: mounting {} failed (Command '[{}]' returned non-zero exit status {}.); mount the card and run `flashpod music init` instead.", part, argv.join(", "), rc);
             false
         } else {
             true

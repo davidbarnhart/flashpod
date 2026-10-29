@@ -213,7 +213,7 @@ pub fn winnow(pending: &[(String, Track)], budget: i64) -> Option<Vec<usize>> {
     let min = *sizes.iter().min().unwrap();
     if min > budget {
         let smallest = sizes.iter().position(|&s| s == min).unwrap();
-        eprintln!("flashpod add: even your smallest {} \"{}\" ({}) is bigger than the {} free. Nothing fits.",
+        eprintln!("flashpod music add: even your smallest {} \"{}\" ({}) is bigger than the {} free. Nothing fits.",
                   unit, names[smallest], fmt_size(min), fmt_size(budget));
         return None;
     }
@@ -241,7 +241,7 @@ pub fn winnow(pending: &[(String, Track)], budget: i64) -> Option<Vec<usize>> {
         }
     }
     let batch: i64 = sizes.iter().sum();
-    println!("flashpod add: this batch is {} but only {} is free. I can fit {} of your {} {}s \u{2014} pick what to keep:",
+    println!("flashpod music add: this batch is {} but only {} is free. I can fit {} of your {} {}s \u{2014} pick what to keep:",
              fmt_size(batch), fmt_size(budget), checked.len(), names.len(), unit);
 
     let fits = names.len() + 3 <= term::terminal_size().1;
