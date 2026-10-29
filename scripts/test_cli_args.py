@@ -104,6 +104,7 @@ CASES_1_0 = [
     "music export --to", "music export --other-files --no-other-files", "music export x",
     "music playlist", "music playlist -h", "music playlist new", "music playlist add x",
     "music playlist rm -h", "music playlist delete", "music playlist ls a b", "music playlist bogus",
+    "inspect", "inspect a b", "inspect --json", "card new", "card new x", "card new x 1G y",
 ]
 
 

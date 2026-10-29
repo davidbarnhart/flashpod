@@ -101,7 +101,8 @@ def build():
     sub.required = True
 
     p = sub.add_parser("inspect", help="report everything about a card, iPod or image")
-    p.add_argument("args", nargs="*", metavar="TARGET")
+    p.add_argument("target", help="card image file, or a card or iPod disk (needs root)")
+    p.add_argument("--json", action="store_true", help="print the report as JSON")
 
     fw = sub.add_parser("firmware", help="inspect, extract, patch and write firmware")
     fsub = fw.add_subparsers(dest="firmware_command")
@@ -120,7 +121,9 @@ def build():
     card = sub.add_parser("card", help="card image files")
     csub = card.add_subparsers(dest="card_command")
     csub.required = True
-    csub.add_parser("new", help="make a blank card image").add_argument("args", nargs="*", metavar="ARG")
+    p = csub.add_parser("new", help="make a blank card image")
+    p.add_argument("image", help="the image file to make (must not exist)")
+    p.add_argument("size", help="its size: bytes, or with K/M/G/T (decimal, as cards are sold) or KiB/MiB/GiB/TiB")
     burn_args(csub.add_parser("burn", help="write a card image file to an SD/CF card (erases it)"))
 
     music = sub.add_parser("music", help="the music library on an iPod, card or image")

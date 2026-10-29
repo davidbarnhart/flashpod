@@ -363,7 +363,8 @@ fn build_cli() -> Cli {
     // 1.0 layout (#97): commands grouped by what they act on. `flash` stays
     // as a top-level alias of `firmware write`.
     let inspect = cli.add_parser_at(0, "inspect", &[], "report everything about a card, iPod or image", &[]);
-    cli.parser(inspect).add(Arg::pos("args", Nargs::Star).metavar("TARGET"));
+    cli.parser(inspect).add(Arg::pos("target", Nargs::One).help("card image file, or a card or iPod disk (needs root)"));
+    cli.parser(inspect).add(Arg::flag(&["--json"]).help("print the report as JSON"));
 
     let fw = cli.add_parser_at(0, "firmware", &[], "inspect, extract, patch and write firmware", &[]);
     cli.add_subparsers_at(fw, "firmware_command");
@@ -384,7 +385,8 @@ fn build_cli() -> Cli {
     let card = cli.add_parser_at(0, "card", &[], "card image files", &[]);
     cli.add_subparsers_at(card, "card_command");
     let new = cli.add_parser_at(card, "new", &[], "make a blank card image", &[]);
-    cli.parser(new).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
+    cli.parser(new).add(Arg::pos("image", Nargs::One).help("the image file to make (must not exist)"));
+    cli.parser(new).add(Arg::pos("size", Nargs::One).help("its size: bytes, or with K/M/G/T (decimal, as cards are sold) or KiB/MiB/GiB/TiB"));
     let burn = cli.add_parser_at(card, "burn", &[], "write a card image file to an SD/CF card (erases it)", &[]);
     burn_args(cli.parser(burn));
 
@@ -544,6 +546,8 @@ fn main() {
     let code = match command.as_str() {
         "flash" => cmd_flash(&mut ns),
         "firmware extract" => cmd_extract(&ns),
+        "inspect" => cmd_inspect(&ns),
+        "card new" => cmd_card_new(&ns),
         "burn" => cmd_burn(&ns),
         "ls" | "list" | "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild" | "export" | "playlist" => data_command(&ns, &command),
         other => {
@@ -552,6 +556,176 @@ fn main() {
         }
     };
     std::process::exit(code);
+}
+
+/// A size: bytes, or a number with K/M/G/T (powers of 1000) or
+/// KiB/MiB/GiB/TiB (powers of 1024); case-insensitive, a trailing "B" allowed.
+fn parse_size(text: &str) -> Option<u64> {
+    let t = text.trim().to_ascii_lowercase();
+    let split = t.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(t.len());
+    let (num, unit) = t.split_at(split);
+    let n: f64 = num.parse().ok()?;
+    let mult: f64 = match unit.trim() {
+        "" | "b" => 1.0,
+        "k" | "kb" => 1e3,
+        "m" | "mb" => 1e6,
+        "g" | "gb" => 1e9,
+        "t" | "tb" => 1e12,
+        "kib" => 1024.0,
+        "mib" => 1024.0 * 1024.0,
+        "gib" => 1024.0 * 1024.0 * 1024.0,
+        "tib" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    let v = n * mult;
+    if v.is_finite() && v >= 0.0 { Some(v as u64) } else { None }
+}
+
+/// card new IMAGE SIZE (#97): a sparse blank card image, the library's
+/// card.create_blank (whole sectors, at least a card's minimum, never over
+/// an existing file).
+fn cmd_card_new(ns: &Ns) -> i32 {
+    let image = s(ns, "image").unwrap_or_default();
+    let text = s(ns, "size").unwrap_or_default();
+    let Some(bytes) = parse_size(&text) else {
+        eprintln!("flashpod card new: {:?} is not a size (try 2G, 512M, 4GiB or a byte count).", text);
+        return 2;
+    };
+    let size = match flashpod_core::card::blank_size(bytes) {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("flashpod card new: {}", e.message);
+            return 1;
+        }
+    };
+    let made = std::fs::OpenOptions::new().write(true).create_new(true).open(&image).and_then(|f| f.set_len(size));
+    match made {
+        Ok(()) => {
+            println!("Made {} ({} bytes, sparse). Next: flashpod firmware write {}", image, size, image);
+            0
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            eprintln!("flashpod card new: {} already exists.", image);
+            1
+        }
+        Err(e) => {
+            eprintln!("flashpod card new: can't make {}: {}", image, e);
+            1
+        }
+    }
+}
+
+/// inspect TARGET [--json] (#97): the library's card report (layout,
+/// firmware build and fixes, filesystem, iTunesDB, problems) for a card
+/// image (no root) or a disk (root, the platform's raw open). Read-only.
+fn cmd_inspect(ns: &Ns) -> i32 {
+    let target = s(ns, "target").unwrap_or_default();
+    let opened: std::io::Result<Box<dyn flashpod_core::block::BlockDevice>> = if flash::is_image(&target) {
+        FileDevice::open(std::path::Path::new(&target), false).map(|d| Box::new(d) as Box<dyn flashpod_core::block::BlockDevice>)
+    } else if !std::path::Path::new(&target).exists() {
+        eprintln!("flashpod inspect: no such file or disk: {}", target);
+        return 1;
+    } else {
+        crate::platform::current().open_raw(&target, false)
+    };
+    let mut dev = match opened {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("flashpod inspect: reading {} needs root (sudo).", target);
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("flashpod inspect: can't open {}: {}", target, e);
+            return 1;
+        }
+    };
+    let info = match flashpod_core::inspect::inspect(dev.as_mut(), &target, data::options()) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("flashpod inspect: {}: {}", target, e.message);
+            return 1;
+        }
+    };
+    let v = serde_json::to_value(&info).unwrap_or_default();
+    if b(ns, "json") {
+        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+        return 0;
+    }
+    print!("{}", inspect_text(&v));
+    0
+}
+
+/// The report for a person: one section per part of the card.
+fn inspect_text(v: &serde_json::Value) -> String {
+    let st = |x: &serde_json::Value| x.as_str().map(String::from).unwrap_or_else(|| x.to_string());
+    let mut o = String::new();
+    o += &format!("{}  ({})\n", st(&v["path"]), fmt_bytes(v["size_bytes"].as_u64().unwrap_or(0)));
+    match v["partition_table"].as_str() {
+        None => o += "  partitions: none (a blank card: flash it first)\n",
+        Some(t) => {
+            o += &format!("  partitions ({}):\n", t);
+            for p in v["partitions"].as_array().into_iter().flatten() {
+                let (start, n) = (p["start"].as_u64().unwrap_or(0), p["sectors"].as_u64().unwrap_or(0));
+                let what = match p["type"].as_u64() {
+                    Some(0) => "firmware",
+                    Some(0x0b) | Some(0x0c) => "FAT32 data",
+                    _ => "other",
+                };
+                o += &format!("    {}: {} (type 0x{:02x}), sectors {}..{} ({})\n", p["index"], what, p["type"].as_u64().unwrap_or(0),
+                              start, (start + n).saturating_sub(1), fmt_bytes(n * 512));
+            }
+        }
+    }
+    let fw = &v["firmware"];
+    if fw["present"] == serde_json::json!(true) {
+        o += &format!("  firmware: {}", st(&fw["build"]));
+        if let Some(fixes) = fw["fixes"].as_array().filter(|f| !f.is_empty()) {
+            o += &format!(", fixes: {}", fixes.iter().map(st).collect::<Vec<_>>().join(", "));
+        }
+        o += "\n";
+    } else if !fw.is_null() {
+        o += &format!("  firmware: none ({})\n", st(&fw["reason"]));
+    }
+    let fs = &v["filesystem"];
+    if fs.is_object() {
+        let n = |k: &str| fs[k].as_u64().unwrap_or(0);
+        o += &format!("  data: {} {:?}, {}, {} free, {} clusters\n", st(&fs["type"]), fs["label"].as_str().unwrap_or(""),
+                      fmt_bytes(n("total_bytes")), fmt_bytes(n("free_bytes")), fmt_bytes(n("cluster_bytes")));
+    }
+    let db = &v["itunesdb"];
+    match db["state"].as_str() {
+        Some("ok") => {
+            let n = |k: &str| db[k].as_u64().unwrap_or(0);
+            let c = &db["ceiling"];
+            let limit = match c["kind"].as_str() {
+                Some("tracks") => format!("{} of the {}-track limit (patched firmware)", n("tracks"), c["limit"]),
+                _ => format!("{} of the {} byte limit", n("db_bytes"), c["limit"]),
+            };
+            o += &format!("  iTunesDB {:?}: {} tracks, {} artists, {} albums; {}\n", db["name"].as_str().unwrap_or(""),
+                          n("tracks"), n("artists"), n("albums"), limit);
+        }
+        Some(state) => o += &format!("  iTunesDB: {}{}\n", state,
+                                    db["error"].as_str().or(db["reason"].as_str()).map(|e| format!(" ({})", e)).unwrap_or_default()),
+        None if !db.is_null() => o += &format!("  iTunesDB: {}\n", st(db)),
+        None => {}
+    }
+    o += &format!("  music files: {}", v["music_files"]);
+    for (k, label) in [("orphans", "not in the database"), ("missing", "listed but missing")] {
+        let n = v[k].as_array().map(|a| a.len()).unwrap_or(0);
+        if n > 0 {
+            o += &format!(", {} {}", n, label);
+        }
+    }
+    o += "\n";
+    for p in v["problems"].as_array().into_iter().flatten() {
+        o += &format!("  problem: {}\n", st(p));
+    }
+    o += &format!("  {}\n", if v["ready"] == serde_json::json!(true) { "ready for an iPod" } else { "not ready for an iPod" });
+    o
+}
+
+fn fmt_bytes(n: u64) -> String {
+    flash::fmt_size(n)
 }
 
 /// firmware extract TARGET -o FILE [--image osos|aupd|rsrc] (#99): the
