@@ -73,12 +73,7 @@ pub fn terminal_size() -> (usize, usize) {
     let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
     let (mut cols, mut lines) = (env("COLUMNS"), env("LINES"));
     if cols == 0 || lines == 0 {
-        let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
-        let (c, l) = if unsafe { libc::ioctl(1, libc::TIOCGWINSZ, &mut ws) } == 0 {
-            (ws.ws_col as usize, ws.ws_row as usize)
-        } else {
-            (80, 24)
-        };
+        let (c, l) = crate::sys::terminal_size().unwrap_or((80, 24));
         if cols == 0 {
             cols = if c > 0 { c } else { 80 };
         }
@@ -92,33 +87,18 @@ pub fn terminal_size() -> (usize, usize) {
 /// stdin in cbreak mode (no echo, no line editing) until dropped. Signals
 /// are off too, so ^C arrives as a key (Python's KeyboardInterrupt there
 /// cancels the selector the same way).
-pub struct Cbreak(libc::termios);
+pub struct Cbreak(#[allow(dead_code)] crate::sys::RawInput);
 
 impl Cbreak {
     pub fn new() -> Option<Self> {
-        let mut t: libc::termios = unsafe { std::mem::zeroed() };
-        if unsafe { libc::tcgetattr(0, &mut t) } != 0 {
-            return None;
-        }
-        let saved = t;
-        t.c_lflag &= !(libc::ECHO | libc::ICANON | libc::ISIG);
-        t.c_cc[libc::VMIN] = 1;
-        t.c_cc[libc::VTIME] = 0;
-        unsafe { libc::tcsetattr(0, libc::TCSAFLUSH, &t) };
-        Some(Cbreak(saved))
-    }
-}
-
-impl Drop for Cbreak {
-    fn drop(&mut self) {
-        unsafe { libc::tcsetattr(0, libc::TCSADRAIN, &self.0) };
+        crate::sys::RawInput::new().ok().map(Cbreak)
     }
 }
 
 fn read_byte(n: usize) -> Vec<u8> {
     let mut buf = vec![0u8; n];
-    let got = unsafe { libc::read(0, buf.as_mut_ptr() as *mut libc::c_void, n) };
-    buf.truncate(got.max(0) as usize);
+    let got = crate::sys::read_stdin(&mut buf).unwrap_or(0);
+    buf.truncate(got);
     buf
 }
 
@@ -129,8 +109,7 @@ pub fn read_key() -> Option<&'static str> {
     match ch.as_slice() {
         [] => Some("cancel"),
         [0x1b] => {
-            let mut p = libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 };
-            if unsafe { libc::poll(&mut p, 1, 50) } <= 0 {
+            if !crate::sys::stdin_ready(50) {
                 return Some("cancel");
             }
             match read_byte(2).as_slice() {

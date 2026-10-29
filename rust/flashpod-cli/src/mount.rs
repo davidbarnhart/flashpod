@@ -106,7 +106,7 @@ impl Target for MountTarget {
         self.save(lib, ent)?;
         // the kernel's FAT keeps directory entries in the page cache until a
         // system-wide sync (CLAUDE.md, SYNC LESSON)
-        unsafe { libc::sync() };
+        crate::sys::sync_all();
         Ok(())
     }
 
@@ -179,12 +179,7 @@ impl Target for MountTarget {
         if let Some(v) = std::env::var("FP_DISK_FREE").ok().and_then(|v| v.parse().ok()) {
             return Ok(v);
         }
-        let c = std::ffi::CString::new(self.mount.as_bytes()).map_err(|e| e.to_string())?;
-        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
-            return Err(os_error(&std::io::Error::last_os_error(), &self.mount));
-        }
-        Ok(st.f_bavail as i64 * st.f_frsize as i64)
+        crate::sys::free_bytes(&self.mount).map(|n| n as i64).map_err(|e| os_error(&e, &self.mount))
     }
 
     /// cli._mount_firmware_read: the card's firmware partition through the

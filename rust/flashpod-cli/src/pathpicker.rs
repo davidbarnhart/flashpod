@@ -172,11 +172,10 @@ impl Keys {
     fn read_one() -> Result<Vec<u8>, String> {
         let mut b = [0u8; 1];
         loop {
-            let n = unsafe { libc::read(0, b.as_mut_ptr() as *mut libc::c_void, 1) };
-            if n >= 0 {
-                return Ok(b[..n as usize].to_vec());
-            }
-            let e = std::io::Error::last_os_error();
+            let e = match crate::sys::read_stdin(&mut b) {
+                Ok(n) => return Ok(b[..n].to_vec()),
+                Err(e) => e,
+            };
             if e.kind() != std::io::ErrorKind::Interrupted {
                 let code = e.raw_os_error().unwrap_or(0);
                 let msg = e.to_string();
@@ -203,8 +202,7 @@ impl Keys {
         // few ms on a slow line).
         let mut seq = String::new();
         while clen(&seq) < 8 {
-            let mut p = libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 };
-            if unsafe { libc::poll(&mut p, 1, 50) } <= 0 {
+            if !crate::sys::stdin_ready(50) {
                 break;
             }
             let b = Self::read_one()?;
@@ -708,28 +706,14 @@ impl DirectoryPicker {
 /// tty.setcbreak: no echo, no line editing; restored (TCSADRAIN) on drop.
 /// Python leaves ISIG on and gets ^C as KeyboardInterrupt; here ISIG is off
 /// and ^C arrives as the byte, which cancels the same way.
-struct Cbreak(libc::termios);
+struct Cbreak(#[allow(dead_code)] crate::sys::RawInput);
 
 impl Cbreak {
     fn new() -> Result<Self, String> {
-        let mut t: libc::termios = unsafe { std::mem::zeroed() };
-        if unsafe { libc::tcgetattr(0, &mut t) } != 0 {
-            let e = std::io::Error::last_os_error();
-            return Err(format!("({}, '{}')", e.raw_os_error().unwrap_or(0),
-                               e.to_string().split(" (os error").next().unwrap_or("")));
-        }
-        let saved = t;
-        t.c_lflag &= !(libc::ECHO | libc::ICANON | libc::ISIG);
-        t.c_cc[libc::VMIN] = 1;
-        t.c_cc[libc::VTIME] = 0;
-        unsafe { libc::tcsetattr(0, libc::TCSAFLUSH, &t) };
-        Ok(Cbreak(saved))
-    }
-}
-
-impl Drop for Cbreak {
-    fn drop(&mut self) {
-        unsafe { libc::tcsetattr(0, libc::TCSADRAIN, &self.0) };
+        crate::sys::RawInput::new().map(Cbreak).map_err(|e| {
+            format!("({}, '{}')", e.raw_os_error().unwrap_or(0),
+                    e.to_string().split(" (os error").next().unwrap_or(""))
+        })
     }
 }
 
@@ -828,13 +812,9 @@ pub fn picker_status(existing: Option<i64>, db_bytes: Option<i64>) -> Status {
 /// sudo-elevated itself.
 pub fn invoking_home() -> String {
     if let Ok(user) = std::env::var("SUDO_USER") {
-        if !user.is_empty() && unsafe { libc::geteuid() } == 0 {
-            if let Ok(c) = std::ffi::CString::new(user) {
-                let pw = unsafe { libc::getpwnam(c.as_ptr()) };
-                if !pw.is_null() {
-                    let dir = unsafe { std::ffi::CStr::from_ptr((*pw).pw_dir) };
-                    return dir.to_string_lossy().into_owned();
-                }
+        if !user.is_empty() && crate::sys::is_root() {
+            if let Some(dir) = crate::sys::home_of(&user) {
+                return dir;
             }
         }
     }

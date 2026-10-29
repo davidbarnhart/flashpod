@@ -6,11 +6,14 @@
 //! are not here: they are Linux-only, stay in host.rs, and go in 1.0 (#98).
 
 use crate::flash::Exit;
+use flashpod_core::block::{BlockDevice, FileDevice};
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(windows)]
+mod windows;
 
 pub trait Platform: Sync {
     /// Root (or Administrator): needed to write a disk.
@@ -42,6 +45,19 @@ pub trait Platform: Sync {
     /// Replace this process with flashpod run as root, `extra` as its
     /// arguments. Returns only when it can't.
     fn elevate(&self, extra: &[String]);
+
+    /// The whole disk for the raw write (or its read-back).
+    fn open_raw(&self, dev: &str, write: bool) -> std::io::Result<Box<dyn BlockDevice>> {
+        Ok(Box::new(FileDevice::open(std::path::Path::new(dev), write)?))
+    }
+    /// The post-flash init runs through the still-open raw handle before the
+    /// MBR is written (Windows: no table = no volume to block the writes),
+    /// rather than on a mount after it.
+    fn init_before_mbr(&self) -> bool {
+        false
+    }
+    /// Before the raw write is opened: make the OS forget the old partitions.
+    fn invalidate_cached_partitions(&self, _dev: &str) {}
 }
 
 #[cfg(target_os = "linux")]
@@ -52,4 +68,9 @@ pub fn current() -> &'static dyn Platform {
 #[cfg(target_os = "macos")]
 pub fn current() -> &'static dyn Platform {
     &macos::MacOS
+}
+
+#[cfg(windows)]
+pub fn current() -> &'static dyn Platform {
+    &windows::Windows
 }

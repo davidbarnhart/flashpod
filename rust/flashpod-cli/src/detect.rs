@@ -312,15 +312,10 @@ fn shell_quote(s: &str) -> String {
 
 /// _sudo_mount.
 fn sudo_mount(dev: &str, label: &str) -> Option<String> {
-    let user = std::env::var("SUDO_USER").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| {
-        unsafe {
-            let pw = libc::getpwuid(libc::getuid());
-            if pw.is_null() { String::new() } else { std::ffi::CStr::from_ptr((*pw).pw_name).to_string_lossy().into_owned() }
-        }
-    });
+    let user = std::env::var("SUDO_USER").ok().filter(|s| !s.is_empty()).unwrap_or_else(crate::sys::user_name);
     let name = if label.trim().is_empty() { "IPOD".to_string() } else { label.trim().to_string() };
     let mountpoint = format!("/media/{}/{}", user, name);
-    let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+    let (uid, gid) = crate::sys::user_ids();
     eprintln!("flashpod: udisks unavailable; mounting {} via sudo (you may be prompted for your password)...", dev);
     let script = format!("mkdir -p {} && mount -o uid={},gid={} {} {}", shell_quote(&mountpoint), uid, gid, shell_quote(dev), shell_quote(&mountpoint));
     if run_quiet_mount(&["sudo".into(), "sh".into(), "-c".into(), script]) != 0 {

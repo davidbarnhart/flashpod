@@ -37,16 +37,28 @@ pub fn mounted_filesystems() -> Vec<(String, String, String)> {
 }
 
 pub fn is_admin() -> bool {
-    unsafe { libc::geteuid() == 0 }
+    crate::sys::is_root()
 }
 
 /// shutil.which over PATH.
+#[cfg(unix)]
 pub fn have(tool: &str) -> bool {
     let path = std::env::var("PATH").unwrap_or_default();
     path.split(':').any(|d| {
         let p = std::path::Path::new(if d.is_empty() { "." } else { d }).join(tool);
         std::fs::metadata(&p).map(|m| m.is_file() && std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o111 != 0)
             .unwrap_or(false)
+    })
+}
+
+/// shutil.which on Windows: PATH entries split on ';', each PATHEXT tried.
+#[cfg(windows)]
+pub fn have(tool: &str) -> bool {
+    let path = std::env::var("PATH").unwrap_or_default();
+    let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    path.split(';').filter(|d| !d.is_empty()).any(|d| {
+        let base = std::path::Path::new(d);
+        base.join(tool).is_file() || exts.split(';').any(|e| base.join(format!("{}{}", tool, e.to_lowercase())).is_file())
     })
 }
 
@@ -409,6 +421,14 @@ pub fn sudo_reexec(extra: &[String]) {
     if !term::stdin_isatty() {
         return;
     }
+    #[cfg(windows)]
+    windows_sudo(extra);
+    #[cfg(unix)]
+    unix_sudo(extra);
+}
+
+#[cfg(unix)]
+fn unix_sudo(extra: &[String]) {
     let mut pass: Vec<(String, String)> = std::env::vars().filter(|(k, _)| k.starts_with("FLASHPOD_")).collect();
     pass.sort();
     let mut cmd: Vec<String> = vec!["sudo".into()];
@@ -428,4 +448,42 @@ pub fn sudo_reexec(extra: &[String]) {
         None => err.to_string(),
     };
     eprintln!("flashpod: couldn't run sudo ({}); re-run it yourself:\n  {}", text, cmd.join(" "));
+}
+
+/// cli._windows_sudo_mode: None without sudo.exe (pre-24H2), else the
+/// HKLM ...\CurrentVersion\Sudo "Enabled" DWORD (0 off, 1 new window,
+/// 2 input disabled, 3 inline); unreadable = 0.
+#[cfg(windows)]
+fn windows_sudo_mode() -> Option<u32> {
+    if !have("sudo") {
+        return None;
+    }
+    let out = capture(&["reg", "query", r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo", "/v", "Enabled"]);
+    let v = out.filter(|o| o.code == Some(0)).and_then(|o| {
+        o.stdout.lines().find(|l| l.contains("Enabled")).and_then(|l| l.split_whitespace().last().map(String::from))
+    });
+    Some(v.and_then(|h| u32::from_str_radix(h.trim_start_matches("0x"), 16).ok()).unwrap_or(0))
+}
+
+/// cli._sudo_reexec's Windows arm: Windows sudo in Inline mode elevates in
+/// this console; any other state gets the how-to-elevate help.
+#[cfg(windows)]
+fn windows_sudo(extra: &[String]) {
+    let mode = windows_sudo_mode();
+    if mode == Some(3) {
+        let mut cmd = self_cmd();
+        cmd.extend(extra.iter().cloned());
+        if let Ok(st) = Command::new("sudo").args(&cmd).status() {
+            std::process::exit(st.code().unwrap_or(1));
+        }
+    }
+    let why = match mode {
+        None => "this Windows has no `sudo` (it ships with Windows 11 24H2+)",
+        Some(0) => "Windows sudo is disabled",
+        Some(1) => "Windows sudo is in \"In a new window\" mode \u{2014} the elevated flashpod would run in a separate console that closes when it exits",
+        Some(2) => "Windows sudo is in \"With input disabled\" mode \u{2014} flashpod's interactive prompts couldn't read the keyboard",
+        _ => "Windows sudo is in an unrecognized mode",
+    };
+    let rerun: Vec<String> = self_cmd().into_iter().chain(extra.iter().cloned()).collect();
+    eprintln!("flashpod: can't self-elevate \u{2014} {}.\n  Either run flashpod from an Administrator console:\n    Win+X -> \"Terminal (Admin)\"  (or right-click PowerShell ->\n    \"Run as administrator\"), then:\n      {}\n  or enable inline sudo once (Settings > System > For developers\n    > enable \"sudo\", mode \"Inline\"; from an Administrator\n    console: `sudo config --enable normal`) \u{2014} after that,\n  flashpod elevates itself.", why, rerun.join(" "));
 }

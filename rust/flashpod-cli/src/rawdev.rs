@@ -6,7 +6,8 @@
 use flashpod_core::block::BlockDevice;
 use flashpod_core::fat::{Fat32, Sectors};
 use std::io;
-use std::os::unix::fs::{FileExt, FileTypeExt};
+#[cfg(unix)]
+use std::os::unix::fs::FileTypeExt;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::OpenOptionsExt;
 
@@ -80,7 +81,7 @@ impl RawDevice {
     /// macOS has no O_DIRECT: the unbuffered node is the raw character
     /// device, so /dev/diskN is opened as /dev/rdiskN (platform.macos
     /// raw_read_node), with F_NOCACHE on whatever is opened.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     pub fn open(path: &str, writable: bool, max_xfer: u64) -> io::Result<Self> {
         let node = match path.strip_prefix("/dev/disk") {
             Some(rest) => format!("/dev/rdisk{}", rest),
@@ -92,19 +93,40 @@ impl RawDevice {
         let bounce = if raw { Some(Bounce::new(max_xfer as usize * SECTOR)) } else { None };
         Ok(RawDevice { file, bounce })
     }
+
+    /// platform.windows open_raw: \\.\PhysicalDriveN shared for read and
+    /// write (the volumes on it are locked separately), sector-aligned
+    /// transfers through the bounce buffer; an image file opens plainly.
+    #[cfg(windows)]
+    pub fn open(path: &str, writable: bool, max_xfer: u64) -> io::Result<Self> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let physical = path.starts_with(r"\\.\");
+        let mut o = std::fs::OpenOptions::new();
+        o.read(true).write(writable);
+        if physical {
+            o.share_mode(1 | 2); // FILE_SHARE_READ | FILE_SHARE_WRITE
+        }
+        let file = o.open(path)?;
+        let bounce = if physical { Some(Bounce::new(max_xfer as usize * SECTOR)) } else { None };
+        Ok(RawDevice { file, bounce })
+    }
 }
 
 impl BlockDevice for RawDevice {
     fn len(&self) -> io::Result<u64> {
+        #[cfg(windows)]
+        if self.bounce.is_some() {
+            return crate::sys::disk_length(&self.file);
+        }
         let mut f = &self.file;
         io::Seek::seek(&mut f, io::SeekFrom::End(0))
     }
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
         match self.bounce.as_mut() {
-            None => self.file.read_at(buf, offset).map_err(|e| py_os(&e)),
+            None => crate::sys::read_at(&self.file, buf, offset).map_err(|e| py_os(&e)),
             Some(b) => {
                 let n = buf.len().min(b.len);
-                let got = self.file.read_at(b.buf(n), offset).map_err(|e| py_os(&e))?;
+                let got = crate::sys::read_at(&self.file, b.buf(n), offset).map_err(|e| py_os(&e))?;
                 buf[..got].copy_from_slice(&b.buf(got)[..]);
                 Ok(got)
             }
@@ -112,13 +134,13 @@ impl BlockDevice for RawDevice {
     }
     fn write_at(&mut self, offset: u64, buf: &[u8]) -> io::Result<()> {
         match self.bounce.as_mut() {
-            None => self.file.write_all_at(buf, offset).map_err(|e| py_os(&e)),
+            None => crate::sys::write_all_at(&self.file, buf, offset).map_err(|e| py_os(&e)),
             Some(b) => {
                 let mut done = 0;
                 while done < buf.len() {
                     let n = (buf.len() - done).min(b.len);
                     b.buf(n).copy_from_slice(&buf[done..done + n]);
-                    let w = self.file.write_at(b.buf(n), offset + done as u64).map_err(|e| py_os(&e))?;
+                    let w = crate::sys::write_at(&self.file, b.buf(n), offset + done as u64).map_err(|e| py_os(&e))?;
                     if w != n {
                         return Err(io::Error::other(format!("short write at LBA {} ({}/{})", (offset as usize + done) / SECTOR, w, n)));
                     }

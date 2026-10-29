@@ -149,7 +149,7 @@ fn confirm(dev: &str, total: u64, assume_yes: bool, lba48: bool, max_data_sector
 /// The before-eject hook (cli.offer_init_after_flash). An image gets the
 /// still-open file and the data partition's start, before the partition
 /// table is written; a device gets neither, after the table is re-read.
-pub type Hook<'a> = &'a mut dyn FnMut(&str, Option<(&mut FileDevice, u64)>);
+pub type Hook<'a> = &'a mut dyn FnMut(&str, Option<(&mut dyn BlockDevice, u64)>);
 
 /// platform.image.is_image: an existing regular file.
 pub fn is_image(path: &str) -> bool {
@@ -209,7 +209,8 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
     let (header, data_start, data_blocks) = layout::build_mbr_layout(total, o.lba48, max_data_sectors).map_err(Exit)?;
     let io = |e: std::io::Error| Exit(e.to_string());
     // write_layout: everything but the MBR, which is committed last
-    let mut raw: Option<FileDevice> = None;
+    let plat = crate::platform::current();
+    let mut raw: Option<Box<dyn BlockDevice>> = None;
     if o.dry_run {
         if do_format {
             eprintln!("{}", color(&format!("  [dry-run] would wipe signatures, write {}-byte MBR header, {}-byte firmware @ sector {}, pure-Python FAT32 on data", header.len(), fw.len(), FW_START), C_DIM));
@@ -217,14 +218,17 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
             eprintln!("{}", color(&format!("  [dry-run] would zero sectors 0..{} and the last 34, write {}-byte firmware @ sector {} and a {}-byte MBR header; the data partition (sectors {}..{}) is left as it is", data_start - 1, fw.len(), FW_START, header.len(), data_start, data_start + data_blocks - 1), C_DIM));
         }
     } else {
-        if !image {
-            crate::platform::current().wipe_signatures(dev);
-        }
-        let mut f = FileDevice::open(std::path::Path::new(dev), true).map_err(|e| Exit(os_error_text(&e, dev)))?;
-        layout::write_layout_body(&mut f, &fw, total, data_start).map_err(io)?;
+        let mut f: Box<dyn BlockDevice> = if image {
+            Box::new(FileDevice::open(std::path::Path::new(dev), true).map_err(|e| Exit(os_error_text(&e, dev)))?)
+        } else {
+            plat.wipe_signatures(dev);
+            plat.invalidate_cached_partitions(dev);
+            plat.open_raw(dev, true).map_err(|e| Exit(os_error_text(&e, dev)))?
+        };
+        layout::write_layout_body(f.as_mut(), &fw, total, data_start).map_err(io)?;
         if do_format {
             let spc = layout::fat_sectors_per_cluster(data_blocks);
-            match fat32fmt::format_fat32(&mut f, data_start, data_blocks, spc, "IPOD") {
+            match fat32fmt::format_fat32(f.as_mut(), data_start, data_blocks, spc, "IPOD") {
                 Ok(g) => {
                     let cb = spc * SECTOR;
                     let size = if cb >= 1024 { format!("{} KiB", cb / 1024) } else { format!("{} bytes", cb) };
@@ -244,7 +248,7 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
     }
     verify_firmware(dev, &fw, o.dry_run, image)?;
     let hook = if o.dry_run { None } else { hook };
-    let commit = |raw: Option<FileDevice>| -> Result<(), Exit> {
+    let commit = |raw: Option<Box<dyn BlockDevice>>| -> Result<(), Exit> {
         if let Some(mut f) = raw {
             f.write_at(0, &header).map_err(io)?;
             f.flush().map_err(io)?;
@@ -252,13 +256,16 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
         Ok(())
     };
     match hook {
-        // ImagePlatform.init_before_mbr: the hook first, through the open
-        // file, then the partition table (re-reading it is a no-op)
-        Some(h) if image => {
+        // Platform.init_before_mbr (images, Windows): the hook first,
+        // through the open handle, then the partition table
+        Some(h) if image || plat.init_before_mbr() => {
             if let Some(f) = raw.as_mut() {
-                h(dev, Some((f, data_start)));
+                h(dev, Some((f.as_mut(), data_start)));
             }
             commit(raw)?;
+            if !image {
+                plat.reread_partition_table(dev);
+            }
         }
         h => {
             commit(raw)?;
@@ -281,6 +288,15 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
     Ok(0)
 }
 
+/// A card image as a file, a device through the platform's raw open.
+fn open_read(dev: &str) -> std::io::Result<Box<dyn BlockDevice>> {
+    if is_image(dev) {
+        Ok(Box::new(FileDevice::open(std::path::Path::new(dev), false)?))
+    } else {
+        crate::platform::current().open_raw(dev, false)
+    }
+}
+
 /// ipod_flash.verify_firmware: read the firmware region back through a
 /// fresh handle (after flushing the device's buffer cache) and compare.
 fn verify_firmware(dev: &str, fw: &[u8], dry: bool, image: bool) -> Result<(), Exit> {
@@ -292,8 +308,8 @@ fn verify_firmware(dev: &str, fw: &[u8], dry: bool, image: bool) -> Result<(), E
     if !image {
         crate::platform::current().flush_buffers(dev);
     }
-    let mut f = FileDevice::open(std::path::Path::new(dev), false).map_err(|e| Exit(os_error_text(&e, dev)))?;
-    if let Err(e) = layout::verify_region(&mut f, fw) {
+    let mut f = open_read(dev).map_err(|e| Exit(os_error_text(&e, dev)))?;
+    if let Err(e) = layout::verify_region(f.as_mut(), fw) {
         let d = &e.details;
         let n = |k: &str| d.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
         if d.get("reason").and_then(|v| v.as_str()) == Some("short_read") {
@@ -308,7 +324,7 @@ fn verify_firmware(dev: &str, fw: &[u8], dry: bool, image: bool) -> Result<(), E
 /// ipod_flash.check_kept_data. A dry run that can't read the card says so
 /// and carries on.
 fn check_kept_data(dev: &str, total: u64, dry: bool, lba48: bool, max_data_sectors: Option<u64>) -> Result<(), Exit> {
-    let mut f = match FileDevice::open(std::path::Path::new(dev), false) {
+    let mut f = match open_read(dev) {
         Ok(f) => f,
         Err(e) if dry => {
             // e.strerror: the message alone, no errno or path
@@ -319,7 +335,7 @@ fn check_kept_data(dev: &str, total: u64, dry: bool, lba48: bool, max_data_secto
         }
         Err(e) => return Err(Exit(color(&format!("could not read {} to check its data partition: {}", dev, os_error_text(&e, dev)), C_RED))),
     };
-    let problems = layout::kept_data_problems(&mut f, total, lba48, max_data_sectors);
+    let problems = layout::kept_data_problems(f.as_mut(), total, lba48, max_data_sectors);
     if !problems.is_empty() {
         return Err(Exit(color(&format!("--no-format keeps the data partition, but on {}:\n  {}\nFlashing would point the iPod at the wrong sectors. Flash without --no-format (erases the card) instead.", dev, problems.join("\n  ")), C_RED)));
     }

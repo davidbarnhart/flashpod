@@ -656,7 +656,7 @@ fn prompt_for_path() -> Option<String> {
 /// _offer_init_after_flash_win, which images take (platform.image): init
 /// and then add through the flash's still-open handle, the partition table
 /// not yet written.
-pub fn offer_init_after_flash_image(dev: &str, file: &mut FileDevice, data_start: u64) {
+pub fn offer_init_after_flash_image(dev: &str, file: &mut dyn flashpod_core::block::BlockDevice, data_start: u64) {
     let max_xfer = std::env::var("FLASHPOD_RAW_MAX_XFER").ok().and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(flashpod_core::fat::IMAGE_MAX_XFER).max(1);
     let sec = flashpod_core::fat::Sectors { dev: file, part_start: data_start, max_xfer };
@@ -731,7 +731,6 @@ pub fn run_raw_device(node: &str, cmd: Cmd) -> i32 {
 
 /// tempfile.mkdtemp(prefix): a fresh 0700 directory under $TMPDIR.
 fn mkdtemp(prefix: &str) -> std::io::Result<String> {
-    use std::os::unix::fs::DirBuilderExt;
     let tmp = std::env::temp_dir();
     let mut seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
         ^ (std::process::id() as u128) << 64;
@@ -743,7 +742,7 @@ fn mkdtemp(prefix: &str) -> std::io::Result<String> {
             name.push(chars[((seed >> 64) % chars.len() as u128) as usize] as char);
         }
         let path = tmp.join(&name);
-        match std::fs::DirBuilder::new().mode(0o700).create(&path) {
+        match crate::sys::mkdir_private(&path) {
             Ok(()) => return Ok(path.to_string_lossy().into_owned()),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),

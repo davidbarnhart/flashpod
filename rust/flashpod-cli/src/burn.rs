@@ -21,9 +21,16 @@ fn fail(msg: &str) -> Exit {
     Exit(color(&format!("flashpod burn: {}", msg), C_RED))
 }
 
+#[cfg(unix)]
 fn is_block_device(dev: &str) -> bool {
     use std::os::unix::fs::FileTypeExt;
     std::fs::metadata(dev).map(|m| m.file_type().is_block_device()).unwrap_or(false)
+}
+
+/// burn is refused before any of this runs off Linux.
+#[cfg(not(unix))]
+fn is_block_device(_dev: &str) -> bool {
+    false
 }
 
 /// burn.check_target: a removable whole disk at least as big as the image.

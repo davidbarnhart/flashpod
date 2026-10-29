@@ -23,6 +23,7 @@ mod rawdev;
 mod mount;
 mod pathpicker;
 mod platform;
+mod sys;
 mod term;
 mod window;
 mod winnow;
@@ -299,7 +300,7 @@ fn cmd_flash(ns: &mut Ns) -> i32 {
     // offer init on the fresh card only when it will work: interactive, a
     // real write, a FAT32 data partition
     let offer = term::stdin_isatty() && !o.dry_run && !o.no_format;
-    let mut hook = |dev: &str, open: Option<(&mut FileDevice, u64)>| match open {
+    let mut hook = |dev: &str, open: Option<(&mut dyn flashpod_core::block::BlockDevice, u64)>| match open {
         Some((f, data_start)) => data::offer_init_after_flash_image(dev, f, data_start),
         None => data::offer_init_after_flash_unix(dev),
     };
@@ -534,8 +535,7 @@ fn data_command(ns: &Ns, command: &str) -> i32 {
         }
     }
     let mut mount = mount;
-    let readable = std::ffi::CString::new(mount.as_bytes())
-        .map(|c| unsafe { libc::access(c.as_ptr(), libc::R_OK | libc::X_OK) } == 0).unwrap_or(false);
+    let readable = crate::sys::can_enter(&mount);
     if !readable && detect::device_for_mount(&mount).is_some() {
         match detect::remount_as_user(&mount) {
             Some(m) => mount = m,
