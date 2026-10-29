@@ -150,7 +150,21 @@ impl BlockDevice for RawDevice {
             }
         }
     }
+    /// fsync. On macOS not File::sync_all, which is F_FULLFSYNC there and
+    /// refused by a disk node (ENOTTY); the rdisk node is unbuffered anyway.
     fn flush(&mut self) -> io::Result<()> {
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::fd::AsRawFd;
+            if unsafe { libc::fsync(self.file.as_raw_fd()) } != 0 {
+                let e = io::Error::last_os_error();
+                if !matches!(e.raw_os_error(), Some(libc::ENOTTY) | Some(libc::ENOTSUP) | Some(libc::EINVAL)) {
+                    return Err(py_os(&e));
+                }
+            }
+            return Ok(());
+        }
+        #[cfg(not(target_os = "macos"))]
         self.file.sync_all().map_err(|e| py_os(&e))
     }
     fn set_len(&mut self, _len: u64) -> io::Result<()> {

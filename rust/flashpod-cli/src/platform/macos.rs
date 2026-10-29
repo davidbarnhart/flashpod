@@ -249,6 +249,19 @@ impl Platform for MacOS {
     fn elevate(&self, extra: &[String]) {
         crate::host::sudo_reexec(extra)
     }
+
+    /// platform.macos open_raw: an image file as it is; a disk through its
+    /// unbuffered /dev/rdiskN node, sector-aligned.
+    fn open_raw(&self, dev: &str, write: bool) -> std::io::Result<Box<dyn flashpod_core::block::BlockDevice>> {
+        if std::fs::metadata(dev).map(|m| m.is_file()).unwrap_or(false) {
+            return Ok(Box::new(flashpod_core::block::FileDevice::open(std::path::Path::new(dev), write)?));
+        }
+        let base = dev.rsplit('/').next().unwrap_or(dev);
+        let node = if base.starts_with("rdisk") { dev.to_string() } else { format!("/dev/r{}", base) };
+        let file = std::fs::OpenOptions::new().read(true).write(write).open(&node)?;
+        let len = self.device_sectors(dev) * 512;
+        Ok(Box::new(super::aligned::Aligned { file, len }))
+    }
 }
 
 #[cfg(test)]

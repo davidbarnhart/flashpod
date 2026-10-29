@@ -14,6 +14,8 @@ mod linux;
 mod macos;
 #[cfg(windows)]
 mod windows;
+#[cfg(any(target_os = "macos", windows))]
+mod aligned;
 
 pub trait Platform: Sync {
     /// Root (or Administrator): needed to write a disk.

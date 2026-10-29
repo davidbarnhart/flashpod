@@ -299,75 +299,8 @@ impl Platform for Windows {
         if write {
             lock_volumes(dev);
         }
-        Ok(Box::new(Aligned { file: open_handle(dev, write)?, len: None }))
-    }
-}
-
-/// base.AlignedRawIO: a physical drive takes only whole, sector-aligned
-/// transfers, so unaligned edges are read, patched and written back.
-struct Aligned {
-    file: std::fs::File,
-    len: Option<u64>,
-}
-
-impl Aligned {
-    fn sectors(&self, first: u64, count: u64) -> io::Result<Vec<u8>> {
-        let mut buf = vec![0u8; (count * SECTOR) as usize];
-        let mut got = 0;
-        while got < buf.len() {
-            let n = crate::sys::read_at(&self.file, &mut buf[got..], first * SECTOR + got as u64)?;
-            if n == 0 {
-                break;
-            }
-            got += n;
-        }
-        Ok(buf)
-    }
-}
-
-impl BlockDevice for Aligned {
-    fn len(&self) -> io::Result<u64> {
-        match self.len {
-            Some(n) => Ok(n),
-            None => crate::sys::disk_length(&self.file),
-        }
-    }
-
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
-        if buf.is_empty() {
-            return Ok(0);
-        }
-        let first = offset / SECTOR;
-        let last = (offset + buf.len() as u64).div_ceil(SECTOR);
-        let data = self.sectors(first, last - first)?;
-        let skip = (offset - first * SECTOR) as usize;
-        let n = buf.len().min(data.len().saturating_sub(skip));
-        buf[..n].copy_from_slice(&data[skip..skip + n]);
-        Ok(n)
-    }
-
-    fn write_at(&mut self, offset: u64, buf: &[u8]) -> io::Result<()> {
-        if buf.is_empty() {
-            return Ok(());
-        }
-        let end = offset + buf.len() as u64;
-        if offset % SECTOR == 0 && end % SECTOR == 0 {
-            return crate::sys::write_all_at(&self.file, buf, offset);
-        }
-        let first = offset / SECTOR;
-        let last = end.div_ceil(SECTOR);
-        let mut data = self.sectors(first, last - first)?;
-        data.resize(((last - first) * SECTOR) as usize, 0);
-        let skip = (offset - first * SECTOR) as usize;
-        data[skip..skip + buf.len()].copy_from_slice(buf);
-        crate::sys::write_all_at(&self.file, &data, first * SECTOR)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.file.sync_all()
-    }
-
-    fn set_len(&mut self, _len: u64) -> io::Result<()> {
-        Err(io::Error::other("a device can't be resized"))
+        let file = open_handle(dev, write)?;
+        let len = crate::sys::disk_length(&file)?;
+        Ok(Box::new(super::aligned::Aligned { file, len }))
     }
 }
