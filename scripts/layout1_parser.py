@@ -140,9 +140,14 @@ def build():
     p = msub.add_parser("rebuild", help="rebuild the iTunesDB from the music files already on the iPod",
                         parents=[common])
     p.add_argument("name", nargs="?", help="iPod name (default: iPod)")
-    for name, help_ in (("export", "copy music off with tags and readable names"),
-                        ("playlist", "make and edit playlists")):
-        msub.add_parser(name, help=help_, parents=[common]).add_argument("args", nargs="*", metavar="ARG")
+    p = msub.add_parser("export", help="copy music off with tags and readable names", parents=[common])
+    p.add_argument("--to", metavar="DIR", help="where to put it (default: ./<the iPod's name>)")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--other-files", action="store_true",
+                   help="also export the files the database doesn't list, without asking")
+    g.add_argument("--no-other-files", action="store_true", help="don't export them, and don't ask")
+    msub.add_parser("playlist", help="make and edit playlists", parents=[common]).add_argument(
+        "args", nargs="*", metavar="ARG")
 
     sub.add_parser("emulate", help="boot a firmware or card image in emupod").add_argument(
         "args", nargs="*", metavar="ARG")

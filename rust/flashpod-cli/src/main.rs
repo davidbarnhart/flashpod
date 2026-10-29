@@ -15,6 +15,7 @@ mod argparse;
 mod burn;
 mod catalog;
 mod data;
+mod export;
 mod detect;
 mod devices;
 mod flash;
@@ -402,10 +403,15 @@ fn build_cli() -> Cli {
     cli.parser(i).add(Arg::pos("name", Nargs::Optional).help("iPod name (default: iPod)"));
     let i = cli.add_parser_at(music, "rebuild", &[], "rebuild the iTunesDB from the music files already on the iPod", &common());
     cli.parser(i).add(Arg::pos("name", Nargs::Optional).help("iPod name (default: iPod)"));
-    for (name, help) in [("export", "copy music off with tags and readable names"), ("playlist", "make and edit playlists")] {
-        let i = cli.add_parser_at(music, name, &[], help, &common());
-        cli.parser(i).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
-    }
+    let i = cli.add_parser_at(music, "export", &[], "copy music off with tags and readable names", &common());
+    let p = cli.parser(i);
+    p.add(Arg::opt(&["--to"]).metavar("DIR").help("where to put it (default: ./<the iPod's name>)"));
+    p.add_mutex(vec![
+        Arg::flag(&["--other-files"]).help("also export the files the database doesn't list, without asking"),
+        Arg::flag(&["--no-other-files"]).help("don't export them, and don't ask"),
+    ]);
+    let i = cli.add_parser_at(music, "playlist", &[], "make and edit playlists", &common());
+    cli.parser(i).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
 
     let em = cli.add_parser_at(0, "emulate", &[], "boot a firmware or card image in emupod", &[]);
     cli.parser(em).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
@@ -514,7 +520,7 @@ fn main() {
         _ => None,
     };
     let handler = match (group.as_str(), sub.as_deref()) {
-        ("music", Some(m)) if !matches!(m, "export" | "playlist") => m.to_string(),
+        ("music", Some(m)) if m != "playlist" => m.to_string(),
         ("firmware", Some("write")) | ("flash", None) => "flash".to_string(),
         ("card", Some("burn")) => "burn".to_string(),
         (g, Some(m)) => format!("{} {}", g, m),
@@ -527,7 +533,7 @@ fn main() {
         "flash" => cmd_flash(&mut ns),
         "firmware extract" => cmd_extract(&ns),
         "burn" => cmd_burn(&ns),
-        "ls" | "list" | "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild" => data_command(&ns, &command),
+        "ls" | "list" | "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild" | "export" => data_command(&ns, &command),
         other => {
             eprintln!("flashpod {}: not built yet (flashpod 1.0, epic #88).", other);
             2
@@ -592,6 +598,39 @@ fn cmd_extract(ns: &Ns) -> i32 {
     0
 }
 
+/// music export's --to and --other-files / --no-other-files.
+fn export_opts(ns: &Ns) -> (Option<String>, Option<bool>) {
+    let others = if b(ns, "other_files") { Some(true) } else if b(ns, "no_other_files") { Some(false) } else { None };
+    (s(ns, "to").filter(|t| !t.is_empty()), others)
+}
+
+/// music export over --raw: a card image, or a device (root already).
+fn export_raw(ns: &Ns, node: &str, image: bool) -> i32 {
+    let (dest, others) = export_opts(ns);
+    let opened: Result<Box<dyn flashpod_core::block::BlockDevice>, String> = if image {
+        FileDevice::open_image(node, false).map(|d| Box::new(d) as Box<dyn flashpod_core::block::BlockDevice>).map_err(|e| e.message)
+    } else {
+        let xfer = rawdev::effective_xfer();
+        rawdev::RawDevice::open(node, false, xfer).map(|d| Box::new(d) as Box<dyn flashpod_core::block::BlockDevice>)
+            .map_err(|e| rawdev::py_os(&e).to_string())
+    };
+    let mut dev = match opened {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("flashpod music export: couldn't open {}: {}", node, e);
+            return 1;
+        }
+    };
+    let fs = match ops::open_fat(dev.as_mut()) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("flashpod music export: couldn't read a FAT filesystem on {}: {}", node, e.message);
+            return 1;
+        }
+    };
+    export::export(&mut export::FatSource(fs), node, dest.as_deref(), others)
+}
+
 fn data_cmd<'a>(cmd: &str, name: &'a Option<String>, files: &'a [String], what: &'a [String]) -> data::Cmd<'a> {
     match cmd {
         "init" => data::Cmd::Init(name.as_deref().unwrap_or("iPod")),
@@ -612,6 +651,9 @@ fn run_raw(ns: &Ns, command: &str, node: &str, image: bool) -> i32 {
         crate::platform::current().elevate(&extra);
         eprintln!("flashpod: couldn't get root for raw access to {}.", node);
         return 1;
+    }
+    if command == "export" {
+        return export_raw(ns, node, image);
     }
     if matches!(command, "ls" | "list") {
         return match load_library_raw(node) {
@@ -681,6 +723,10 @@ fn data_command(ns: &Ns, command: &str) -> i32 {
         eprintln!("flashpod: {} is a FireWire iPod and the host I/O settings are UNSAFE for it:\n  {}\nLarge/queued reads can crash early iPod FireWire bridges and corrupt the filesystem.\nFix for this attach:\n  sudo sh -c 'echo 4 >/sys/block/{d}/queue/max_sectors_kb; echo 0 >/sys/block/{d}/queue/read_ahead_kb; echo 1 >/sys/block/{d}/device/queue_depth'\nFix permanently (settings reset on every re-attach):\n  sudo cp {} /etc/udev/rules.d/ && sudo udevadm control --reload\n(--unsafe-queue overrides this check)",
                   mount, bad.join(", "), UDEV_RULE, d = disk);
         return 1;
+    }
+    if command == "export" {
+        let (dest, others) = export_opts(ns);
+        return export::export(&mut export::MountSource(mount.clone()), &mount, dest.as_deref(), others);
     }
     if matches!(command, "ls" | "list") {
         let mut t = mount::MountTarget::new(&mount);

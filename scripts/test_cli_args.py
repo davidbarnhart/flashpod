@@ -101,6 +101,7 @@ CASES_1_0 = [
     "inspect -h", "emulate -h", "flash -h", "ls", "--mount x rm 5", "burn a",
     "firmware extract", "firmware extract x", "firmware extract x -o", "firmware extract x -o f --image bogus",
     "firmware extract -o f", "firmware extract a b -o f",
+    "music export --to", "music export --other-files --no-other-files", "music export x",
 ]
 
 
