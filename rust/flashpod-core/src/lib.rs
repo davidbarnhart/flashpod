@@ -10,6 +10,7 @@ pub mod block;
 pub mod card;
 pub mod entropy;
 pub mod error;
+pub mod extract;
 pub mod fat;
 pub mod fat32fmt;
 pub mod hfsplus;
