@@ -12,6 +12,7 @@ pub mod entropy;
 pub mod error;
 pub mod fat;
 pub mod fat32fmt;
+pub mod hfsplus;
 pub mod firmware;
 pub mod inspect;
 pub mod itunesdb;

@@ -192,6 +192,7 @@ fn run_op(c: &Value, blob: &[u8], dev: &mut dyn BlockDevice, host: &mut dyn Host
                 max_data_gb: c["max_data_gb"].as_f64(),
                 format: flag(c, "format", true),
                 arm: flag(c, "arm", false),
+                ..Default::default()
             };
             card::flash(dev, firmware_of(blob)?, o).map(to_value)
         }
