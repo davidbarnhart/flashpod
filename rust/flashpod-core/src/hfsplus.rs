@@ -7,9 +7,10 @@
 //! directory block whose drEmbedExtent names the whole HFS+ volume.
 //!
 //! Two differences from the generator, both for real card sizes:
-//! - the wrapper's allocation block grows (4 KiB, 8 KiB, ...) until its
-//!   block count fits the MDB's 16-bit fields, and its first allocation
-//!   block moves past the wrapper bitmap when that bitmap would reach it;
+//! - the wrapper's allocation block grows in 4 KiB steps until its block
+//!   count fits the MDB's 16-bit fields (as Apple's own format does), and
+//!   its first allocation block moves past the wrapper bitmap when that
+//!   bitmap would reach it;
 //! - only metadata is written (the volume is never built in memory), and
 //!   the catalog is preallocated in proportion to the volume, so a full
 //!   library fits in one extent.
@@ -182,8 +183,10 @@ pub fn catalog_nodes(volume_bytes: u64) -> u64 {
 /// The wrapper for a partition of `size` bytes: (allocation block size,
 /// first allocation block in sectors, block count). The MDB sits at 1024,
 /// its bitmap from sector 3, the allocation blocks from sector 16 (later if
-/// the bitmap reaches it), the alternate MDB 1024 bytes before the end; the
-/// block size doubles from 4 KiB until the count fits the MDB's u16 fields.
+/// the bitmap reaches it), the alternate MDB 1024 bytes before the end. The
+/// block size is the smallest multiple of 4 KiB whose count fits the MDB's
+/// u16 fields -- Apple's own rule: a real 5 GB Mac iPod's wrapper
+/// (openpod ipod5GBs3.img) has 63,915 blocks of 77,824 bytes (19 x 4 KiB).
 pub fn wrapper_geometry(size: u64) -> (u64, u64, u64) {
     let mut wblock = BLOCK;
     loop {
@@ -197,7 +200,7 @@ pub fn wrapper_geometry(size: u64) -> (u64, u64, u64) {
         if nblk <= 0xFFFF {
             return (wblock, al_st, nblk);
         }
-        wblock *= 2;
+        wblock += BLOCK;
     }
 }
 
@@ -344,8 +347,8 @@ mod tests {
         assert_eq!((w, al), (4096, 16));
         assert!(n * w <= (133 << 20) - 16 * 512 - 1024);
         // past ~218 MB the bitmap pushes the first block out; past 256 MB the
-        // block doubles; every size keeps the count in 16 bits and the
-        // bitmap clear of the blocks
+        // block grows by 4 KiB steps; every size keeps the count in 16 bits
+        // and the bitmap clear of the blocks
         for mb in [200u64, 230, 300, 1000, 2000, 8000, 64000, 131072] {
             let size = mb << 20;
             let (w, al, n) = wrapper_geometry(size);
@@ -354,6 +357,8 @@ mod tests {
             assert!(al * 512 + n * w + 1024 <= size, "{} MB", mb);
             assert!(n * w * 100 / size >= 99, "{} MB wastes over 1%", mb);
         }
-        assert_eq!(wrapper_geometry(128u64 << 30).0, 2 << 20);
+        // the real 5 GB iPod's partition: Apple chose 77,824-byte blocks
+        assert_eq!(wrapper_geometry(4_974_153_728).0, 77_824);
+        assert_eq!(wrapper_geometry(128u64 << 30), (512 * 4096, 19, 0xFFFF));
     }
 }

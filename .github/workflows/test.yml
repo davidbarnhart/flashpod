@@ -292,3 +292,20 @@ jobs:
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           python scripts/test_cli_fakehost.py --mode user --rust rust/target/release/flashpod
+
+  # A Mac card (#104): the Rust library's APM + wrapped HFS+ image, attached
+  # and mounted by macOS itself, a file written and read back, fsck_hfs
+  # before and after.
+  mac-card:
+    name: Mac card mounts on macOS
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Build, attach, mount, write, fsck
+        run: scripts/test_mac_card.sh 2000000000

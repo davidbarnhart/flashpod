@@ -6,6 +6,7 @@ use crate::block::BlockDevice;
 use crate::error::{Error, ErrorKind};
 use crate::fat32fmt::{self, FormatError, FAT32_MIN_CLUSTERS};
 use crate::firmware;
+use crate::hfsplus;
 use crate::layout::{self, DATA_START, FW_BLOCKS, FW_START, SECTOR, TAIL_RESERVE};
 use serde::Serialize;
 
@@ -74,6 +75,11 @@ pub struct FlashOptions {
     pub max_data_gb: Option<f64>,
     pub format: bool,
     pub arm: bool,
+    /// A Mac card (#104): Apple Partition Map and a wrapped HFS+ volume
+    /// instead of an MBR and FAT32. `hfs_time` dates the volume, in seconds
+    /// since 1904 (the library reads no clock).
+    pub mac: bool,
+    pub hfs_time: u32,
 }
 
 fn io_err(e: std::io::Error) -> Error {
@@ -93,6 +99,9 @@ pub fn flash(dev: &mut dyn BlockDevice, fw: Vec<u8>, o: FlashOptions) -> Result<
         _ => None,
     };
     let total = dev.len()? / SECTOR;
+    if o.mac {
+        return flash_mac(dev, fw, total, max_data_sectors, o);
+    }
     let (header, data_start, data_blocks) =
         layout::build_mbr_layout(total, o.lba48, max_data_sectors).map_err(too_small)?;
     if o.format {
@@ -119,6 +128,30 @@ pub fn flash(dev: &mut dyn BlockDevice, fw: Vec<u8>, o: FlashOptions) -> Result<
         data_sectors: data_blocks,
         clusters: geo.map(|g| g.clusters),
         cluster_bytes: geo.map(|g| g.sectors_per_cluster * SECTOR),
+    })
+}
+
+/// The Mac card: the same sequence with the APM written last (blocks
+/// 0..62) and the data partition formatted as a wrapped HFS+ volume.
+fn flash_mac(dev: &mut dyn BlockDevice, fw: Vec<u8>, total: u64, max_data_sectors: Option<u64>, o: FlashOptions)
+    -> Result<FlashResult, Error>
+{
+    let (header, data_start, data_blocks) =
+        layout::build_apm_layout(total, o.lba48, max_data_sectors).map_err(too_small)?;
+    layout::write_layout_body(dev, &fw, total, data_start).map_err(io_err)?;
+    if o.format {
+        hfsplus::format_wrapped(dev, data_start, data_blocks, "iPod", o.hfs_time).map_err(io_err)?;
+    }
+    dev.flush()?;
+    layout::verify_region(dev, &fw)?;
+    dev.write_at(0, &header)?;
+    dev.flush()?;
+    Ok(FlashResult {
+        firmware_bytes: fw.len(),
+        data_start,
+        data_sectors: data_blocks,
+        clusters: None,
+        cluster_bytes: None,
     })
 }
 
