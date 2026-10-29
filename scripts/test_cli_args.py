@@ -99,6 +99,8 @@ CASES_1_0 = [
     "firmware write --arm --no-arm x", "firmware extract -h", "firmware list -h", "firmware list x",
     "firmware patch -h", "card", "card -h", "card burn", "card burn -h", "card new -h",
     "inspect -h", "emulate -h", "flash -h", "ls", "--mount x rm 5", "burn a",
+    "firmware extract", "firmware extract x", "firmware extract x -o", "firmware extract x -o f --image bogus",
+    "firmware extract -o f", "firmware extract a b -o f",
 ]
 
 

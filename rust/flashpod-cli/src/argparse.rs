@@ -119,6 +119,13 @@ impl Arg {
         self.0.choices = Some(c.iter().map(|s| s.to_string()).collect());
         self
     }
+    /// required=True on an option: missing it is a usage error, and usage
+    /// shows it without brackets.
+    pub fn required(mut self) -> Self {
+        self.0.required = true;
+        self
+    }
+
     pub fn float(mut self) -> Self {
         self.0.float = true;
         self

@@ -108,7 +108,10 @@ def build():
     fsub.required = True
     fsub.add_parser("list", help="the firmware flashpod can write")
     p = fsub.add_parser("extract", help="copy the firmware partition (or one image) off a card")
-    p.add_argument("args", nargs="*", metavar="TARGET")
+    p.add_argument("target", help="card image file, or a card or iPod disk (needs root)")
+    p.add_argument("-o", "--output", required=True, help="file to write; a FILE.json note is written beside it")
+    p.add_argument("--image", choices=["osos", "aupd", "rsrc"],
+                   help="one image from the firmware directory, not the whole partition")
     flash_args(fsub.add_parser("write", help="write iPod firmware to a CF/SD card (erases it)"))
     for name, help_ in (("patch", "build a patched firmware"), ("patches", "list the patch library"),
                         ("arm", "arm a disk-mode (boot ROM) update"), ("recover", "the boot ROM recovery routine")):

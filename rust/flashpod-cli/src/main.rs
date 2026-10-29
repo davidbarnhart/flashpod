@@ -368,7 +368,10 @@ fn build_cli() -> Cli {
     cli.add_subparsers_at(fw, "firmware_command");
     cli.add_parser_at(fw, "list", &[], "the firmware flashpod can write", &[]);
     let ex = cli.add_parser_at(fw, "extract", &[], "copy the firmware partition (or one image) off a card", &[]);
-    cli.parser(ex).add(Arg::pos("args", Nargs::Star).metavar("TARGET"));
+    let exp = cli.parser(ex);
+    exp.add(Arg::pos("target", Nargs::One).help("card image file, or a card or iPod disk (needs root)"));
+    exp.add(Arg::opt(&["-o", "--output"]).required().help("file to write; a FILE.json note is written beside it"));
+    exp.add(Arg::opt(&["--image"]).choices(&["osos", "aupd", "rsrc"]).help("one image from the firmware directory, not the whole partition"));
     let w = cli.add_parser_at(fw, "write", &[], "write iPod firmware to a CF/SD card (erases it)", &[]);
     flash_args(cli.parser(w));
     for (name, help) in [("patch", "build a patched firmware"), ("patches", "list the patch library"),
@@ -522,6 +525,7 @@ fn main() {
     let command = handler;
     let code = match command.as_str() {
         "flash" => cmd_flash(&mut ns),
+        "firmware extract" => cmd_extract(&ns),
         "burn" => cmd_burn(&ns),
         "ls" | "list" | "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild" => data_command(&ns, &command),
         other => {
@@ -530,6 +534,62 @@ fn main() {
         }
     };
     std::process::exit(code);
+}
+
+/// firmware extract TARGET -o FILE [--image osos|aupd|rsrc] (#99): the
+/// firmware partition, or one image, off a card image (no root) or a disk
+/// (root, through the platform's raw open), to FILE, with FILE.json
+/// beside it. Never overwrites; reads only.
+fn cmd_extract(ns: &Ns) -> i32 {
+    let target = s(ns, "target").unwrap_or_default();
+    let out = s(ns, "output").unwrap_or_default();
+    let note_path = format!("{}.json", out);
+    for p in [&out, &note_path] {
+        if std::path::Path::new(p).exists() {
+            eprintln!("flashpod firmware extract: {} already exists; pick another name.", p);
+            return 1;
+        }
+    }
+    let opened: std::io::Result<Box<dyn flashpod_core::block::BlockDevice>> = if flash::is_image(&target) {
+        FileDevice::open(std::path::Path::new(&target), false).map(|d| Box::new(d) as Box<dyn flashpod_core::block::BlockDevice>)
+    } else if !std::path::Path::new(&target).exists() {
+        eprintln!("flashpod firmware extract: no such file or disk: {}", target);
+        return 1;
+    } else {
+        crate::platform::current().open_raw(&target, false)
+    };
+    let mut dev = match opened {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("flashpod firmware extract: reading {} needs root (sudo).", target);
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("flashpod firmware extract: can't open {}: {}", target, e);
+            return 1;
+        }
+    };
+    let image = s(ns, "image").filter(|i| !i.is_empty());
+    let r = match flashpod_core::extract::extract_firmware(dev.as_mut(), image.as_deref()) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("flashpod firmware extract: {}: {}", target, e.message);
+            return 1;
+        }
+    };
+    let mut note = r.note.clone();
+    note["source"] = serde_json::json!(target);
+    let written = std::fs::write(&out, &r.bytes)
+        .and_then(|_| std::fs::write(&note_path, serde_json::to_string_pretty(&note).unwrap_or_default() + "\n"));
+    if let Err(e) = written {
+        eprintln!("flashpod firmware extract: can't write {}: {}", out, e);
+        return 1;
+    }
+    let build = note["installed"]["build"].as_str().unwrap_or("unknown build");
+    println!("Extracted {} ({} bytes, sha256 {}) from {} to {}; note in {}.",
+             image.as_deref().unwrap_or("the firmware partition"), r.bytes.len(), r.sha256, target, out, note_path);
+    println!("Installed firmware: {}", build);
+    0
 }
 
 fn data_cmd<'a>(cmd: &str, name: &'a Option<String>, files: &'a [String], what: &'a [String]) -> data::Cmd<'a> {
