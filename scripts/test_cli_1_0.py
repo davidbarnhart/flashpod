@@ -316,6 +316,55 @@ def card_new_checks(binary, work):
     check(rc == 2 and "not a size" in err, "a non-size is a usage error")
 
 
+def mac_card_checks(binary, work):
+    print("firmware write --format hfs (a Mac card)")
+    import struct
+    sys.path.insert(0, os.path.dirname(HERE))
+    from flashpod import ipod_flash
+    fw = synth.write_firmware(os.path.join(work, "fw5.bin"))
+    img = os.path.join(work, "mac.img")
+    size = 300 * 10**6 // 512 * 512
+    with open(img, "wb") as f:
+        f.truncate(size)
+    rc, out, err = run(binary, "firmware", "write", img, "--firmware", fw, "--yes", "--no-arm", "--format", "hfs")
+    check(rc == 0 and "Apple Partition Map + HFS+" in err, "write --format hfs (rc %d)" % rc)
+    with open(img, "rb") as f:
+        head = f.read(4 * 512)
+    total = size // 512
+    entries = [(head[k * 512:k * 512 + 2], struct.unpack_from(">II", head, k * 512 + 8),
+                head[k * 512 + 16:k * 512 + 48].rstrip(b"\0"), head[k * 512 + 48:k * 512 + 80].rstrip(b"\0"))
+               for k in (1, 2, 3)]
+    data_n = total - 65599 - 2048
+    check(head[:2] == b"ER" and struct.unpack_from(">I", head, 4)[0] == total, "block 0 is a DDR naming the disk's size")
+    check(entries == [(b"PM", (1, 62), b"partition map", b"Apple_partition_map"),
+                      (b"PM", (63, 65536), b"firmware", b"Apple_MDFW"),
+                      (b"PM", (65599, data_n), b"disk", b"Apple_HFS")],
+          "the map: partition map 1+62, firmware 63+65536, disk 65599+%d (tail reserve 2048)" % data_n)
+    o = os.path.join(work, "mac-part.bin")
+    rc, out, err = run(binary, "firmware", "extract", img, "-o", o)
+    ready = ipod_flash.load_firmware(fw)
+    part = open(o, "rb").read() if os.path.exists(o) else b""
+    check(rc == 0 and part[:len(ready)] == ready, "extract finds the firmware through the map")
+    fsck = shutil.which("fsck.hfsplus") or ("/sbin/fsck.hfsplus" if os.path.exists("/sbin/fsck.hfsplus") else None)
+    if fsck:
+        vol = os.path.join(work, "mac-vol.img")
+        with open(img, "rb") as f, open(vol, "wb") as g:
+            f.seek(65599 * 512)
+            left = data_n * 512
+            while left:
+                chunk = f.read(min(left, 1 << 20))
+                if not chunk:
+                    break
+                g.write(chunk)
+                left -= len(chunk)
+        r = subprocess.run([fsck, "-fn", vol], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+        check(r.returncode == 0 and "appears to be OK" in r.stdout, "fsck.hfsplus passes on the data partition")
+    else:
+        print("  skip fsck.hfsplus not installed (hfsprogs)")
+    rc, out, err = run(binary, "firmware", "write", img, "--firmware", fw, "--yes", "--no-format", "--format", "hfs")
+    check(rc == 1 and "--no-format" in err, "--no-format with --format hfs is refused")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rust", required=True)
@@ -329,6 +378,7 @@ def main():
         playlist_checks(os.path.abspath(opts.rust), work)
         inspect_checks(os.path.abspath(opts.rust), work)
         card_new_checks(os.path.abspath(opts.rust), work)
+        mac_card_checks(os.path.abspath(opts.rust), work)
     finally:
         if not opts.keep:
             shutil.rmtree(work, ignore_errors=True)

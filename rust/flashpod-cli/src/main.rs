@@ -297,10 +297,11 @@ fn cmd_flash(ns: &mut Ns) -> i32 {
         arm: b(ns, "arm"),
         lba48: b(ns, "lba48"),
         max_data_gb,
+        hfs: s(ns, "format").as_deref() == Some("hfs"),
     };
     // offer init on the fresh card only when it will work: interactive, a
     // real write, a FAT32 data partition
-    let offer = term::stdin_isatty() && !o.dry_run && !o.no_format;
+    let offer = term::stdin_isatty() && !o.dry_run && !o.no_format && !o.hfs;
     let mut hook = |dev: &str, open: Option<(&mut dyn flashpod_core::block::BlockDevice, u64)>| match open {
         Some((f, data_start)) => data::offer_init_after_flash_image(dev, f, data_start),
         None => data::offer_init_after_flash_unix(dev),
@@ -467,6 +468,9 @@ fn flash_args(fl: &mut Parser) {
         "cap the data partition to N decimal GB, overriding the firmware's manifest limit (use to probe an \
          early firmware's real disk-size ceiling)"));
     fl.add(Arg::flag(&["--self-test"]).help("validate layout logic and exit (no hardware)"));
+    fl.add(Arg::opt(&["--format"]).choices(&["fat32", "hfs"]).help(
+        "the data partition's filesystem: fat32 (default; Windows-style card, any OS) or hfs (a Mac card: Apple \
+         Partition Map + HFS+; add music through the OS's mount)"));
 }
 
 /// 0.x command names and their 1.0 spelling.

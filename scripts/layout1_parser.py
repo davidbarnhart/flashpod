@@ -70,6 +70,9 @@ def flash_args(p):
                         "firmware's manifest limit (use to probe an early "
                         "firmware's real disk-size ceiling)")
     p.add_argument("--self-test", action="store_true", help="validate layout logic and exit (no hardware)")
+    p.add_argument("--format", choices=["fat32", "hfs"],
+                   help="the data partition's filesystem: fat32 (default; Windows-style card, any OS) or hfs "
+                        "(a Mac card: Apple Partition Map + HFS+; add music through the OS's mount)")
 
 
 def burn_args(p):

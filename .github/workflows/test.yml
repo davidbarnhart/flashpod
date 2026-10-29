@@ -295,8 +295,10 @@ jobs:
 
       # The 1.0 commands with no 0.x counterpart (#97), on synthetic cards,
       # each against an expectation computed without the binary.
-      - name: The 1.0-only commands (extract, export, playlist, inspect, card new)
-        run: PYTHONPATH=. python scripts/test_cli_1_0.py --rust rust/target/release/flashpod
+      - name: The 1.0-only commands (extract, export, playlist, inspect, card new, Mac cards)
+        run: |
+          sudo apt-get install -yq hfsprogs || true
+          PYTHONPATH=. python scripts/test_cli_1_0.py --rust rust/target/release/flashpod
 
   # The Rust CLI's Platform layer (rust/flashpod-cli/src/platform) driving a
   # real block device: simulate_card.py attaches a backing file (losetup,
