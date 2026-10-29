@@ -102,30 +102,52 @@ pub fn say_mount_load_error(mount: &str, e: &Error) {
     }
 }
 
-/// The --mount branch of cli.main for a directory: the command over
-/// target.MountTarget.
-pub fn run_mount(mount: &str, cmd: Cmd) -> i32 {
-    let mut t = MountTarget::new(mount);
-    let cx = Ctx { node: mount.to_string(), mount: true };
-    let mut ent = entropy();
+/// What a data command runs on (#93): an OS mount, a card image file, or a
+/// raw device node. #98 drops Device for music.
+pub enum TargetSpec<'a> {
+    Mount(&'a str),
+    Image(&'a str),
+    Device(&'a str),
+}
+
+/// A data command on a target: each kind opens its own way (and words its
+/// own open errors); the command itself runs once, in dispatch.
+pub fn run(spec: TargetSpec, cmd: Cmd) -> i32 {
+    match spec {
+        TargetSpec::Mount(m) => run_mount(m, cmd),
+        TargetSpec::Image(n) => run_raw_image(n, cmd),
+        TargetSpec::Device(n) => run_raw_device(n, cmd),
+    }
+}
+
+/// The command over an open target: init (said "at" a mount, "on" a node),
+/// rebuild, rm, add.
+fn dispatch(t: &mut dyn Target, cx: &Ctx, cmd: Cmd, ent: &mut flashpod_core::entropy::Entropy) -> i32 {
     match cmd {
-        Cmd::Init(name) => match t.init_structure(name, &mut ent) {
+        Cmd::Init(name) => match t.init_structure(name, ent) {
             Ok(()) => {
-                println!("Initialized iPod directory structure at {}", mount);
+                println!("Initialized iPod directory structure {} {}", if cx.mount { "at" } else { "on" }, cx.node);
                 0
             }
             Err(e) => cx.fail(&e),
         },
-        Cmd::Rebuild(name) => {
-            if !t.music_dir_exists() {
-                eprintln!("flashpod: no iPod_Control/Music on {} \u{2014} is this an iPod?", mount);
-                return 1;
-            }
-            rebuild(&mut t, &cx, name.unwrap_or("iPod"), &mut ent)
-        }
-        Cmd::Rm(what) => rm(&mut t, &cx, what, &mut ent),
-        Cmd::Add(paths) => add(&mut t, &cx, paths, &mut ent, false),
+        Cmd::Rebuild(name) => rebuild(t, cx, name.unwrap_or("iPod"), ent),
+        Cmd::Rm(what) => rm(t, cx, what, ent),
+        Cmd::Add(paths) => add(t, cx, paths, ent, false),
     }
+}
+
+/// The --mount branch of cli.main for a directory: the command over
+/// target.MountTarget.
+fn run_mount(mount: &str, cmd: Cmd) -> i32 {
+    let mut t = MountTarget::new(mount);
+    let cx = Ctx { node: mount.to_string(), mount: true };
+    let mut ent = entropy();
+    if matches!(cmd, Cmd::Rebuild(_)) && !t.music_dir_exists() {
+        eprintln!("flashpod: no iPod_Control/Music on {} \u{2014} is this an iPod?", mount);
+        return 1;
+    }
+    dispatch(&mut t, &cx, cmd, &mut ent)
 }
 
 pub enum Cmd<'a> {
@@ -137,7 +159,7 @@ pub enum Cmd<'a> {
 
 /// run_raw for an image: card.open_target(node, write=True) (the flock),
 /// then the command. offer_eject skips image files.
-pub fn run_raw_image(node: &str, cmd: Cmd) -> i32 {
+fn run_raw_image(node: &str, cmd: Cmd) -> i32 {
     let dev = FileDevice::open_image(node, true).and_then(|d| d.try_lock(true, node).map(|_| d));
     let mut dev = match dev {
         Ok(d) => d,
@@ -171,12 +193,7 @@ pub fn run_raw_image(node: &str, cmd: Cmd) -> i32 {
         }
     };
     let cx = Ctx { node: node.to_string(), mount: false };
-    match cmd {
-        Cmd::Init(_) => unreachable!(),
-        Cmd::Rebuild(name) => rebuild(&mut fs, &cx, name.unwrap_or("iPod"), &mut ent),
-        Cmd::Rm(what) => rm(&mut fs, &cx, what, &mut ent),
-        Cmd::Add(paths) => add(&mut fs, &cx, paths, &mut ent, false),
-    }
+    dispatch(&mut fs, &cx, cmd, &mut ent)
 }
 
 /// _raw_rebuild's window: one "recovering" line updated in place.
@@ -685,7 +702,7 @@ pub fn offer_init_after_flash_image(dev: &str, file: &mut dyn flashpod_core::blo
 
 /// run_raw for a device node (root already): open_raw_target, the command,
 /// then the eject offer.
-pub fn run_raw_device(node: &str, cmd: Cmd) -> i32 {
+fn run_raw_device(node: &str, cmd: Cmd) -> i32 {
     if !crate::host::ensure_firewire_disk_safe(node) {
         eprintln!("flashpod: couldn't pin safe FireWire I/O settings for {}; the kernel may probe it unsafely after writes.", node);
     }
@@ -711,18 +728,7 @@ pub fn run_raw_device(node: &str, cmd: Cmd) -> i32 {
         };
         let cx = Ctx { node: node.to_string(), mount: false };
         let mut ent = entropy();
-        match cmd {
-            Cmd::Init(name) => match fs.init_structure(name, &mut ent) {
-                Ok(()) => {
-                    println!("Initialized iPod directory structure on {}", node);
-                    0
-                }
-                Err(e) => cx.fail(&e),
-            },
-            Cmd::Rebuild(name) => rebuild(&mut fs, &cx, name.unwrap_or("iPod"), &mut ent),
-            Cmd::Rm(what) => rm(&mut fs, &cx, what, &mut ent),
-            Cmd::Add(paths) => add(&mut fs, &cx, paths, &mut ent, false),
-        }
+        dispatch(&mut fs, &cx, cmd, &mut ent)
     };
     drop(dev);
     crate::detect::offer_eject(Some(node), rc);

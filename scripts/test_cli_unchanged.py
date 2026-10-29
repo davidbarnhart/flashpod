@@ -296,6 +296,7 @@ SCENARIOS = {
     # commands, the kernel's FAT replaced by the host filesystem.
     "mount": [
         {"py": "mkdir"},
+        S("rebuild --mount {mnt}", expect="is this an iPod"),
         S("add --mount {mnt} {music}", expect="no iTunesDB"),
         S("init --mount {mnt} MountPod", write=True, expect="Initialized"),
         S("ls --mount {mnt}", expect='"MountPod": 0 tracks'),

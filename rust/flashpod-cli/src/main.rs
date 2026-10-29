@@ -488,11 +488,7 @@ fn run_raw(ns: &Ns, command: &str, node: &str, image: bool) -> i32 {
     }
     let (name, files, what) = (s(ns, "name").filter(|n| !n.is_empty()), list(ns, "files"), list(ns, "what"));
     let c = data_cmd(command, &name, &files, &what);
-    if image {
-        data::run_raw_image(node, c)
-    } else {
-        data::run_raw_device(node, c)
-    }
+    data::run(if image { data::TargetSpec::Image(node) } else { data::TargetSpec::Device(node) }, c)
 }
 
 /// cli.main from the --raw dispatch on: find the target (scan, mount
@@ -564,7 +560,7 @@ fn data_command(ns: &Ns, command: &str) -> i32 {
         };
     }
     let (name, files, what) = (s(ns, "name").filter(|n| !n.is_empty()), list(ns, "files"), list(ns, "what"));
-    let rc = data::run_mount(&mount, data_cmd(command, &name, &files, &what));
+    let rc = data::run(data::TargetSpec::Mount(&mount), data_cmd(command, &name, &files, &what));
     if matches!(command, "add" | "rm" | "remove" | "delete" | "erase") {
         detect::offer_eject(detect::device_for_mount(&mount).as_deref(), rc);
     }
