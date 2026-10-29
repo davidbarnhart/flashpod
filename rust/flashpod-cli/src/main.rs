@@ -9,7 +9,7 @@ use flashpod_core::inspect;
 use flashpod_core::itunesdb::Track;
 use flashpod_core::ops;
 use flashpod_core::text::casefold;
-use argparse::{Arg, Cli, Nargs, Ns, Val};
+use argparse::{Arg, Cli, Nargs, Ns, Parser, Val};
 
 mod argparse;
 mod burn;
@@ -378,28 +378,69 @@ fn build_cli() -> Cli {
         Arg::flag(&["--unsafe-queue"]).no_default().hidden(),
     ];
 
-    cli.add_parser("ls", &["list"], "list library", &common())
-        .add(Arg::pos("field", Nargs::Optional).choices(&["all", "artist", "artists", "album", "albums"])
-            .help("'all' adds tracks to the tree; 'artist'/'album' print flat counts"));
-    cli.add_parser("add", &[], "add audio files", &common())
-        .add(Arg::pos("files", Nargs::Star).metavar("path")
-            .help("audio files or directories (scanned recursively); prompts if omitted"));
-    cli.add_parser("rm", &["remove", "delete", "erase"], "remove tracks", &common())
-        .add(Arg::pos("what", Nargs::Plus).metavar("id|artist|album")
-            .help("track ids, or `artist <name>` / `album <name>` to remove every matching track"));
-    cli.add_parser("init", &[], "create directory structure + empty DB", &common())
-        .add(Arg::pos("name", Nargs::Optional).help("iPod name (default: iPod)"));
-    cli.add_parser("rebuild", &[], "rebuild the iTunesDB from the music files already on the iPod", &common())
-        .add(Arg::pos("name", Nargs::Optional).help("iPod name (default: iPod)"));
+    // 1.0 layout (#97): commands grouped by what they act on. `flash` stays
+    // as a top-level alias of `firmware write`.
+    let inspect = cli.add_parser_at(0, "inspect", &[], "report everything about a card, iPod or image", &[]);
+    cli.parser(inspect).add(Arg::pos("args", Nargs::Star).metavar("TARGET"));
 
-    let burn = cli.add_parser("burn", &[], "write a card image file to an SD/CF card (erases it)", &[]);
+    let fw = cli.add_parser_at(0, "firmware", &[], "inspect, extract, patch and write firmware", &[]);
+    cli.add_subparsers_at(fw, "firmware_command");
+    cli.add_parser_at(fw, "list", &[], "the firmware flashpod can write", &[]);
+    let ex = cli.add_parser_at(fw, "extract", &[], "copy the firmware partition (or one image) off a card", &[]);
+    cli.parser(ex).add(Arg::pos("args", Nargs::Star).metavar("TARGET"));
+    let w = cli.add_parser_at(fw, "write", &[], "write iPod firmware to a CF/SD card (erases it)", &[]);
+    flash_args(cli.parser(w));
+    for (name, help) in [("patch", "build a patched firmware"), ("patches", "list the patch library"),
+                         ("arm", "arm a disk-mode (boot ROM) update"), ("recover", "the boot ROM recovery routine")] {
+        let i = cli.add_parser_at(fw, name, &[], help, &[]);
+        cli.parser(i).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
+    }
+
+    let card = cli.add_parser_at(0, "card", &[], "card image files", &[]);
+    cli.add_subparsers_at(card, "card_command");
+    let new = cli.add_parser_at(card, "new", &[], "make a blank card image", &[]);
+    cli.parser(new).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
+    let burn = cli.add_parser_at(card, "burn", &[], "write a card image file to an SD/CF card (erases it)", &[]);
+    burn_args(cli.parser(burn));
+
+    let music = cli.add_parser_at(0, "music", &[], "the music library on an iPod, card or image", &[]);
+    cli.add_subparsers_at(music, "music_command");
+    let i = cli.add_parser_at(music, "ls", &["list"], "list library", &common());
+    cli.parser(i).add(Arg::pos("field", Nargs::Optional).choices(&["all", "artist", "artists", "album", "albums"])
+        .help("'all' adds tracks to the tree; 'artist'/'album' print flat counts"));
+    let i = cli.add_parser_at(music, "add", &[], "add audio files", &common());
+    cli.parser(i).add(Arg::pos("files", Nargs::Star).metavar("path")
+        .help("audio files or directories (scanned recursively); prompts if omitted"));
+    let i = cli.add_parser_at(music, "rm", &["remove", "delete", "erase"], "remove tracks", &common());
+    cli.parser(i).add(Arg::pos("what", Nargs::Plus).metavar("id|artist|album")
+        .help("track ids, or `artist <name>` / `album <name>` to remove every matching track"));
+    let i = cli.add_parser_at(music, "init", &[], "create directory structure + empty DB", &common());
+    cli.parser(i).add(Arg::pos("name", Nargs::Optional).help("iPod name (default: iPod)"));
+    let i = cli.add_parser_at(music, "rebuild", &[], "rebuild the iTunesDB from the music files already on the iPod", &common());
+    cli.parser(i).add(Arg::pos("name", Nargs::Optional).help("iPod name (default: iPod)"));
+    for (name, help) in [("export", "copy music off with tags and readable names"), ("playlist", "make and edit playlists")] {
+        let i = cli.add_parser_at(music, name, &[], help, &common());
+        cli.parser(i).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
+    }
+
+    let em = cli.add_parser_at(0, "emulate", &[], "boot a firmware or card image in emupod", &[]);
+    cli.parser(em).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
+    let fl = cli.add_parser_at(0, "flash", &[], "write iPod firmware to a CF/SD card (alias of `firmware write`)", &[]);
+    flash_args(cli.parser(fl));
+    cli
+}
+
+/// burn's arguments (card burn).
+fn burn_args(burn: &mut Parser) {
     burn.add(Arg::pos("image", Nargs::One).help("the card image file"));
     burn.add(Arg::pos("device", Nargs::Optional).help("target disk, e.g. /dev/sdc (else a chooser of removable disks)"));
     burn.add(Arg::flag(&["--yes"]).help("skip the typed ERASE confirmation"));
     burn.add(Arg::flag(&["--dry-run"]).help("check everything and show the plan; write nothing"));
     burn.add(Arg::flag(&["--no-verify"]).help("don't read the card back afterwards"));
+}
 
-    let fl = cli.add_parser("flash", &[], "write iPod firmware to a CF/SD card (erases it)", &[]);
+/// flash's arguments (firmware write, and its alias flash).
+fn flash_args(fl: &mut Parser) {
     fl.add(Arg::pos("device", Nargs::Optional).help("target disk, e.g. /dev/sdb (else interactive chooser)"));
     fl.add(Arg::opt(&["--firmware"]).help(
         "firmware image: raw Firmware-*, .bin.gz or .ipsw (default: choose from firmware/firmware.json)"));
@@ -422,7 +463,32 @@ fn build_cli() -> Cli {
         "cap the data partition to N decimal GB, overriding the firmware's manifest limit (use to probe an \
          early firmware's real disk-size ceiling)"));
     fl.add(Arg::flag(&["--self-test"]).help("validate layout logic and exit (no hardware)"));
-    cli
+}
+
+/// 0.x command names and their 1.0 spelling.
+const RENAMED: [(&str, &str); 10] = [
+    ("ls", "music ls"), ("list", "music ls"), ("add", "music add"), ("rm", "music rm"), ("remove", "music rm"),
+    ("delete", "music rm"), ("erase", "music rm"), ("init", "music init"), ("rebuild", "music rebuild"),
+    ("burn", "card burn"),
+];
+
+/// A 0.x command name in place of the command: say its new name. The
+/// top-level options before it are skipped (--mount and --raw take a value).
+fn renamed_command(args: &[String]) -> Option<&'static str> {
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "--mount" || a == "--raw" {
+            i += 2;
+            continue;
+        }
+        if a.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        return RENAMED.iter().find(|(old, _)| *old == a).map(|(_, new)| *new);
+    }
+    None
 }
 
 fn s(ns: &Ns, k: &str) -> Option<String> {
@@ -446,15 +512,41 @@ fn list(ns: &Ns, k: &str) -> Vec<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(new) = renamed_command(&args) {
+        eprintln!("flashpod: that command is now `flashpod {}` (flashpod 1.0 groups commands: run `flashpod --help`).", new);
+        std::process::exit(2);
+    }
     let mut ns = match build_cli().parse_args(&args) {
         Ok(ns) => ns,
         Err(code) => std::process::exit(code),
     };
-    let command = s(&ns, "command").unwrap_or_default();
+    // the 1.0 names run the handlers the 0.x names did: `command` becomes
+    // that handler's name, `group` remembers the spelling (for sudo)
+    let group = s(&ns, "command").unwrap_or_default();
+    let sub = match group.as_str() {
+        "music" => s(&ns, "music_command"),
+        "firmware" => s(&ns, "firmware_command"),
+        "card" => s(&ns, "card_command"),
+        _ => None,
+    };
+    let handler = match (group.as_str(), sub.as_deref()) {
+        ("music", Some(m)) if !matches!(m, "export" | "playlist") => m.to_string(),
+        ("firmware", Some("write")) | ("flash", None) => "flash".to_string(),
+        ("card", Some("burn")) => "burn".to_string(),
+        (g, Some(m)) => format!("{} {}", g, m),
+        (g, None) => g.to_string(),
+    };
+    ns.insert("command".into(), Val::Str(handler.clone()));
+    ns.insert("group".into(), Val::Str(group.clone()));
+    let command = handler;
     let code = match command.as_str() {
         "flash" => cmd_flash(&mut ns),
         "burn" => cmd_burn(&ns),
-        _ => data_command(&ns, &command),
+        "ls" | "list" | "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild" => data_command(&ns, &command),
+        other => {
+            eprintln!("flashpod {}: not built yet (flashpod 1.0, epic #88).", other);
+            2
+        }
     };
     std::process::exit(code);
 }

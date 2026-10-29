@@ -219,27 +219,34 @@ impl Cli {
 
     /// add_subparsers(dest=dest), required.
     pub fn add_subparsers(&mut self, dest: &str) {
+        self.add_subparsers_at(0, dest)
+    }
+
+    /// add_subparsers on parser `pi` (0 = the top; a subcommand's index
+    /// from add_parser_at nests a level): `firmware write`.
+    pub fn add_subparsers_at(&mut self, pi: usize, dest: &str) {
         let mut a = Action::new(Kind::Sub);
         a.dest = Some(dest.to_string());
         a.nargs = Nargs::Parser;
         a.required = true;
-        let i = self.parsers[0].push(a);
-        self.parsers[0].sub_action = Some(i);
+        let i = self.parsers[pi].push(a);
+        self.parsers[pi].sub_action = Some(i);
     }
 
-    /// sub.add_parser(name, aliases, help, parents=[common] when `common`).
-    pub fn add_parser(&mut self, name: &str, aliases: &[&str], help: &str, common: &[Arg]) -> &mut Parser {
-        let prog = format!("{} {}", self.parsers[0].prog, name);
+    /// sub.add_parser(name, aliases, help, parents=[common] when `common`)
+    /// under parser `pi`; returns the new parser's index.
+    pub fn add_parser_at(&mut self, pi: usize, name: &str, aliases: &[&str], help: &str, common: &[Arg]) -> usize {
+        let prog = format!("{} {}", self.parsers[pi].prog, name);
         let mut p = Parser::new(&prog, None);
         for c in common {
             p.push(c.0.clone());
         }
         let idx = self.parsers.len();
         self.parsers.push(p);
-        let top = &mut self.parsers[0];
-        top.subs.push((name.to_string(), idx));
+        let parent = &mut self.parsers[pi];
+        parent.subs.push((name.to_string(), idx));
         for a in aliases {
-            top.subs.push((a.to_string(), idx));
+            parent.subs.push((a.to_string(), idx));
         }
         let mut pseudo = Action::new(Kind::Store);
         let mut mv = name.to_string();
@@ -249,11 +256,16 @@ impl Cli {
         pseudo.dest = Some(name.to_string());
         pseudo.metavar = Some(mv);
         pseudo.help = Some(help.to_string());
-        top.sub_help.push(pseudo);
-        let choices: Vec<String> = top.subs.iter().map(|(n, _)| n.clone()).collect();
-        let si = top.sub_action.unwrap();
-        top.actions[si].choices = Some(choices);
-        &mut self.parsers[idx]
+        parent.sub_help.push(pseudo);
+        let choices: Vec<String> = parent.subs.iter().map(|(n, _)| n.clone()).collect();
+        let si = parent.sub_action.unwrap();
+        parent.actions[si].choices = Some(choices);
+        idx
+    }
+
+    /// The parser at index `pi`, to add its arguments.
+    pub fn parser(&mut self, pi: usize) -> &mut Parser {
+        &mut self.parsers[pi]
     }
 }
 

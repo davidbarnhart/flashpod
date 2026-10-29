@@ -34,7 +34,14 @@ fn ns_list(ns: &Ns, k: &str) -> Vec<String> {
 /// _cmd_args for the data commands (ls/add/rm/init/rebuild).
 pub fn cmd_args(ns: &Ns) -> Vec<String> {
     let c = ns_s(ns, "command").unwrap_or_default();
-    let mut a = vec![c.clone()];
+    // the 1.0 spelling of the command (main sets group): music ls, card
+    // burn, firmware write; flash stays flash
+    let mut a = match (ns_s(ns, "group").as_deref(), c.as_str()) {
+        (Some("music"), _) => vec!["music".to_string(), c.clone()],
+        (Some("card"), _) => vec!["card".to_string(), c.clone()],
+        (Some("firmware"), "flash") => vec!["firmware".to_string(), "write".to_string()],
+        _ => vec![c.clone()],
+    };
     match c.as_str() {
         "ls" | "list" => a.extend(ns_s(ns, "field").filter(|s| !s.is_empty())),
         "add" => a.extend(ns_list(ns, "files")),

@@ -21,6 +21,9 @@ import subprocess
 import sys
 import termios
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import layout1  # noqa: E402
+
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CASES = [
@@ -87,23 +90,37 @@ def run_pty(cmd, env, cols=80):
     return p.wait(), out, b""
 
 
-def compare(rust):
+def compare(rust, layout_1=False):
     py = [sys.executable, "-m", "flashpod"]
     bad = []
     n = 0
+
+    def rs(argv):
+        return [rust] + (layout1.argv_1_0(argv) if layout_1 else argv)
+
+    def back(r):
+        # (rc, out, err) with 1.0 program names read back
+        if not layout_1:
+            return r
+        def n(x):
+            if isinstance(x, bytes):
+                return layout1.normalize(x.decode("utf-8", "surrogateescape"))[0].encode("utf-8", "surrogateescape")
+            return layout1.normalize(x)[0]
+        return tuple(n(x) if i else x for i, x in enumerate(r))
+
     for line in CASES:
         argv = split(line)
         for cols in WIDTHS:
             env = env_for(cols)
             a = run_pipe(py + argv, env)
-            b = run_pipe([rust] + argv, env)
+            b = back(run_pipe(rs(argv), env))
             n += 1
             if a != b:
                 bad.append((line, "COLUMNS=%s" % cols, a, b))
         for cols in (80, 44):
             env = env_for(None)
             a = run_pty(py + argv, env, cols)
-            b = run_pty([rust] + argv, env, cols)
+            b = back(run_pty(rs(argv), env, cols))
             n += 1
             if a != b:
                 bad.append((line, "pty %d cols" % cols, a, b))
@@ -113,10 +130,12 @@ def compare(rust):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rust", required=True)
+    ap.add_argument("--layout-1", action="store_true",
+                    help="the Rust side runs the 1.0 command names; report which lines differ")
     ap.add_argument("--show", action="store_true",
                     help="print the first difference in full")
     opts = ap.parse_args()
-    n, bad = compare(os.path.abspath(opts.rust))
+    n, bad = compare(os.path.abspath(opts.rust), opts.layout_1)
     if not bad:
         print("IDENTICAL: %d runs (%d argument lines x %d pipe widths + 2 "
               "pty widths)" % (n, len(CASES), len(WIDTHS)))

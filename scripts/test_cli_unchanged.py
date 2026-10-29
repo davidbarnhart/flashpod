@@ -40,6 +40,7 @@ import os
 import re
 import select
 import shlex
+import layout1
 import shutil
 import struct
 import subprocess
@@ -79,6 +80,8 @@ sys.exit(cli.main())
 '''
 
 RUST_MODE = False          # set by --rust
+LAYOUT_1 = False           # set by --layout-1: the Rust side runs 1.0 names
+NORMALIZED = [0]           # output lines whose 1.0 program names were read back
 IMG = "ipod.img"
 MNT = "ipod-mount"
 
@@ -660,6 +663,8 @@ def run_scenario(name, steps, tree, work, fixtures, runner, rust=None):
             records.append({"step": i, "py": step["py"], "sha": sha(img)})
             continue
         argv = [expand_arg(a, ctx) for a in step["argv"]]
+        if rust and LAYOUT_1:
+            argv = layout1.argv_1_0(argv)
         cmd = ([rust] if rust else [sys.executable, runner]) + argv
         extra = {k: v.format(**ctx) for k, v in (step.get("env") or {}).items()}
         if RUST_MODE:
@@ -675,6 +680,10 @@ def run_scenario(name, steps, tree, work, fixtures, runner, rust=None):
             rc, out, err = run_pty(cmd, env, work, answers)
         else:
             rc, out, err = run_pipe(cmd, env, work)
+        if rust and LAYOUT_1:
+            out, n1 = layout1.normalize(out)
+            err, n2 = layout1.normalize(err)
+            NORMALIZED[0] += n1 + n2
         records.append({"step": i, "argv": " ".join(step["argv"]),
                         "rc": rc, "stdout": out, "stderr": err,
                         "sha": sha(img), "changed": sha(img) != before})
@@ -894,6 +903,10 @@ def main():
     ap.add_argument("--rust", metavar="BIN",
                     help="run the tree-under-test side with this Rust "
                          "flashpod binary (the baseline stays Python)")
+    ap.add_argument("--layout-1", action="store_true",
+                    help="with --rust: run the 1.0 command names (music ls, "
+                         "firmware write, ...) against the baseline's 0.x ones; "
+                         "1.0 program names in output are read back first")
     ap.add_argument("--self", action="store_true",
                     help="compare the baseline against itself (determinism)")
     ap.add_argument("--mutants", action="store_true",
@@ -904,8 +917,9 @@ def main():
                     help="print every baseline step's output (for writing "
                          "expectations)")
     opts = ap.parse_args()
-    global RUST_MODE
+    global RUST_MODE, LAYOUT_1
     RUST_MODE = bool(opts.rust)
+    LAYOUT_1 = bool(opts.layout_1)
 
     baseline = os.path.abspath(opts.baseline)
     tree = os.path.abspath(baseline if opts.self else opts.tree)
@@ -967,6 +981,10 @@ def main():
             print("  - %s step %d: %s" % (n, i, why))
         for why, old, new_s in NAMED_REWRITES:
             print("  - everywhere: %r -> %r (%s)" % (old, new_s, why))
+        if LAYOUT_1:
+            print("  - layout 1.0: the Rust side ran the 1.0 command names; "
+                  "%d output line(s) had their 1.0 program name read back"
+                  % NORMALIZED[0])
 
         if opts.mutants:
             failed_to_catch = []

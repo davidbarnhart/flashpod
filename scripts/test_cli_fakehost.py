@@ -46,6 +46,11 @@ import subprocess
 import sys
 import tempfile
 
+import layout1
+
+LAYOUT_1 = False           # set by --layout-1
+NORMALIZED = [0]           # output lines / call words read back from 1.0 names
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 TREE = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
@@ -1038,6 +1043,13 @@ def run_scenario(name, sc, mode, cards, build, rust, root):
         selfcmd = [os.path.realpath(rust)]
     recs = []
     mounted = False
+
+    def back(text):
+        if build != "rust" or not LAYOUT_1:
+            return text
+        text, n = layout1.normalize_calls(text)
+        NORMALIZED[0] += n
+        return text
     try:
         for i, step in enumerate(sc["steps"]):
             if mode not in step.get("modes", (mode,)):
@@ -1046,7 +1058,12 @@ def run_scenario(name, sc, mode, cards, build, rust, root):
             step = dict(step, argv=[a.format(fw=FIXTURE_FW, ipod_img=cards["ipod"], blank_img=cards["blank"],
                                              burntail_img=cards["burntail"])
                                     for a in step["argv"]])
+            if build == "rust" and LAYOUT_1:
+                step = dict(step, argv=layout1.argv_1_0(step["argv"]))
             rc, out, err = run_step(run, step, ["flashpod"])
+            if build == "rust" and LAYOUT_1:
+                (out, n1), (err, n2) = layout1.normalize(out), layout1.normalize(err)
+                NORMALIZED[0] += n1 + n2
             with open(os.path.join(run, "calls.log")) as f:
                 calls = [json.loads(l) for l in f if l.strip()]
             with open(os.path.join(run, "state.json")) as f:
@@ -1056,7 +1073,7 @@ def run_scenario(name, sc, mode, cards, build, rust, root):
             recs.append({
                 "step": i, "argv": step["argv"], "rc": rc,
                 "stdout": normalize(out, run, selfcmd), "stderr": normalize(err, run, selfcmd),
-                "calls": ["%s %s uid=%d" % (c["tool"], normalize(json.dumps(c["argv"]), run, selfcmd), c["euid"])
+                "calls": ["%s %s uid=%d" % (c["tool"], back(normalize(json.dumps(c["argv"]), run, selfcmd)), c["euid"])
                           for c in calls],
                 "mounts": [(m["dev"], m["mnt"]) for m in state["mounts"]],
                 "gone": [d["name"] for d in state["disks"] if d.get("gone")],
@@ -1075,6 +1092,9 @@ def main():
         return 0
     ap = argparse.ArgumentParser()
     ap.add_argument("--rust", required=True)
+    ap.add_argument("--layout-1", action="store_true",
+                    help="the Rust side runs the 1.0 command names (music ls, firmware write, ...); "
+                         "1.0 names in its output and recorded calls are read back first")
     ap.add_argument("--mode", choices=("root", "user"),
                     default="root" if os.geteuid() == 0 else "user")
     ap.add_argument("--only", nargs="*")
@@ -1084,6 +1104,8 @@ def main():
                     help="after the comparison, run every binary in DIR (each a deliberately broken "
                          "build) against the same Python results; each must differ somewhere")
     opts = ap.parse_args()
+    global LAYOUT_1
+    LAYOUT_1 = opts.layout_1
     if opts.mode == "root" and os.geteuid() != 0:
         sys.exit("--mode root needs root (sudo)")
     base = "/var/tmp" if os.path.isdir("/var/tmp") else None
@@ -1141,6 +1163,9 @@ def main():
                     missed.append(m)
         if not bad:
             print("IDENTICAL: %d steps on the fake host (%s mode)" % (n, opts.mode))
+            if LAYOUT_1:
+                print("  layout 1.0: the Rust side ran the 1.0 command names; %d output line(s) or "
+                      "recorded call(s) had their 1.0 names read back" % NORMALIZED[0])
             return 1 if missed else 0
         print("DIFFERENT: %d of %d steps (%s mode)" % (len(bad), n, opts.mode))
         for name, i, argv, key, x, y in bad:
