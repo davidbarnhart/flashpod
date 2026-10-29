@@ -35,19 +35,6 @@ impl SplitMix64 {
     }
 }
 
-/// Seconds since the Unix epoch, supplied by the caller.
-pub trait Clock {
-    fn now(&self) -> i64;
-}
-
-pub struct FixedClock(pub i64);
-
-impl Clock for FixedClock {
-    fn now(&self) -> i64 {
-        self.0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

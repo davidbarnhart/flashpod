@@ -47,7 +47,7 @@ pub trait Host: Hooks {
 }
 
 /// Run one command.
-pub fn run(cmd: &Value, blob: &[u8], dev: &mut dyn BlockDevice, host: &mut dyn Host) -> Value {
+pub(crate) fn run(cmd: &Value, blob: &[u8], dev: &mut dyn BlockDevice, host: &mut dyn Host) -> Value {
     match run_op(cmd, blob, dev, host) {
         Ok(v) => json!({"ok": true, "value": v}),
         Err(e) => json!({"ok": false, "error": e.to_json()}),
@@ -138,7 +138,7 @@ fn options(c: &Value) -> Options {
 }
 
 /// card._firmware_bytes, and a zip holding an .ipsw (the largest one).
-pub fn firmware_of(blob: &[u8]) -> Result<Vec<u8>, Error> {
+pub(crate) fn firmware_of(blob: &[u8]) -> Result<Vec<u8>, Error> {
     match card::firmware_bytes(blob, false) {
         Ok(fw) => Ok(fw),
         Err(first) => {

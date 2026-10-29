@@ -11,12 +11,12 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashSet};
 
-pub const DB_PATH: &str = "iPod_Control/iTunes/iTunesDB";
+pub(crate) const DB_PATH: &str = "iPod_Control/iTunes/iTunesDB";
 /// library.IPOD_DB_SIZE_LIMIT
-pub const IPOD_DB_SIZE_LIMIT: i64 = 3_600_000;
+pub(crate) const IPOD_DB_SIZE_LIMIT: i64 = 3_600_000;
 /// library.IPOD_PATCHED_TRACK_LIMIT
-pub const IPOD_PATCHED_TRACK_LIMIT: i64 = 32_000;
-pub const LIBRARY_FIX: &str = "library-leak";
+pub(crate) const IPOD_PATCHED_TRACK_LIMIT: i64 = 32_000;
+pub(crate) const LIBRARY_FIX: &str = "library-leak";
 
 /// What the Python library reads from FLASHPOD_DB_LIMIT (no environment
 /// in wasm: the caller passes it).

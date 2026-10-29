@@ -3,9 +3,9 @@
 use crate::block::BlockDevice;
 use std::io;
 
-pub const SECTOR: u64 = 512;
-pub const FAT32_MIN_CLUSTERS: u64 = 65525;
-pub const FAT32_MAX_CLUSTERS: u64 = 268_435_445;
+pub(crate) const SECTOR: u64 = 512;
+pub(crate) const FAT32_MIN_CLUSTERS: u64 = 65525;
+pub(crate) const FAT32_MAX_CLUSTERS: u64 = 268_435_445;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Geometry {
@@ -19,13 +19,13 @@ pub struct Geometry {
 }
 
 /// fat32.fat_size_sectors (fatgen103's conservative formula).
-pub fn fat_size_sectors(total: u64, reserved: u64, num_fats: u64, spc: u64) -> u64 {
+pub(crate) fn fat_size_sectors(total: u64, reserved: u64, num_fats: u64, spc: u64) -> u64 {
     let tmp1 = total as i64 - reserved as i64;
     let tmp2 = ((256 * spc + num_fats) / 2) as i64;
     ((tmp1 + tmp2 - 1).div_euclid(tmp2)).max(0) as u64
 }
 
-pub fn geometry(total: u64, spc: u64) -> Geometry {
+pub(crate) fn geometry(total: u64, spc: u64) -> Geometry {
     let (reserved, num_fats) = (32u64, 2u64);
     let fat_size = fat_size_sectors(total, reserved, num_fats, spc);
     let data = total as i64 - reserved as i64 - (num_fats * fat_size) as i64;
@@ -98,7 +98,7 @@ fn fsinfo_sector(g: &Geometry) -> [u8; 512] {
     fs
 }
 
-pub fn write_zeros(dev: &mut dyn BlockDevice, base: u64, length: u64) -> io::Result<()> {
+pub(crate) fn write_zeros(dev: &mut dyn BlockDevice, base: u64, length: u64) -> io::Result<()> {
     let chunk = vec![0u8; 1 << 20];
     let mut off = 0;
     while off < length {

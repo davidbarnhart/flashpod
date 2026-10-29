@@ -6,12 +6,12 @@ use crate::block::BlockDevice;
 use crate::text::{casefold, latin1, py_repr, u16_at, u32_at, utf16le_replace};
 use std::collections::HashSet;
 
-pub const SECTOR: u64 = 512;
-pub const ATTR_VOLUME_ID: u8 = 0x08;
+pub(crate) const SECTOR: u64 = 512;
+pub(crate) const ATTR_VOLUME_ID: u8 = 0x08;
 pub const ATTR_DIRECTORY: u8 = 0x10;
-pub const ATTR_LFN: u8 = 0x0F;
-pub const FAT32_EOC_MIN: u32 = 0x0FFF_FFF8;
-pub const FAT_MASK: u32 = 0x0FFF_FFFF;
+pub(crate) const ATTR_LFN: u8 = 0x0F;
+pub(crate) const FAT32_EOC_MIN: u32 = 0x0FFF_FFF8;
+pub(crate) const FAT_MASK: u32 = 0x0FFF_FFFF;
 /// target.IMAGE_MAX_XFER: sectors per read on an image.
 pub const IMAGE_MAX_XFER: u64 = 2048;
 
@@ -367,7 +367,7 @@ impl<'a> Fat32<'a> {
 
 /// target.find_fat_partition: the FAT partition's start (0 for a bare FAT
 /// volume), or None.
-pub fn find_fat_partition(boot: &[u8]) -> Option<u64> {
+pub(crate) fn find_fat_partition(boot: &[u8]) -> Option<u64> {
     if boot.len() < 512 {
         return None;
     }
@@ -417,8 +417,8 @@ pub fn open_image_fat(dev: &mut dyn BlockDevice) -> Result<Fat32<'_>, OpenError>
 // directory slots, short names, long-name entries, FSInfo), so the bytes on
 // the card match.
 // ---------------------------------------------------------------------------
-pub const EOC: u32 = 0x0FFF_FFFF;
-pub const FREE: u32 = 0;
+pub(crate) const EOC: u32 = 0x0FFF_FFFF;
+pub(crate) const FREE: u32 = 0;
 const FAT_DATE: u16 = ((2026 - 1980) << 9) | (6 << 5) | 1;
 const INVALID_83: &[u8] = b"+,;=[] ";
 

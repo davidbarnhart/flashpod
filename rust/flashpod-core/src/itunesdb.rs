@@ -6,17 +6,17 @@ use crate::text::{slice, u32_at, u64_at, utf16le_replace};
 use serde::Serialize;
 use std::collections::HashMap;
 
-pub const MHOD_TITLE: u32 = 1;
-pub const MHOD_LOCATION: u32 = 2;
-pub const MHOD_ALBUM: u32 = 3;
-pub const MHOD_ARTIST: u32 = 4;
-pub const MHOD_GENRE: u32 = 5;
-pub const MHOD_FILETYPE: u32 = 6;
-pub const MHOD_COMPOSER: u32 = 12;
-pub const MHOD_PLAYLIST_POS: u32 = 100;
-pub const MAC_EPOCH_OFFSET: i64 = 2_082_844_800;
-pub const MARKER_MP3: [u8; 4] = *b"\x00MP3";
-pub const MARKER_FLAC: [u8; 4] = *b"\x00FLA";
+pub(crate) const MHOD_TITLE: u32 = 1;
+pub(crate) const MHOD_LOCATION: u32 = 2;
+pub(crate) const MHOD_ALBUM: u32 = 3;
+pub(crate) const MHOD_ARTIST: u32 = 4;
+pub(crate) const MHOD_GENRE: u32 = 5;
+pub(crate) const MHOD_FILETYPE: u32 = 6;
+pub(crate) const MHOD_COMPOSER: u32 = 12;
+pub(crate) const MHOD_PLAYLIST_POS: u32 = 100;
+pub(crate) const MAC_EPOCH_OFFSET: i64 = 2_082_844_800;
+pub(crate) const MARKER_MP3: [u8; 4] = *b"\x00MP3";
+pub(crate) const MARKER_FLAC: [u8; 4] = *b"\x00FLA";
 const STR_MHODS: [u32; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 12];
 
 #[derive(Debug, Clone, Default)]
@@ -184,7 +184,7 @@ fn parse_mhit(buf: &[u8], off: usize, ent: &mut Entropy) -> Result<(Track, usize
 }
 
 /// itunesdb.parse_bytes. Err is the ValueError / struct.error message.
-pub fn parse_bytes(buf: &[u8]) -> Result<Library, String> {
+pub(crate) fn parse_bytes(buf: &[u8]) -> Result<Library, String> {
     parse_bytes_with(buf, &mut Entropy::new(0, 0))
 }
 

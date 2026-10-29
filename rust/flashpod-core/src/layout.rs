@@ -9,7 +9,7 @@ pub const FW_BLOCKS: u64 = 65536; // 32 MiB firmware partition
 pub const DATA_START: u64 = FW_START + FW_BLOCKS; // 65599
 pub const LBA28_MAX: u64 = 0x1000_0000; // 2^28 sectors = 128 GiB
 pub const TAIL_RESERVE: u64 = 2048; // sectors left unallocated at the end
-pub const FAT_TYPES: [u8; 2] = [0x0b, 0x0c];
+pub(crate) const FAT_TYPES: [u8; 2] = [0x0b, 0x0c];
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Partition {

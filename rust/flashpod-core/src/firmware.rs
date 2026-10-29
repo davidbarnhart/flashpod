@@ -7,12 +7,12 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 pub const CATALOG_JSON: &str = include_str!("../../../flashpod/firmware/firmware.json");
-pub const FIXES_JSON: &str = include_str!("../../../flashpod/firmware/fixes.json");
+pub(crate) const FIXES_JSON: &str = include_str!("../../../flashpod/firmware/fixes.json");
 
-pub const PP5002_OSOS_ADDR: u32 = 0x2800_0000;
-pub const VERSION_WORD_OFFSET: usize = 0x3174c;
+pub(crate) const PP5002_OSOS_ADDR: u32 = 0x2800_0000;
+pub(crate) const VERSION_WORD_OFFSET: usize = 0x3174c;
 
-pub fn version_word_means(w: u32) -> Option<&'static str> {
+pub(crate) fn version_word_means(w: u32) -> Option<&'static str> {
     match w {
         0x0150_8000 => Some("1.5"),
         0x0160_8000 => Some("1.6"),
@@ -20,14 +20,14 @@ pub fn version_word_means(w: u32) -> Option<&'static str> {
     }
 }
 
-pub fn known_osos(sha: &str) -> Option<&'static str> {
+pub(crate) fn known_osos(sha: &str) -> Option<&'static str> {
     match sha {
         "109ed777110982e2a31d7f724e4a7f78b73bef17bee90952e2c35c79f0714e21" => Some("openpod 1.6 gate build (withdrawn)"),
         _ => None,
     }
 }
 
-pub fn known_aupd(sha: &str) -> Option<&'static str> {
+pub(crate) fn known_aupd(sha: &str) -> Option<&'static str> {
     match sha {
         "dc68f0fc5d9aae12a30a293507969821915b432d07e1e6b83ccf861650a656fb" => {
             Some("flashpod 1.6 (openpod's disk-mode program, with large disks)")
@@ -45,17 +45,17 @@ pub fn catalog() -> Vec<Value> {
         .unwrap_or_default()
 }
 
-pub fn fixes_table() -> Option<Value> {
+pub(crate) fn fixes_table() -> Option<Value> {
     serde_json::from_str(FIXES_JSON).ok()
 }
 
-pub fn sha256_hex(b: &[u8]) -> String {
+pub(crate) fn sha256_hex(b: &[u8]) -> String {
     let d = Sha256::digest(b);
     d.iter().map(|x| format!("{:02x}", x)).collect()
 }
 
 /// firmware.walk_directory: (entry offset, type, 8 fields).
-pub fn walk_directory(fw: &[u8], base: usize) -> Vec<(usize, [u8; 4], [u32; 8])> {
+pub(crate) fn walk_directory(fw: &[u8], base: usize) -> Vec<(usize, [u8; 4], [u32; 8])> {
     let mut out = Vec::new();
     let mut off = base;
     while off < base + 10 * 40 {
@@ -75,7 +75,7 @@ pub fn walk_directory(fw: &[u8], base: usize) -> Vec<(usize, [u8; 4], [u32; 8])>
 }
 
 /// firmware.aupd_armed.
-pub fn aupd_armed(fw: &[u8]) -> Option<bool> {
+pub(crate) fn aupd_armed(fw: &[u8]) -> Option<bool> {
     if fw.len() < 0x108 || &fw[0x100..0x104] != b"]ih[" {
         return None;
     }
@@ -104,7 +104,7 @@ fn parse_addr(s: &str) -> i64 {
 
 /// firmware.fixes_present: names of the fixes whose edits and appended code
 /// are all there. `aupd` None means "not read".
-pub fn fixes_present(osos: &[u8], addr: u32, table: &Value, aupd: Option<(&[u8], u32)>) -> Vec<String> {
+pub(crate) fn fixes_present(osos: &[u8], addr: u32, table: &Value, aupd: Option<(&[u8], u32)>) -> Vec<String> {
     let mut found = Vec::new();
     for fix in table.get("fixes").and_then(Value::as_array).cloned().unwrap_or_default() {
         let mut ok = true;
@@ -154,7 +154,7 @@ pub fn fixes_present(osos: &[u8], addr: u32, table: &Value, aupd: Option<(&[u8],
 
 /// firmware.describe_installed. `read(offset, n)` reads the firmware
 /// partition (short at its end, empty past it).
-pub fn describe_installed(read: &mut dyn FnMut(i64, usize) -> Vec<u8>, catalog: &[Value]) -> Value {
+pub(crate) fn describe_installed(read: &mut dyn FnMut(i64, usize) -> Vec<u8>, catalog: &[Value]) -> Value {
     if read(0, 4) != b"{{~~" {
         return json!({"present": false, "reason": "no STOP boot block"});
     }
@@ -262,7 +262,7 @@ pub fn describe_installed(read: &mut dyn FnMut(i64, usize) -> Vec<u8>, catalog: 
 
 /// The Firmware-* image inside raw bytes / a .bin.gz / an .ipsw (zip),
 /// by magic bytes, as load_firmware does (before the fix-ups).
-pub fn unwrap_container(data: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn unwrap_container(data: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Read;
     if data.starts_with(b"PK") {
         let mut zf = zip::ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| e.to_string())?;
