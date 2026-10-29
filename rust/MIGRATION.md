@@ -18,11 +18,15 @@ commands — is the stable contract and has not changed.
 | `firmware::{sha, CATALOG_JSON, catalog}` | server | unchanged |
 | `fat::open_image_fat` | server (3 uses) | unchanged |
 | `card::{flash, FlashOptions, firmware_bytes}` | server | unchanged (see below for FlashOptions) |
-| `layout::{partitions, layout_facts, LBA}` | server | unchanged |
+| `layout::{partitions, layout_facts, LBA28_MAX}` | server | unchanged |
 
-`card::FlashOptions` gains `mac: bool` and `hfs_time: u32` on branch
-claude/hfsplus (#104). Code that builds it with `..Default::default()`
-is unaffected; code that names every field must add the two.
+`card::FlashOptions` gains two fields on branch claude/hfsplus (#104):
+`mac: bool` (default `false`: an MBR + FAT32 card, as before) and
+`hfs_time: u32` (default `0`; only read when `mac` is true, as the HFS+
+volume's dates in seconds since 1904). FlashOptions derives `Default`, so
+a struct literal keeps today's behaviour with `..Default::default()`
+after its four fields. emupod's server (cards.rs:933) names all four
+fields and no default, so it needs that one addition at the bump.
 
 ### Now crate-private (no consumer named them)
 
