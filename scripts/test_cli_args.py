@@ -102,6 +102,8 @@ CASES_1_0 = [
     "firmware extract", "firmware extract x", "firmware extract x -o", "firmware extract x -o f --image bogus",
     "firmware extract -o f", "firmware extract a b -o f",
     "music export --to", "music export --other-files --no-other-files", "music export x",
+    "music playlist", "music playlist -h", "music playlist new", "music playlist add x",
+    "music playlist rm -h", "music playlist delete", "music playlist ls a b", "music playlist bogus",
 ]
 
 

@@ -47,6 +47,21 @@ pub fn cmd_args(ns: &Ns) -> Vec<String> {
         "add" => a.extend(ns_list(ns, "files")),
         "rm" | "remove" | "delete" | "erase" => a.extend(ns_list(ns, "what")),
         "init" | "rebuild" => a.extend(ns_s(ns, "name").filter(|s| !s.is_empty())),
+        "export" => {
+            if let Some(t) = ns_s(ns, "to").filter(|s| !s.is_empty()) {
+                a.extend(["--to".into(), t]);
+            }
+            for (flag, k) in [("--other-files", "other_files"), ("--no-other-files", "no_other_files")] {
+                if ns_b(ns, k) {
+                    a.push(flag.into());
+                }
+            }
+        }
+        "playlist" => {
+            a.extend(ns_s(ns, "playlist_command"));
+            a.extend(ns_s(ns, "name").filter(|s| !s.is_empty()));
+            a.extend(ns_list(ns, "ids"));
+        }
         "burn" => {
             a.extend(ns_s(ns, "image"));
             a.extend(ns_s(ns, "device").filter(|s| !s.is_empty()));

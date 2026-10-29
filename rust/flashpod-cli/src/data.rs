@@ -134,6 +134,72 @@ fn dispatch(t: &mut dyn Target, cx: &Ctx, cmd: Cmd, ent: &mut flashpod_core::ent
         Cmd::Rebuild(name) => rebuild(t, cx, name.unwrap_or("iPod"), ent),
         Cmd::Rm(what) => rm(t, cx, what, ent),
         Cmd::Add(paths) => add(t, cx, paths, ent, false),
+        Cmd::Playlist(action, name, ids) => playlist(t, cx, action, name, ids, ent),
+    }
+}
+
+/// music playlist: ls [NAME], new NAME [IDS], add NAME IDS, rm NAME IDS
+/// (the tracks stay on the iPod), delete NAME. One load, one save.
+fn playlist(t: &mut dyn Target, cx: &Ctx, action: &str, name: Option<&str>, ids: &[String],
+            ent: &mut flashpod_core::entropy::Entropy) -> i32 {
+    use flashpod_core::playlist as pl;
+    let mut ids_n = Vec::new();
+    for s in ids {
+        match s.parse::<u32>() {
+            Ok(n) => ids_n.push(n),
+            Err(_) => {
+                eprintln!("flashpod music playlist: {:?} is not a track id (ids from `flashpod music ls all`)", s);
+                return 1;
+            }
+        }
+    }
+    let mut lib = match flashpod_core::ops::load(t, ent) {
+        Ok(l) => l,
+        Err(e) => return cx.fail(&e),
+    };
+    let name = name.unwrap_or("");
+    if action == "ls" {
+        if name.is_empty() {
+            if lib.playlists.is_empty() {
+                println!("No playlists on {} (make one: flashpod music playlist new NAME [ids]).", cx.node);
+            }
+            for p in &lib.playlists {
+                println!("{}  ({} track{})", p.name, p.ids.len(), if p.ids.len() == 1 { "" } else { "s" });
+            }
+            return 0;
+        }
+        let want = name.trim().to_lowercase();
+        let Some(p) = lib.playlists.iter().find(|p| p.name.trim().to_lowercase() == want) else {
+            eprintln!("flashpod music playlist: no playlist named {:?}", name);
+            return 1;
+        };
+        println!("{}  ({} track{})", p.name, p.ids.len(), if p.ids.len() == 1 { "" } else { "s" });
+        for id in &p.ids {
+            match lib.tracks.iter().find(|t| t.id == *id) {
+                Some(t) => println!("  {:>6}  {} - {}", id, t.artist.as_deref().unwrap_or("?"), t.title.as_deref().unwrap_or("?")),
+                None => println!("  {:>6}  (no such track)", id),
+            }
+        }
+        return 0;
+    }
+    let said = match action {
+        "new" => pl::create(&mut lib, name, &ids_n).map(|_| format!("Made playlist {:?} with {} track(s).", name.trim(), ids_n.len())),
+        "add" => pl::add(&mut lib, name, &ids_n).map(|n| format!("Added {} track(s) to {:?}.", n, name)),
+        "rm" => pl::take(&mut lib, name, &ids_n).map(|n| format!("Took {} track(s) out of {:?} (they stay on the iPod).", n, name)),
+        _ => pl::delete(&mut lib, name).map(|p| format!("Deleted playlist {:?} (its {} track(s) stay on the iPod).", p.name, p.ids.len())),
+    };
+    match said {
+        Ok(msg) => match t.save_library(&lib, ent) {
+            Ok(()) => {
+                println!("{}", msg);
+                0
+            }
+            Err(e) => cx.fail(&e),
+        },
+        Err(e) => {
+            eprintln!("flashpod music playlist: {}", e.message);
+            1
+        }
     }
 }
 
@@ -155,6 +221,8 @@ pub enum Cmd<'a> {
     Rebuild(Option<&'a str>),
     Rm(&'a [String]),
     Add(&'a [String]),
+    /// music playlist ACTION [NAME] [IDS] (#106).
+    Playlist(&'a str, Option<&'a str>, &'a [String]),
 }
 
 /// run_raw for an image: card.open_target(node, write=True) (the flock),

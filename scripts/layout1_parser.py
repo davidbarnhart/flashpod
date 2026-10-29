@@ -146,8 +146,21 @@ def build():
     g.add_argument("--other-files", action="store_true",
                    help="also export the files the database doesn't list, without asking")
     g.add_argument("--no-other-files", action="store_true", help="don't export them, and don't ask")
-    msub.add_parser("playlist", help="make and edit playlists", parents=[common]).add_argument(
-        "args", nargs="*", metavar="ARG")
+    pl = msub.add_parser("playlist", help="make and edit playlists", parents=[common])
+    psub = pl.add_subparsers(dest="playlist_command")
+    psub.required = True
+    psub.add_parser("ls", help="the playlists, or one playlist's tracks", parents=[common]).add_argument(
+        "name", nargs="?", help="a playlist to list the tracks of")
+    p = psub.add_parser("new", help="make a playlist", parents=[common])
+    p.add_argument("name", help="its name")
+    p.add_argument("ids", nargs="*", metavar="id", help="tracks to put in it, in order")
+    for name, help_ in (("add", "add tracks to a playlist"),
+                        ("rm", "take tracks out of a playlist (they stay on the iPod)")):
+        p = psub.add_parser(name, help=help_, parents=[common])
+        p.add_argument("name", help="the playlist")
+        p.add_argument("ids", nargs="+", metavar="id", help="track ids (from `flashpod music ls all`)")
+    psub.add_parser("delete", help="delete a playlist (its tracks stay on the iPod)", parents=[common]).add_argument(
+        "name", help="the playlist")
 
     sub.add_parser("emulate", help="boot a firmware or card image in emupod").add_argument(
         "args", nargs="*", metavar="ARG")

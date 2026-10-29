@@ -410,8 +410,20 @@ fn build_cli() -> Cli {
         Arg::flag(&["--other-files"]).help("also export the files the database doesn't list, without asking"),
         Arg::flag(&["--no-other-files"]).help("don't export them, and don't ask"),
     ]);
-    let i = cli.add_parser_at(music, "playlist", &[], "make and edit playlists", &common());
-    cli.parser(i).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
+    let pl = cli.add_parser_at(music, "playlist", &[], "make and edit playlists", &common());
+    cli.add_subparsers_at(pl, "playlist_command");
+    let i = cli.add_parser_at(pl, "ls", &[], "the playlists, or one playlist's tracks", &common());
+    cli.parser(i).add(Arg::pos("name", Nargs::Optional).help("a playlist to list the tracks of"));
+    let i = cli.add_parser_at(pl, "new", &[], "make a playlist", &common());
+    cli.parser(i).add(Arg::pos("name", Nargs::One).help("its name"));
+    cli.parser(i).add(Arg::pos("ids", Nargs::Star).metavar("id").help("tracks to put in it, in order"));
+    for (name, help) in [("add", "add tracks to a playlist"), ("rm", "take tracks out of a playlist (they stay on the iPod)")] {
+        let i = cli.add_parser_at(pl, name, &[], help, &common());
+        cli.parser(i).add(Arg::pos("name", Nargs::One).help("the playlist"));
+        cli.parser(i).add(Arg::pos("ids", Nargs::Plus).metavar("id").help("track ids (from `flashpod music ls all`)"));
+    }
+    let i = cli.add_parser_at(pl, "delete", &[], "delete a playlist (its tracks stay on the iPod)", &common());
+    cli.parser(i).add(Arg::pos("name", Nargs::One).help("the playlist"));
 
     let em = cli.add_parser_at(0, "emulate", &[], "boot a firmware or card image in emupod", &[]);
     cli.parser(em).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
@@ -520,7 +532,7 @@ fn main() {
         _ => None,
     };
     let handler = match (group.as_str(), sub.as_deref()) {
-        ("music", Some(m)) if m != "playlist" => m.to_string(),
+        ("music", Some(m)) => m.to_string(),
         ("firmware", Some("write")) | ("flash", None) => "flash".to_string(),
         ("card", Some("burn")) => "burn".to_string(),
         (g, Some(m)) => format!("{} {}", g, m),
@@ -533,7 +545,7 @@ fn main() {
         "flash" => cmd_flash(&mut ns),
         "firmware extract" => cmd_extract(&ns),
         "burn" => cmd_burn(&ns),
-        "ls" | "list" | "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild" | "export" => data_command(&ns, &command),
+        "ls" | "list" | "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild" | "export" | "playlist" => data_command(&ns, &command),
         other => {
             eprintln!("flashpod {}: not built yet (flashpod 1.0, epic #88).", other);
             2
@@ -598,6 +610,12 @@ fn cmd_extract(ns: &Ns) -> i32 {
     0
 }
 
+/// The command's file-like list: add's paths, or playlist's track ids.
+fn data_files(ns: &Ns) -> Vec<String> {
+    let ids = list(ns, "ids");
+    if ids.is_empty() { list(ns, "files") } else { ids }
+}
+
 /// music export's --to and --other-files / --no-other-files.
 fn export_opts(ns: &Ns) -> (Option<String>, Option<bool>) {
     let others = if b(ns, "other_files") { Some(true) } else if b(ns, "no_other_files") { Some(false) } else { None };
@@ -631,11 +649,12 @@ fn export_raw(ns: &Ns, node: &str, image: bool) -> i32 {
     export::export(&mut export::FatSource(fs), node, dest.as_deref(), others)
 }
 
-fn data_cmd<'a>(cmd: &str, name: &'a Option<String>, files: &'a [String], what: &'a [String]) -> data::Cmd<'a> {
+fn data_cmd<'a>(cmd: &str, name: &'a Option<String>, files: &'a [String], what: &'a [String], action: &'a str) -> data::Cmd<'a> {
     match cmd {
         "init" => data::Cmd::Init(name.as_deref().unwrap_or("iPod")),
         "rebuild" => data::Cmd::Rebuild(name.as_deref()),
         "add" => data::Cmd::Add(files),
+        "playlist" => data::Cmd::Playlist(action, name.as_deref(), files),
         _ => data::Cmd::Rm(what),
     }
 }
@@ -661,8 +680,9 @@ fn run_raw(ns: &Ns, command: &str, node: &str, image: bool) -> i32 {
             None => 1,
         };
     }
-    let (name, files, what) = (s(ns, "name").filter(|n| !n.is_empty()), list(ns, "files"), list(ns, "what"));
-    let c = data_cmd(command, &name, &files, &what);
+    let (name, files, what) = (s(ns, "name").filter(|n| !n.is_empty()), data_files(ns), list(ns, "what"));
+    let action = s(ns, "playlist_command").unwrap_or_default();
+    let c = data_cmd(command, &name, &files, &what, &action);
     data::run(if image { data::TargetSpec::Image(node) } else { data::TargetSpec::Device(node) }, c)
 }
 
@@ -674,7 +694,7 @@ fn data_command(ns: &Ns, command: &str) -> i32 {
         return run_raw(ns, command, &raw, image);
     }
     let mut mount = s(ns, "mount").filter(|m| !m.is_empty());
-    let data = matches!(command, "ls" | "list" | "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild");
+    let data = matches!(command, "ls" | "list" | "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild" | "export" | "playlist");
     if data && mount.is_none() && host::firewire_sbp2_needed() {
         host::load_firewire_sbp2();
     }
@@ -686,7 +706,7 @@ fn data_command(ns: &Ns, command: &str) -> i32 {
             Some(detect::Source::Raw(node)) => return run_raw(ns, command, &node, false),
         }
     }
-    if matches!(command, "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild") && mount.is_none() {
+    if matches!(command, "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild" | "playlist") && mount.is_none() {
         match detect::resolve_raw_target(ns) {
             None => return 1,
             Some(detect::Source::Raw(node)) => return run_raw(ns, command, &node, false),
@@ -738,8 +758,9 @@ fn data_command(ns: &Ns, command: &str) -> i32 {
             }
         };
     }
-    let (name, files, what) = (s(ns, "name").filter(|n| !n.is_empty()), list(ns, "files"), list(ns, "what"));
-    let rc = data::run(data::TargetSpec::Mount(&mount), data_cmd(command, &name, &files, &what));
+    let (name, files, what) = (s(ns, "name").filter(|n| !n.is_empty()), data_files(ns), list(ns, "what"));
+    let action = s(ns, "playlist_command").unwrap_or_default();
+    let rc = data::run(data::TargetSpec::Mount(&mount), data_cmd(command, &name, &files, &what, &action));
     if matches!(command, "add" | "rm" | "remove" | "delete" | "erase") {
         detect::offer_eject(detect::device_for_mount(&mount).as_deref(), rc);
     }

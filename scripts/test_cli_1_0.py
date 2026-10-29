@@ -190,6 +190,79 @@ def export_mount_checks(binary, work):
           "the default destination ./<iPod name> gets every track's bytes (%d)" % len(got))
 
 
+def read_playlists(buf):
+    """[(name, master, [track ids])] straight from the iTunesDB bytes: the
+    reader scripts/add_playlists.py (claude/playlist-tool) uses, checking
+    each playlist's items end where its record ends."""
+    import struct
+    sys.path.insert(0, os.path.dirname(HERE))
+    from flashpod import itunesdb
+    u32 = lambda o: struct.unpack_from("<I", buf, o)[0]
+    out, off = [], u32(4)
+    while off < len(buf):
+        hlen, tlen, typ = u32(off + 4), u32(off + 8), u32(off + 12)
+        if typ == 2:
+            p = off + hlen
+            n = u32(p + 8)
+            p += u32(p + 4)
+            for _ in range(n):
+                phl, ptl, nmhod, nitems = u32(p + 4), u32(p + 8), u32(p + 12), u32(p + 16)
+                mhods, q = itunesdb._parse_mhods(buf, p + phl, nmhod)
+                ids = []
+                for _ in range(nitems):
+                    ids.append(u32(q + 24))
+                    q += u32(q + 8)
+                assert q == p + ptl, "playlist items end at %d, record at %d" % (q, p + ptl)
+                out.append((mhods.get(itunesdb.MHOD_TITLE), u32(p + 20) != 0, ids))
+                p += ptl
+        off += tlen
+    return out
+
+
+def playlist_checks(binary, work):
+    print("music playlist")
+    sys.path.insert(0, os.path.dirname(HERE))
+    from flashpod import itunesdb, target
+    fw = synth.write_firmware(os.path.join(work, "fw3.bin"))
+    music = synth.make_music(os.path.join(work, "music-p"))
+    img = os.path.join(work, "pl.img")
+    with open(img, "wb") as f:
+        f.truncate(200 << 20)
+    run(binary, "firmware", "write", img, "--firmware", fw, "--yes", "--no-arm")
+    run(binary, "music", "init", "--raw", img)
+    run(binary, "music", "add", "--raw", img, music)
+
+    def db():
+        with open(img, "rb") as f:
+            return target.open_image_fat(f).read_file("/iPod_Control/iTunes/iTunesDB")
+    ids = [t.id for t in itunesdb.parse_bytes(db()).tracks]
+    tracks_before = [(t.id, t.title, t.location) for t in itunesdb.parse_bytes(db()).tracks]
+    a, b, c = (str(i) for i in ids[:3])
+    rc, out, err = run(binary, "music", "playlist", "new", "--raw", img, "Road Trip", a, b)
+    check(rc == 0 and read_playlists(db())[1:] == [("Road Trip", False, ids[:2])],
+          "new: Road Trip holds the two tracks, in order (raw reader)")
+    rc, out, err = run(binary, "music", "playlist", "add", "--raw", img, "road trip", c, a)
+    check(rc == 0 and read_playlists(db())[1][2] == [ids[0], ids[1], ids[2]],
+          "add (name matched case-insensitively) appends the new one, skips the one already there")
+    rc, out, err = run(binary, "music", "playlist", "rm", "--raw", img, "Road Trip", a)
+    check(rc == 0 and read_playlists(db())[1][2] == [ids[1], ids[2]], "rm takes the track out of the playlist")
+    check([(t.id, t.title, t.location) for t in itunesdb.parse_bytes(db()).tracks] == tracks_before,
+          "the tracks themselves are untouched (Python's parser)")
+    rc, out, err = run(binary, "music", "playlist", "ls", "--raw", img)
+    check(rc == 0 and "Road Trip  (2 tracks)" in out, "ls lists it: %r" % out.strip())
+    rc, out, err = run(binary, "music", "playlist", "new", "--raw", img, "Road Trip")
+    check(rc == 1 and "already a playlist" in err, "a second playlist of that name is refused")
+    rc, out, err = run(binary, "music", "playlist", "new", "--raw", img, "Bad", "99999")
+    check(rc == 1 and "no track with id" in err and len(read_playlists(db())) == 2,
+          "an unknown track id is refused and nothing is written")
+    rc, out, err = run(binary, "music", "rm", "--raw", img, b)
+    check(rc == 0 and read_playlists(db())[1][2] == [ids[2]], "music rm of a track takes it out of the playlist too")
+    rc, out, err = run(binary, "music", "add", "--raw", img, os.path.join(music, "Alpha Band"))
+    check(read_playlists(db())[1] == ("Road Trip", False, [ids[2]]), "music add keeps the playlist")
+    rc, out, err = run(binary, "music", "playlist", "delete", "--raw", img, "Road Trip")
+    check(rc == 0 and len(read_playlists(db())) == 1, "delete leaves only the master playlist")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rust", required=True)
@@ -200,6 +273,7 @@ def main():
         extract_checks(os.path.abspath(opts.rust), work)
         export_checks(os.path.abspath(opts.rust), work)
         export_mount_checks(os.path.abspath(opts.rust), work)
+        playlist_checks(os.path.abspath(opts.rust), work)
     finally:
         if not opts.keep:
             shutil.rmtree(work, ignore_errors=True)
