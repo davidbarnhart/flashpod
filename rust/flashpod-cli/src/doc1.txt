@@ -4,7 +4,8 @@ Commands:
   flashpod inspect TARGET            everything about a card, iPod or image
   flashpod firmware list             the firmware flashpod can write
   flashpod firmware extract TARGET   copy the firmware partition (or one image) off
-  flashpod firmware write [/dev/sdX] write firmware + partition layout to a CF/SD
+  flashpod firmware write [/dev/sdX] [FIRMWARE]
+                                     write firmware + partition layout to a CF/SD
                                      card (needs sudo); `flashpod flash` is the same
   flashpod card new IMAGE SIZE       make a blank card image
   flashpod card burn IMAGE [/dev/sdX]

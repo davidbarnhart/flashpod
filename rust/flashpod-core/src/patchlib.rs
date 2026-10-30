@@ -157,6 +157,196 @@ impl Library {
     pub fn catalog(&self) -> Result<Value, Error> {
         self.json("catalog/firmware.json")
     }
+
+    /// The catalog's entries, each build joined to builds/<build>.json for
+    /// its base and patches.
+    pub fn firmwares(&self) -> Result<Vec<FirmwareEntry>, Error> {
+        let catalog = self.catalog()?;
+        let list = catalog["firmwares"].as_array()
+            .ok_or_else(|| unavailable("catalog/firmware.json: no firmware list", "json"))?;
+        let mut out = Vec::new();
+        for v in list {
+            let mut e = parse_entry(v)
+                .map_err(|why| unavailable(format!("catalog/firmware.json: {}", why), "json"))?;
+            if let Some(build) = e.build.clone() {
+                let b = self.json(&format!("builds/{}.json", build))?;
+                e.base = b["base"].as_str().map(str::to_string);
+                e.patches = strings(&b["patches"]).unwrap_or_default();
+            }
+            out.push(e);
+        }
+        Ok(out)
+    }
+}
+
+/// One firmware file the catalog lists: `bytes` and `sha256` are the
+/// firmware file's own, whatever container a URL holds it in.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct FirmwareEntry {
+    pub id: String,
+    pub title: String,
+    pub maker: String,
+    pub version: String,
+    pub models: Vec<String>,
+    pub bytes: u64,
+    pub sha256: String,
+    pub base: Option<String>,
+    pub build: Option<String>,
+    pub patches: Vec<String>,
+    pub urls: Vec<FirmwareUrl>,
+    /// None: no hardware test recorded, which is not the same as false.
+    pub tested_on_hardware: Option<bool>,
+}
+
+/// Where to download a firmware; `bytes` and `sha256` are the downloaded
+/// file's.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct FirmwareUrl {
+    pub url: String,
+    pub role: String,
+    pub container: String,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+fn is_sha256(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+}
+
+/// The schema's id: lower-case letters, digits, dots and dashes. An id names
+/// a cache file, so this is also what keeps it inside the cache.
+pub fn is_id(s: &str) -> bool {
+    s.bytes().next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && s.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'.' || c == b'-')
+}
+
+fn strings(v: &Value) -> Option<Vec<String>> {
+    v.as_array()?.iter().map(|x| x.as_str().map(str::to_string)).collect()
+}
+
+/// A catalog entry, checked: a bad one is an error, never a guess.
+pub fn parse_entry(v: &Value) -> Result<FirmwareEntry, String> {
+    let id = v["id"].as_str().filter(|s| is_id(s)).ok_or_else(|| format!("id {}", q(&v["id"])))?.to_string();
+    let bad = |what: &str| format!("{}: {} {}", id, what, q(&v[what]));
+    let text = |k: &str| v[k].as_str().map(str::to_string).ok_or_else(|| bad(k));
+    let opt_id = |k: &str| match &v[k] {
+        Value::Null => Ok(None),
+        x => x.as_str().filter(|s| is_id(s)).map(|s| Some(s.to_string())).ok_or_else(|| bad(k)),
+    };
+    let sha = v["sha256"].as_str().filter(|s| is_sha256(s)).ok_or_else(|| bad("sha256"))?.to_string();
+    let mut urls = Vec::new();
+    for u in v["urls"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+        let field = |k: &str| u[k].as_str().map(str::to_string).ok_or_else(|| format!("{}: url {} {}", id, k, q(&u[k])));
+        let url = FirmwareUrl {
+            url: field("url")?,
+            role: field("role")?,
+            container: field("container")?,
+            bytes: u["bytes"].as_u64().ok_or_else(|| format!("{}: url bytes {}", id, q(&u["bytes"])))?,
+            sha256: field("sha256").and_then(|s| if is_sha256(&s) { Ok(s) } else { Err(format!("{}: url sha256 {}", id, s)) })?,
+        };
+        urls.push(url);
+    }
+    Ok(FirmwareEntry {
+        title: v["title"].as_str().unwrap_or("").to_string(),
+        maker: text("maker")?,
+        version: text("version")?,
+        models: strings(&v["models"]).ok_or_else(|| bad("models"))?,
+        bytes: v["bytes"].as_u64().ok_or_else(|| bad("bytes"))?,
+        sha256: sha,
+        base: opt_id("base")?,
+        build: opt_id("build")?,
+        patches: match &v["patches"] {
+            Value::Null => Vec::new(),
+            x => strings(x).ok_or_else(|| bad("patches"))?,
+        },
+        urls,
+        tested_on_hardware: match &v["tested_on_hardware"] {
+            Value::Null => None,
+            x => Some(x.as_bool().ok_or_else(|| bad("tested_on_hardware"))?),
+        },
+        id,
+    })
+}
+
+/// Whether `data` is this firmware file, by size and sha256.
+pub fn firmware_matches(entry: &FirmwareEntry, data: &[u8]) -> bool {
+    data.len() as u64 == entry.bytes && sha256_hex(data) == entry.sha256
+}
+
+/// A decompressed read that stops one byte past what the firmware can be, so
+/// a hostile archive can't fill memory.
+fn read_capped(r: impl std::io::Read, cap: u64) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::Read::take(r, cap + 1), &mut out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// The firmware file inside a download. An ipsw can hold several `Firmware*`
+/// members, one for each kind of iPod it serves, so the member is chosen by
+/// sha256, not by position.
+pub fn unpack(container: &str, data: &[u8], entry: &FirmwareEntry) -> Result<Vec<u8>, String> {
+    match container {
+        "bin" => Ok(data.to_vec()),
+        "bin.gz" => read_capped(flate2::read::MultiGzDecoder::new(data), entry.bytes).map_err(|e| format!("not a gzip file ({})", e)),
+        "ipsw" => {
+            let mut zf = zip::ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| format!("not a zip file ({})", e))?;
+            let names: Vec<String> = zf.file_names()
+                .filter(|n| n.rsplit('/').next().unwrap_or("").starts_with("Firmware"))
+                .map(String::from).collect();
+            for name in &names {
+                let member = zf.by_name(name).map_err(|e| e.to_string())?;
+                let out = read_capped(member, entry.bytes)?;
+                if firmware_matches(entry, &out) {
+                    return Ok(out);
+                }
+            }
+            Err(format!("none of its {} Firmware file(s) is this firmware", names.len()))
+        }
+        other => Err(format!("unknown container {}", q(&Value::String(other.to_string())))),
+    }
+}
+
+/// A firmware file, checked, and how it was got.
+#[derive(Debug)]
+pub struct Fetched {
+    pub data: Vec<u8>,
+    pub url: String,
+    /// "url: why", for each URL tried before this one.
+    pub skipped: Vec<String>,
+}
+
+/// The catalog's download order: each URL in turn, its download checked
+/// against the URL's sha256, unpacked, and the firmware checked against the
+/// entry's. Any failure moves on to the next URL; the checks are what's
+/// trusted, not where the bytes came from.
+pub fn fetch_firmware(
+    get: &mut dyn FnMut(&FirmwareUrl) -> Result<Vec<u8>, String>,
+    entry: &FirmwareEntry,
+) -> Result<Fetched, Error> {
+    if entry.urls.is_empty() {
+        return Err(Error::new(ErrorKind::FirmwareUnavailable, format!("{} has no download listed", entry.id))
+            .detail("reason", "no_urls"));
+    }
+    let mut skipped = Vec::new();
+    for u in &entry.urls {
+        let tried = get(u).and_then(|d| {
+            if d.len() as u64 != u.bytes || sha256_hex(&d) != u.sha256 {
+                return Err(format!("the download doesn't match its sha256 ({} bytes, {} expected)", d.len(), u.bytes));
+            }
+            let fw = unpack(&u.container, &d, entry)?;
+            if !firmware_matches(entry, &fw) {
+                return Err("the firmware inside doesn't match its sha256".to_string());
+            }
+            Ok(fw)
+        });
+        match tried {
+            Ok(data) => return Ok(Fetched { data, url: u.url.clone(), skipped }),
+            Err(why) => skipped.push(format!("{}: {}", u.url, why)),
+        }
+    }
+    Err(Error::new(ErrorKind::FirmwareUnavailable,
+                   format!("no download of {} worked:\n  {}", entry.id, skipped.join("\n  ")))
+        .detail("reason", "download"))
 }
 
 /// patchlib.open_dir: the library a source holds, if its index parses and
@@ -304,6 +494,107 @@ mod tests {
         let lib = load(&mut s, true, BASE).unwrap();
         assert_eq!(lib.source, Source::Cache);
         assert!(lib.fallback_reason.unwrap().starts_with("cannot fetch the patch index"));
+    }
+
+    fn entry(fw: &[u8], urls: Vec<FirmwareUrl>) -> FirmwareEntry {
+        FirmwareEntry {
+            id: "fw".into(), title: String::new(), maker: "apple".into(), version: "1".into(), models: vec!["1G".into()],
+            bytes: fw.len() as u64, sha256: sha256_hex(fw), base: None, build: None, patches: vec![], urls,
+            tested_on_hardware: None,
+        }
+    }
+
+    fn url(name: &str, container: &str, d: &[u8]) -> FirmwareUrl {
+        FirmwareUrl { url: name.into(), role: "fallback".into(), container: container.into(), bytes: d.len() as u64, sha256: sha256_hex(d) }
+    }
+
+    fn gz(d: &[u8]) -> Vec<u8> {
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut e, d).unwrap();
+        e.finish().unwrap()
+    }
+
+    fn ipsw(members: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (n, d) in members {
+            z.start_file(*n, zip::write::SimpleFileOptions::default()).unwrap();
+            std::io::Write::write_all(&mut z, d).unwrap();
+        }
+        z.finish().unwrap().into_inner()
+    }
+
+    fn fetch(e: &FirmwareEntry, server: &[(&str, Vec<u8>)]) -> (Result<Fetched, Error>, Vec<String>) {
+        let mut got = Vec::new();
+        let r = fetch_firmware(&mut |u: &FirmwareUrl| {
+            got.push(u.url.clone());
+            server.iter().find(|(n, _)| *n == u.url).map(|(_, d)| d.clone()).ok_or_else(|| "404".to_string())
+        }, e);
+        (r, got)
+    }
+
+    #[test]
+    fn fetch_in_order_each_check_moves_on() {
+        let fw = b"the firmware".to_vec();
+        let g = gz(&fw);
+        let wrong = gz(b"other bytes!");
+        let e = entry(&fw, vec![url("missing", "bin", &fw), url("bad-sha", "bin", &fw), url("wrong-inner", "bin.gz", &wrong), url("good", "bin.gz", &g)]);
+        let (r, got) = fetch(&e, &[("bad-sha", b"the firmwarX".to_vec()), ("wrong-inner", wrong.clone()), ("good", g.clone())]);
+        let f = r.unwrap();
+        assert_eq!(f.data, fw);
+        assert_eq!(f.url, "good");
+        assert_eq!(got, ["missing", "bad-sha", "wrong-inner", "good"]);
+        assert_eq!(f.skipped.len(), 3);
+        assert!(f.skipped[1].contains("doesn't match its sha256"));
+        assert!(f.skipped[2].contains("firmware inside"));
+
+        // none works: every URL's reason is named
+        let (r, _) = fetch(&e, &[]);
+        let err = r.unwrap_err();
+        assert_eq!(err.kind.code(), "firmware_unavailable");
+        assert!(["missing", "bad-sha", "wrong-inner", "good"].iter().all(|n| err.message.contains(n)));
+
+        let (r, got) = fetch(&entry(&fw, vec![]), &[]);
+        assert_eq!(r.unwrap_err().details["reason"], "no_urls");
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn unpack_finds_the_firmware() {
+        let fw = b"the firmware".to_vec();
+        let e = entry(&fw, vec![]);
+        assert_eq!(unpack("bin", &fw, &e).unwrap(), fw);
+        assert_eq!(unpack("bin.gz", &gz(&fw), &e).unwrap(), fw);
+        // the second Firmware member is the one; other members are ignored
+        let two = ipsw(&[("Firmware-1", b"another iPod"), ("x/Firmware-2", &fw), ("Manifest.plist", &fw)]);
+        assert_eq!(unpack("ipsw", &two, &e).unwrap(), fw);
+        let none = ipsw(&[("Firmware-1", b"another iPod"), ("Manifest.plist", &fw)]);
+        assert!(unpack("ipsw", &none, &e).unwrap_err().contains("none of its 1"));
+        assert!(unpack("bin.gz", b"not gzip", &e).is_err());
+        assert!(unpack("ipsw", b"not zip", &e).is_err());
+        assert!(unpack("tar", &fw, &e).is_err());
+        // a bomb stops one byte past the size
+        let big = gz(&vec![0u8; 1 << 20]);
+        assert_eq!(unpack("bin.gz", &big, &e).unwrap().len() as u64, e.bytes + 1);
+    }
+
+    #[test]
+    fn entries_parse_strictly() {
+        let sha = "0".repeat(64);
+        let good = serde_json::json!({"id": "a-1.5", "maker": "apple", "version": "1", "models": ["1G"], "bytes": 3, "sha256": sha,
+            "urls": [{"url": "https://x/y", "role": "primary", "container": "bin", "bytes": 3, "sha256": sha, "note": "ignored"}]});
+        let e = parse_entry(&good).unwrap();
+        assert_eq!(e.tested_on_hardware, None);
+        assert_eq!(e.urls[0].container, "bin");
+        for (k, v) in [("id", serde_json::json!("../x")), ("id", serde_json::json!("A")), ("id", serde_json::json!(".a")),
+                       ("sha256", serde_json::json!("abc")), ("bytes", serde_json::json!("3")), ("models", serde_json::json!("1G")),
+                       ("tested_on_hardware", serde_json::json!("yes"))] {
+            let mut bad = good.clone();
+            bad[k] = v;
+            assert!(parse_entry(&bad).is_err(), "{}", k);
+        }
+        let mut bad = good.clone();
+        bad["urls"][0]["sha256"] = serde_json::json!("abc");
+        assert!(parse_entry(&bad).is_err());
     }
 
     #[test]
