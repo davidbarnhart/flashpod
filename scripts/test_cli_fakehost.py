@@ -51,6 +51,7 @@ TREE = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import synth_fixtures as synth          # noqa: E402
 import test_cli_unchanged as tcu        # noqa: E402  (run_pty, sha)
+import result_line                      # noqa: E402
 
 SECTOR = 512
 USER_UID = int(os.environ.get("SUDO_UID") or os.getuid() or 1000)
@@ -1104,6 +1105,9 @@ def main():
         chosen = [(name, sc) for name, sc in SCENARIOS.items()
                   if (not opts.only or name in opts.only) and opts.mode in sc["modes"]]
         ref = {}
+        asked = sum(1 for _name, sc in chosen for step in sc["steps"]
+                    if opts.mode in step.get("modes", (opts.mode,)))
+        log, counted = {}, [0]
 
         def compare(rust, label, dump=False):
             bad, n = [], 0
@@ -1115,6 +1119,8 @@ def main():
                     ref[name] = run_scenario(name, sc, opts.mode, cards, "python", None, root)
                 a = ref[name]
                 b = run_scenario(name, sc, opts.mode, cards, "rust", rust, root)
+                if not label:
+                    log[name] = {"python": a, "rust": b}
                 shutil.rmtree(os.path.join(root, "%s-%s-rust" % (name, opts.mode)), ignore_errors=True)
                 for ra, rb in zip(a, b):
                     n += 1
@@ -1123,6 +1129,8 @@ def main():
                         print(ra["stdout"] + ra["stderr"])
                         print("calls:", *ra["calls"], sep="\n  ")
                     for key in ("rc", "stdout", "stderr", "calls", "mounts", "gone", "disks"):
+                        if not label:
+                            counted[0] += 1
                         if ra[key] != rb[key]:
                             bad.append((name, ra["step"], ra["argv"], key, ra[key], rb[key]))
                             break
@@ -1130,8 +1138,9 @@ def main():
 
         bad, n = compare(opts.rust, "", opts.dump)
         missed = []
+        mutant_names = sorted(os.listdir(opts.mutants)) if opts.mutants else []
         if opts.mutants:
-            for m in sorted(os.listdir(opts.mutants)):
+            for m in mutant_names:
                 mbad, _ = compare(os.path.join(opts.mutants, m), "[mutant %s] " % m)
                 if mbad:
                     name, i, argv, key = mbad[0][:4]
@@ -1139,9 +1148,15 @@ def main():
                 else:
                     print("mutant %s: MISSED" % m)
                     missed.append(m)
+
+        def result():
+            return result_line.emit(
+                "cli_fakehost_" + opts.mode, os.path.dirname(HERE), asked, n, counted[0],
+                bool(bad), log, binary=opts.rust,
+                mutants=(len(mutant_names) - len(missed), len(mutant_names)) if opts.mutants else None)
         if not bad:
             print("IDENTICAL: %d steps on the fake host (%s mode)" % (n, opts.mode))
-            return 1 if missed else 0
+            return result()
         print("DIFFERENT: %d of %d steps (%s mode)" % (len(bad), n, opts.mode))
         for name, i, argv, key, x, y in bad:
             print("  %s step %d %s: %s differs" % (name, i, " ".join(argv), key))
@@ -1151,7 +1166,7 @@ def main():
                     print("    " + l)
             else:
                 print("    python: %r\n    rust:   %r" % (x, y))
-        return 1
+        return result()
     finally:
         if not opts.keep:
             shutil.rmtree(root, ignore_errors=True)

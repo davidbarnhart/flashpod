@@ -21,6 +21,9 @@ import subprocess
 import sys
 import termios
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import result_line  # noqa: E402
+
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CASES = [
@@ -91,6 +94,7 @@ def compare(rust):
     py = [sys.executable, "-m", "flashpod"]
     bad = []
     n = 0
+    log = []
     for line in CASES:
         argv = split(line)
         for cols in WIDTHS:
@@ -98,6 +102,7 @@ def compare(rust):
             a = run_pipe(py + argv, env)
             b = run_pipe([rust] + argv, env)
             n += 1
+            log.append((line, "COLUMNS=%s" % cols, a, b))
             if a != b:
                 bad.append((line, "COLUMNS=%s" % cols, a, b))
         for cols in (80, 44):
@@ -105,9 +110,10 @@ def compare(rust):
             a = run_pty(py + argv, env, cols)
             b = run_pty([rust] + argv, env, cols)
             n += 1
+            log.append((line, "pty %d cols" % cols, a, b))
             if a != b:
                 bad.append((line, "pty %d cols" % cols, a, b))
-    return n, bad
+    return n, bad, log
 
 
 def main():
@@ -116,11 +122,18 @@ def main():
     ap.add_argument("--show", action="store_true",
                     help="print the first difference in full")
     opts = ap.parse_args()
-    n, bad = compare(os.path.abspath(opts.rust))
+    rust = os.path.abspath(opts.rust)
+    n, bad, log = compare(rust)
+    asked = len(CASES) * (len(WIDTHS) + 2)
+
+    def result():
+        # rc, stdout and stderr per run
+        return result_line.emit("cli_args", HERE, asked, n, 3 * n, bool(bad),
+                                log, binary=rust)
     if not bad:
         print("IDENTICAL: %d runs (%d argument lines x %d pipe widths + 2 "
               "pty widths)" % (n, len(CASES), len(WIDTHS)))
-        return 0
+        return result()
     print("DIFFERENT: %d of %d runs" % (len(bad), n))
     for line, how, a, b in bad[:20]:
         print("  %r (%s): rc %s vs %s" % (line, how, a[0], b[0]))
@@ -130,7 +143,7 @@ def main():
             if x != y:
                 print("--- python %s\n%r\n--- rust %s\n%r" % (name, x.decode(errors="replace"),
                                                              name, y.decode(errors="replace")))
-    return 1
+    return result()
 
 
 if __name__ == "__main__":
