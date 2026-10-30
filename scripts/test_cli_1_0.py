@@ -342,6 +342,56 @@ def contribute_checks(binary, work):
         print("  skip a stock catalog build: no cached Apple 1.1.3 (the unit test covers known builds)")
 
 
+def gen4_checks(binary, work):
+    print("4G and later are read-only in 1.0 (David 2026-10-29): writes refused, inspect/extract still read")
+    import struct
+    sys.path.insert(0, os.path.dirname(HERE))
+    from flashpod import card
+    fw = bytearray(synth.firmware_bytes())
+    for base in (0x4000, 0x4200):       # osos addr word in both directories -> PP502x
+        struct.pack_into("<I", fw, base + 8 + 12, 0x10000000)
+    fw4 = os.path.join(work, "fw-4g.bin")
+    open(fw4, "wb").write(bytes(fw))
+    img = os.path.join(work, "g4.img")
+    with open(img, "wb") as f:
+        f.truncate(150 << 20)
+    before = hashlib.sha256(open(img, "rb").read()).hexdigest()
+    rc, out, err = run(binary, "firmware", "write", img, "--firmware", fw4, "--yes", "--no-arm")
+    check(rc == 1 and "4th-generation or later" in err, "a 4G firmware file is refused: %r" % err.strip()[-120:])
+    check(hashlib.sha256(open(img, "rb").read()).hexdigest() == before, "the refused write left the image untouched")
+    for model in ("4G", "photo"):
+        rc, out, err = run(binary, "firmware", "write", img, "--model", model, "--yes", "--no-arm")
+        check(rc == 1 and "isn't supported yet" in err, "--model %s is refused" % model)
+    rc, out, err = run(binary, "firmware", "write", img, "--firmware", synth.write_firmware(os.path.join(work, "fw-1g.bin")),
+                       "--yes", "--no-arm")
+    check(rc == 0, "a 1G/2G firmware still writes (rc %d)" % rc)
+    # a 4G card as an older flashpod wrote it: the library's layout steps
+    # directly (card.flash refuses 4G now too), read by 1.0
+    from flashpod import firmware as fwmod, layout
+    g4card = os.path.join(work, "g4-py.img")
+    with open(g4card, "wb") as f:
+        f.truncate(150 << 20)
+    ready = fwmod.fixup_directories(bytes(fw))
+    with open(g4card, "r+b") as f:
+        total = (150 << 20) // 512
+        header, _start, _blocks = layout.build_mbr_layout(total, False, None)
+        layout.write_card(f, ready, total, False, None, True)
+        f.flush()
+        layout.write_mbr(f, header)
+    try:
+        card.flash(os.path.join(work, "g4.img"), fw4)
+        check(False, "the Python reference library refuses 4G too")
+    except card.FirmwareInvalid as e:
+        check(e.details.get("reason") == "unsupported_generation", "the Python reference library refuses 4G too")
+    rc, out, err = run(binary, "inspect", g4card, "--json")
+    got = json.loads(out)["firmware"] if rc == 0 else {}
+    check(got.get("present") is True and got.get("osos", {}).get("addr") == 0x10000000, "inspect reads a 4G card's firmware")
+    o = os.path.join(work, "g4-osos.bin")
+    rc, out, err = run(binary, "firmware", "extract", g4card, "-o", o, "--image", "osos")
+    check(rc == 0 and os.path.exists(o) and hashlib.sha256(open(o, "rb").read()).hexdigest() == got.get("osos", {}).get("sha256"),
+          "firmware extract copies a 4G card's osos")
+
+
 def card_new_checks(binary, work):
     print("card new (sizes and refusals against card.create_blank's rules)")
     sys.path.insert(0, os.path.dirname(HERE))
@@ -435,6 +485,7 @@ def main():
         playlist_checks(os.path.abspath(opts.rust), work)
         inspect_checks(os.path.abspath(opts.rust), work)
         contribute_checks(os.path.abspath(opts.rust), work)
+        gen4_checks(os.path.abspath(opts.rust), work)
         card_new_checks(os.path.abspath(opts.rust), work)
         mac_card_checks(os.path.abspath(opts.rust), work)
     finally:

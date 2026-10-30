@@ -158,8 +158,6 @@ Which iPod are you flashing for?
   0  1st generation  2001-02  scroll wheel physically turns
   1  2nd generation  2002     wheel does not move (touch-sensitive)
   2  3rd generation  2003     four buttons in a row above the wheel
-  3  4th generation  2004     click wheel, buttons on the wheel, grayscale
-  4  iPod photo      2004-05  click wheel, color display
 
 Select model: 0
 Firmware for 1st generation (newest first):
@@ -481,8 +479,13 @@ $ flashpod firmware write /dev/sdb --dry-run    # print the plan, write nothing 
 $ flashpod firmware write --self-test           # validate layout logic, no hardware
 ```
 
+**4th generation and later are read-only for now.** flashpod has never
+had a card it wrote boot on a 4G or an iPod photo, so `firmware write`
+refuses their firmware (by its load address, whichever way it was chosen).
+`inspect` and `firmware extract` still read those cards.
+
 **Firmware:** with no `--firmware`, flashpod first asks **which iPod you're
-flashing for** (or takes `--model 1G|2G|3G|4G|photo`), then lists only the
+flashing for** (or takes `--model 1G|2G|3G`), then lists only the
 firmware that fits it, from the bundled catalog
 (`flashpod/firmware/firmware.json`), with version, build date, and description
 (the default entry is preselected; non-interactive runs use it outright). The
@@ -578,7 +581,7 @@ Options:
 | Flag | Meaning |
 |------|---------|
 | `--firmware <file>` | use a local image — raw `Firmware-*`, `.bin.gz`, or `.ipsw` (bring-your-own; no download). Default: pick from the catalog and download it |
-| `--model <id>`      | iPod model to flash for (`1G`, `2G`, `3G`, `4G`, `photo`); decides which firmware is offered. Default: ask |
+| `--model <id>`      | iPod model to flash for (`1G`, `2G`, `3G`); decides which firmware is offered. Default: ask. 4th generation and later aren't written yet (see below) |
 | `--yes`             | skip the typed `ERASE sdX` confirmation |
 | `--arm` / `--no-arm` | arm the card for a disk-mode update, or don't (and don't ask). Without either, an interactive flash asks, defaulting to no; see below |
 | `--no-format`       | keep the data partition and its music: rewrite only the firmware and partition table. Refused unless the card's data partition already starts and ends where the new table puts it |

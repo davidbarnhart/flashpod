@@ -102,6 +102,14 @@ fn pick(choice: &str, n: usize) -> Option<usize> {
     choice.parse::<usize>().ok().filter(|&i| i < n)
 }
 
+/// Models whose firmware 1.0 doesn't write (firmware::check_writable): the
+/// choosers leave them out and --model names them as not supported yet.
+const READ_ONLY_MODELS: &[&str] = &["4G", "photo"];
+
+fn read_only(id: &str) -> bool {
+    READ_ONLY_MODELS.iter().any(|m| m.eq_ignore_ascii_case(id))
+}
+
 pub enum Model {
     Any,
     Bail,
@@ -110,11 +118,17 @@ pub enum Model {
 
 /// choose_model: which iPod decides which firmware is offered.
 pub fn choose_model(manifest: &Value, want: Option<&str>) -> Model {
-    let models = manifest["models"].as_array().cloned().unwrap_or_default();
+    let models: Vec<Value> = manifest["models"].as_array().cloned().unwrap_or_default()
+        .into_iter().filter(|m| !read_only(&st(&m["id"]))).collect();
     if models.is_empty() {
         return Model::Any;
     }
     if let Some(w) = want {
+        if read_only(w) {
+            eprintln!("flashpod flash: writing {} firmware isn't supported yet (untested on hardware); \
+                       inspect and firmware extract still read it", w);
+            return Model::Bail;
+        }
         if let Some(m) = models.iter().find(|m| st(&m["id"]).to_lowercase() == w.to_lowercase()) {
             return Model::One(m.clone());
         }
@@ -152,6 +166,7 @@ pub fn choose_model(manifest: &Value, want: Option<&str>) -> Model {
 /// choose_firmware: an entry, restricted to the model's.
 pub fn choose_firmware(manifest: &Value, model: Option<&Value>) -> Option<Value> {
     let mut entries = manifest["firmwares"].as_array().cloned().unwrap_or_default();
+    entries.retain(|e| !e["models"].as_array().is_some_and(|a| !a.is_empty() && a.iter().all(|x| read_only(&st(x)))));
     if entries.is_empty() {
         eprintln!("flashpod flash: no firmware listed in the manifest; pass --firmware");
         return None;

@@ -169,6 +169,7 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
     }
     let image = o.device.as_deref().map(is_image).unwrap_or(false);
     let mut fw = load_firmware(&o.firmware).map_err(|e| Exit(color(&format!("firmware error ({}): {}", o.firmware, e), C_RED)))?;
+    firmware::check_writable(&fw).map_err(|e| Exit(color(&format!("firmware error ({}): {}", o.firmware, e), C_RED)))?;
     let base = o.firmware.rsplit('/').next().unwrap_or(&o.firmware);
     eprintln!("{}", color(&format!("firmware OK: {} ({} bytes, structure validated)", base, fw.len()), C_GRN));
     let mut armed: Option<&'static str> = None;

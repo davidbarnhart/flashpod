@@ -40,6 +40,15 @@ playlist) instead of dropping them; rebuild still starts without them.
 New module `playlist` edits them: `create`, `add`, `take`, `delete`,
 `forget_tracks`.
 
+### 4th generation and later: writes refused (David, 2026-10-29)
+
+`card::flash` and `card::flash_firmware` (and so `api` / wasm `flash`)
+return `FirmwareInvalid` with `details.reason = "unsupported_generation"`
+for PP502x firmware (osos at 0x10000000: 4G, photo, color) before touching
+the card. New `firmware::check_writable(&[u8])` is the test. inspect and
+extract are unchanged. The Python reference library refuses the same way.
+emupod's web app can show the message as it is.
+
 ### Now crate-private (no consumer named them)
 
 `api::{run, firmware_of}`;

@@ -10,6 +10,8 @@ pub const CATALOG_JSON: &str = include_str!("../../../flashpod/firmware/firmware
 pub(crate) const FIXES_JSON: &str = include_str!("../../../flashpod/firmware/fixes.json");
 
 pub(crate) const PP5002_OSOS_ADDR: u32 = 0x2800_0000;
+/// osos address of PP502x firmware (4th generation and later).
+pub(crate) const PP502X_OSOS_ADDR: u32 = 0x1000_0000;
 pub(crate) const VERSION_WORD_OFFSET: usize = 0x3174c;
 
 pub(crate) fn version_word_means(w: u32) -> Option<&'static str> {
@@ -395,6 +397,22 @@ pub fn validate_firmware(fw: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// 1.0 writes firmware for 1st to 3rd generation iPods only (PP5002, osos at
+/// 0x28000000). 4th generation and later (PP502x, osos at 0x10000000) are
+/// read-only until a written card has booted on one (David, 2026-10-29):
+/// inspect and extract still read them, card writes refuse them here.
+pub fn check_writable(fw: &[u8]) -> Result<(), String> {
+    if fw.len() < 0x10c || &fw[0x100..0x104] != b"]ih[" {
+        return Ok(());   // validate_firmware's to refuse
+    }
+    match walk_directory(fw, ptr_of(fw) + 0x200).into_iter().find(|(_, typ, _)| typ == b"osos") {
+        Some((_, _, f)) if f[3] == PP502X_OSOS_ADDR => Err(format!(
+            "this firmware is for a 4th-generation or later iPod (osos at 0x{:08x}); this version of flashpod \
+             doesn't write those yet (untested on hardware). inspect and firmware extract still read them.", f[3])),
+        _ => Ok(()),
+    }
+}
+
 /// firmware.load_firmware on bytes: unwrap, fix up, validate.
 pub fn load_firmware(data: &[u8]) -> Result<Vec<u8>, String> {
     let fw = fixup_directories(&unwrap_container(data)?);
@@ -508,5 +526,18 @@ mod tests {
     #[test]
     fn url_encode_reserved() {
         assert_eq!(url_encode("a b/c?d&e=\"\n~"), "a%20b%2Fc%3Fd%26e%3D%22%0A~");
+    }
+
+    #[test]
+    fn check_writable_refuses_pp502x_only() {
+        let mut fw = vec![0u8; 0x4400];
+        fw[0x100..0x104].copy_from_slice(b"]ih[");
+        fw[0x104..0x108].copy_from_slice(&0x4000u32.to_le_bytes());
+        // one live-directory entry at 0x4200: dev, type (byte-reversed), then id, devOffset, len, addr
+        fw[0x4200..0x4208].copy_from_slice(b"ksidsoso");
+        fw[0x4214..0x4218].copy_from_slice(&PP502X_OSOS_ADDR.to_le_bytes());
+        assert!(check_writable(&fw).unwrap_err().contains("4th-generation"));
+        fw[0x4214..0x4218].copy_from_slice(&PP5002_OSOS_ADDR.to_le_bytes());
+        assert_eq!(check_writable(&fw), Ok(()));
     }
 }

@@ -60,6 +60,12 @@ pub fn firmware_bytes(data: &[u8], raw: bool) -> Result<Vec<u8>, Error> {
     r.map_err(|e| Error::new(ErrorKind::FirmwareInvalid, format!("firmware error: {}", e)).detail("reason", e))
 }
 
+/// firmware::check_writable as a library error (reason "unsupported_generation").
+fn writable(fw: &[u8]) -> Result<(), Error> {
+    firmware::check_writable(fw)
+        .map_err(|e| Error::new(ErrorKind::FirmwareInvalid, e).detail("reason", "unsupported_generation"))
+}
+
 #[derive(Debug, Serialize)]
 pub struct FlashResult {
     pub firmware_bytes: usize,
@@ -88,6 +94,7 @@ fn io_err(e: std::io::Error) -> Error {
 
 /// card.flash on a device: `fw` is install-ready firmware (firmware_bytes).
 pub fn flash(dev: &mut dyn BlockDevice, fw: Vec<u8>, o: FlashOptions) -> Result<FlashResult, Error> {
+    writable(&fw)?;
     let fw = if o.arm {
         firmware::arm_firmware(&fw)
             .map_err(|e| Error::new(ErrorKind::FirmwareInvalid, e).detail("reason", "cannot_arm"))?
@@ -172,6 +179,7 @@ pub struct FirmwareResult {
 /// card.flash_firmware: only the firmware partition; LayoutMismatch unless
 /// the card has flashpod's layout.
 pub fn flash_firmware(dev: &mut dyn BlockDevice, fw: Vec<u8>) -> Result<FirmwareResult, Error> {
+    writable(&fw)?;
     let (parts, size) = partitions_or(dev)
         .map_err(|_| Error::new(ErrorKind::LayoutMismatch, "no partition table").detail("reason", "no_mbr"))?;
     let (fwp, data, problems) = layout::layout_facts(&parts, size);

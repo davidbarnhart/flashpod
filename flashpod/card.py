@@ -457,6 +457,13 @@ def _firmware_bytes(firmware):
                               reason=str(exc))
 
 
+def _check_writable(fw):
+    try:
+        _firmware.check_writable(fw)
+    except ValueError as exc:
+        raise FirmwareInvalid(str(exc), reason="unsupported_generation")
+
+
 def _check_formattable(data_blocks):
     spc = layout.fat_sectors_per_cluster(data_blocks)
     geo = fat32.geometry(data_blocks, spc)
@@ -476,6 +483,7 @@ def flash(path, firmware, lba48=False, max_data_gb=None, format=True,
     ``firmware_bytes``, ``data_start``, ``data_sectors``, ``clusters``,
     ``cluster_bytes`` (None when ``format=False``)."""
     fw = _firmware_bytes(firmware)
+    _check_writable(fw)
     if arm:
         try:
             fw = _firmware.arm_firmware(fw)
@@ -514,6 +522,7 @@ def flash_firmware(path, firmware):
     region ends up byte-identical to a fresh :func:`flash` with the same
     firmware; the MBR and the data partition are not touched."""
     fw = _firmware_bytes(firmware)
+    _check_writable(fw)
     with _Image(path, write=True) as img:
         parts = _partitions(img.read(0, SECTOR))
         if parts is None:
