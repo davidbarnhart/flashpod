@@ -1,0 +1,50 @@
+name: Firmware build flashpod doesn't know
+description: Offer an iPod firmware build for flashpod's catalog. `flashpod inspect` and `flashpod firmware extract` print a link that fills this in.
+title: "Unknown firmware build: osos "
+labels: ["firmware-contribution"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks. A maintainer checks the build, adds the file to the archive and the catalog, and closes this issue.
+        Please don't attach the firmware file here; say where it can be got instead.
+  - type: input
+    id: osos_sha256
+    attributes:
+      label: osos sha256
+    validations:
+      required: true
+  - type: input
+    id: osos_length
+    attributes:
+      label: osos length (bytes)
+  - type: input
+    id: osos_addr
+    attributes:
+      label: osos load address
+      description: 0x28000000 is a 1G-3G iPod (PP5002); 0x10000000 a 4G or later.
+  - type: input
+    id: format
+    attributes:
+      label: Firmware directory format
+  - type: input
+    id: version_word
+    attributes:
+      label: Version word (1.x builds)
+  - type: input
+    id: aupd_sha256
+    attributes:
+      label: aupd sha256
+  - type: textarea
+    id: source
+    attributes:
+      label: Where the file came from
+      description: Which iPod and generation, the version it shows in Settings > About, and where the build can be downloaded (an .ipsw name, a link, or "extracted from my iPod").
+    validations:
+      required: true
+  - type: textarea
+    id: note
+    attributes:
+      label: flashpod's report
+      description: What flashpod read from the card (filled in by the link).
+      render: json

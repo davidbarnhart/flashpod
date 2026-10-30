@@ -254,6 +254,56 @@ pub(crate) fn describe_installed(read: &mut dyn FnMut(i64, usize) -> Vec<u8>, ca
     Value::Object(out)
 }
 
+/// Where unknown builds are reported (#107): the repo's firmware issue form.
+pub const CONTRIBUTE_ISSUE_URL: &str = "https://github.com/davidbarnhart/flashpod/issues/new";
+
+/// For an installed firmware the catalog doesn't know (``build`` is
+/// "unrecognized"), a GitHub new-issue link with the firmware issue form
+/// prefilled from ``installed`` (describe_installed's dict): the osos
+/// sha256 in the title, the identifying fields, and the dict itself as
+/// JSON. Only a link: flashpod uploads nothing; the person opens it,
+/// reads it, and submits it or not. None for a known build or no firmware.
+/// The dict carries no local path, so the link names no file on the machine.
+pub fn contribute_url(installed: &Value) -> Option<String> {
+    if installed["present"] != json!(true) || installed["build"] != json!("unrecognized") {
+        return None;
+    }
+    let osos = &installed["osos"];
+    let sha = osos["sha256"].as_str()?;
+    let text = |v: &Value| match v {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        v => v.to_string(),
+    };
+    let fields = [
+        ("template", "firmware.yml".to_string()),
+        ("title", format!("Unknown firmware build: osos {}", &sha[..16.min(sha.len())])),
+        ("osos_sha256", sha.to_string()),
+        ("osos_length", text(&osos["length"])),
+        ("osos_addr", osos["addr"].as_u64().map(|a| format!("0x{:08x}", a)).unwrap_or_default()),
+        ("format", text(&installed["format"])),
+        ("version_word", text(&installed["version_word"])),
+        ("aupd_sha256", text(&installed["aupd"]["sha256"])),
+        ("note", serde_json::to_string_pretty(installed).unwrap_or_default()),
+    ];
+    let query: Vec<String> = fields.iter().filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| format!("{}={}", k, url_encode(v))).collect();
+    Some(format!("{}?{}", CONTRIBUTE_ISSUE_URL, query.join("&")))
+}
+
+/// Percent-encoding for a query value: everything but RFC 3986 unreserved.
+fn url_encode(s: &str) -> String {
+    let mut o = String::with_capacity(s.len() * 3);
+    for &b in s.as_bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+            o.push(b as char);
+        } else {
+            o += &format!("%{:02X}", b);
+        }
+    }
+    o
+}
+
 // ---------------------------------------------------------------------------
 // Loading firmware for a flash: firmware.load_firmware, fixup_directories,
 // validate_firmware, arm_firmware. Err strings are the Python ValueError
@@ -432,4 +482,31 @@ pub fn fix_on_card(read: &mut dyn FnMut(u64, usize) -> Option<Vec<u8>>, name: &s
     let one = serde_json::json!({"fixes": [fix]});
     let found = fixes_present(&o, addr, &one, aupd.as_ref().map(|(b, a)| (b.as_slice(), *a)));
     Some(found.iter().any(|n| n == name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn installed(build: &str) -> Value {
+        json!({"present": true, "format": 2, "build": build,
+               "osos": {"sha256": "ab".repeat(32), "length": 4096, "addr": PP5002_OSOS_ADDR, "checksum_ok": true},
+               "version_word": null, "aupd": null})
+    }
+
+    #[test]
+    fn contribute_url_only_for_unrecognized() {
+        assert_eq!(contribute_url(&installed("stock 1.1.5")), None);
+        assert_eq!(contribute_url(&json!({"present": false, "reason": "no STOP boot block"})), None);
+        let u = contribute_url(&installed("unrecognized")).unwrap();
+        assert!(u.starts_with("https://github.com/davidbarnhart/flashpod/issues/new?template=firmware.yml&title=Unknown%20firmware%20build%3A%20osos%20abababababababab&"));
+        assert!(u.contains(&format!("&osos_sha256={}&", "ab".repeat(32))));
+        assert!(u.contains("&osos_length=4096&osos_addr=0x28000000&format=2&note=%7B"));
+        assert!(!u.contains("version_word=") && !u.contains("aupd_sha256="), "empty fields are left out: {}", u);
+    }
+
+    #[test]
+    fn url_encode_reserved() {
+        assert_eq!(url_encode("a b/c?d&e=\"\n~"), "a%20b%2Fc%3Fd%26e%3D%22%0A~");
+    }
 }

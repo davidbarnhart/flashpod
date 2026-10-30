@@ -13,10 +13,12 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -296,6 +298,50 @@ def inspect_checks(binary, work):
               "%s: the text report says %sready" % (name, "" if want["ready"] else "not "))
 
 
+def contribute_checks(binary, work):
+    print("contribute offer (#107: a link for a build the catalog doesn't know; nothing sent)")
+    fw = synth.write_firmware(os.path.join(work, "fw7.bin"))
+    img = os.path.join(work, "u.img")
+    with open(img, "wb") as f:
+        f.truncate(150 << 20)
+    run(binary, "firmware", "write", img, "--firmware", fw, "--yes", "--no-arm")
+    rc, out, err = run(binary, "inspect", img, "--json")
+    installed = json.loads(out)["firmware"] if rc == 0 else {}
+    check(installed.get("build") == "unrecognized", "the synthetic build is unrecognized")
+    check("contribute" not in out and "github" not in out, "inspect --json is unchanged (no link in the frozen JSON)")
+    form = open(os.path.join(os.path.dirname(HERE), ".github", "ISSUE_TEMPLATE", "firmware.yml")).read()
+    ids = set(re.findall(r"^\s+id: (\w+)$", form, re.M))
+    for cmd in (["inspect", img], ["firmware", "extract", img, "-o", os.path.join(work, "u.bin")]):
+        rc, out, err = run(binary, *cmd)
+        urls = re.findall(r"https://github\.com/\S+", out)
+        check(rc == 0 and len(urls) == 1 and "sends nothing" in out, "%s: prints one link and says nothing is sent" % cmd[0])
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(urls[0]).query) if urls else {}
+        one = {k: v[0] for k, v in q.items()}
+        check(urls and urls[0].startswith("https://github.com/davidbarnhart/flashpod/issues/new?"), "%s: a new-issue link on the flashpod repo" % cmd[0])
+        check(one.get("template") == "firmware.yml" and one.get("osos_sha256") == installed["osos"]["sha256"]
+              and one.get("osos_length") == str(installed["osos"]["length"]) and one.get("osos_addr") == "0x28000000",
+              "%s: the form is prefilled with the osos sha256, length and address" % cmd[0])
+        check(json.loads(one.get("note", "null")) == installed, "%s: the note field is the inspect report's firmware, exactly" % cmd[0])
+        check(set(one) - {"template", "title"} <= ids, "%s: every prefilled field is a field of the issue form: %s"
+              % (cmd[0], sorted(set(one) - {"template", "title"} - ids)))
+        check(work not in urls[0] if urls else False, "%s: the link names no local path" % cmd[0])
+    blank = os.path.join(work, "u-blank.img")
+    with open(blank, "wb") as f:
+        f.truncate(1 << 20)
+    rc, out, err = run(binary, "inspect", blank)
+    check(rc == 0 and "github" not in out, "no firmware: no link")
+    stock = os.path.expanduser("~/.cache/flashpod/firmware/iPod_1.1.3_2003_04_25.bin.gz")
+    if os.path.exists(stock):
+        s_img = os.path.join(work, "u-stock.img")
+        with open(s_img, "wb") as f:
+            f.truncate(150 << 20)
+        run(binary, "firmware", "write", s_img, "--firmware", stock, "--yes", "--no-arm")
+        rc, out, err = run(binary, "inspect", s_img)
+        check(rc == 0 and "firmware: stock" in out and "github" not in out, "a stock catalog build: no link")
+    else:
+        print("  skip a stock catalog build: no cached Apple 1.1.3 (the unit test covers known builds)")
+
+
 def card_new_checks(binary, work):
     print("card new (sizes and refusals against card.create_blank's rules)")
     sys.path.insert(0, os.path.dirname(HERE))
@@ -388,6 +434,7 @@ def main():
         export_mount_checks(os.path.abspath(opts.rust), work)
         playlist_checks(os.path.abspath(opts.rust), work)
         inspect_checks(os.path.abspath(opts.rust), work)
+        contribute_checks(os.path.abspath(opts.rust), work)
         card_new_checks(os.path.abspath(opts.rust), work)
         mac_card_checks(os.path.abspath(opts.rust), work)
     finally:

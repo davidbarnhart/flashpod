@@ -676,6 +676,12 @@ it came from, and the installed build as `inspect` names it). Works on
 FAT32 and Mac (HFS+) cards. It never overwrites a file and never writes
 to the card.
 
+When either command finds a firmware build flashpod's catalog doesn't
+know, it prints a link to a new GitHub issue on this repo, already filled
+in with the build's sha256 and what flashpod read. flashpod sends nothing
+itself: open the link, add where the file came from, and submit it if you
+want the build added. `inspect --json` doesn't carry the link.
+
 ### `flashpod music export [--to DIR]`
 
 Copies every song off the iPod into `DIR/Artist/Album/NN Title.ext`, with

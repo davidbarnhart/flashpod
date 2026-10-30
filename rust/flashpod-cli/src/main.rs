@@ -656,7 +656,19 @@ fn cmd_inspect(ns: &Ns) -> i32 {
         return 0;
     }
     print!("{}", inspect_text(&v));
+    print!("{}", contribute_offer(&v["firmware"]));
     0
+}
+
+/// #107: the offer after inspect / firmware extract finds a firmware build
+/// the catalog doesn't know -- a prefilled GitHub issue link to open, or
+/// not. Nothing is sent from here.
+fn contribute_offer(installed: &serde_json::Value) -> String {
+    match flashpod_core::firmware::contribute_url(installed) {
+        Some(url) => format!("\nflashpod doesn't know this firmware build. To add it to the catalog, open this link \
+                              (a GitHub issue, prefilled; flashpod sends nothing) and say where the file came from:\n  {}\n", url),
+        None => String::new(),
+    }
 }
 
 /// The report for a person: one section per part of the card.
@@ -801,6 +813,7 @@ fn cmd_extract(ns: &Ns) -> i32 {
     println!("Extracted {} ({} bytes, sha256 {}) from {} to {}; note in {}.",
              image.as_deref().unwrap_or("the firmware partition"), r.bytes.len(), r.sha256, target, out, note_path);
     println!("Installed firmware: {}", build);
+    print!("{}", contribute_offer(&note["installed"]));
     0
 }
 
