@@ -117,7 +117,9 @@ def build():
     p.add_argument("--image", choices=["osos", "aupd", "rsrc"],
                    help="one image from the firmware directory, not the whole partition")
     flash_args(fsub.add_parser("write", help="write iPod firmware to a CF/SD card (erases it)"))
-    for name, help_ in (("patch", "build a patched firmware"), ("patches", "list the patch library"),
+    fsub.add_parser("patches", help="list the patch library").add_argument(
+        "--offline", action="store_true", help="don't refresh the library; use the copy on this computer")
+    for name, help_ in (("patch", "build a patched firmware"),
                         ("arm", "arm a disk-mode (boot ROM) update"), ("recover", "the boot ROM recovery routine")):
         fsub.add_parser(name, help=help_).add_argument("args", nargs="*", metavar="ARG")
 

@@ -1,0 +1,47 @@
+{
+ "format": 3,
+ "id": "flashpod-1.6",
+ "title": "flashpod 1.6: Apple's 1.5 plus 22 fixes (1st and 2nd generation)",
+ "base": "apple-1g2g-1.5",
+ "patches": [
+  "article-memory",
+  "artist-albums",
+  "artist-menu",
+  "disk-mode-large-disks",
+  "flac",
+  "flac-refill",
+  "heap-wipe",
+  "large-disks",
+  "library-leak",
+  "list-filter",
+  "list-reset",
+  "menu-sort",
+  "missing-characters",
+  "missing-characters-sort",
+  "name-lookup",
+  "name-table-growth",
+  "shuffle-audiobooks",
+  "startup-clear",
+  "test-script-scan",
+  "time-stamp",
+  "track-record",
+  "version"
+ ],
+ "result": {
+  "bytes": 5479893,
+  "sha256": "ec2d2db17f2550929a37449b6992d9d13d729a11928841ed163f2855824b2573",
+  "osos_sha256": "e76d6785b6d743d351fa4928ca90569f1698fa287092b46a8f717feeffd60a22"
+ },
+ "tested": [
+  {
+   "where": "hardware",
+   "date": "2026-10-16",
+   "what": "these 22 fixes on a 1st-generation iPod, 250 GB card, 31,958 songs: boots, plays, skips, seeks (openpod firmware/1/1.6/README.md)"
+  },
+  {
+   "where": "emulator",
+   "date": "2026-10-30",
+   "what": "this image: boots to the menu and loads the library on a synthetic card (emupod check)"
+  }
+ ]
+}

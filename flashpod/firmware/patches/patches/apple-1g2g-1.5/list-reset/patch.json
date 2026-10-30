@@ -1,0 +1,41 @@
+{
+ "format": 3,
+ "id": "list-reset",
+ "author": "openpod",
+ "title": "Clear only the sorted lists that exist when a track is added",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x699a4",
+   "vaddr": "0x280699a4",
+   "patched": "c12a0cea",
+   "check": {
+    "offset": "0x69990",
+    "bytes": 48,
+    "sha256": "6e57ea230a7791fee9dabfc3a7eb98b9dc7fa27607a56524cfffa87ebfc60421"
+   },
+   "why": "adding a track frees the cached sorted lists only for orders that have one"
+  }
+ ],
+ "append": [
+  {
+   "image": "osos",
+   "offset": "0x3744b0",
+   "vaddr": "0x283744b0",
+   "bytes": 100,
+   "sha256": "ad60e6cb30c06d5727ad0f4bd1e243635e6a5ab0a58acecbf8c0f4255b871c0c",
+   "file": "append.hex"
+  }
+ ],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "list-reset.md",
+  "builder_name": "fastinval"
+ },
+ "license": "MIT"
+}

@@ -1,0 +1,41 @@
+{
+ "format": 3,
+ "id": "missing-characters-sort",
+ "author": "openpod",
+ "title": "Sort a character the iPod cannot draw after every letter",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x20a8c",
+   "vaddr": "0x28020a8c",
+   "patched": "62640dda",
+   "check": {
+    "offset": "0x20a70",
+    "bytes": 48,
+    "sha256": "7dbc7ade65d3b8ce693c0a2a732eab6be58792d944373823774aaa85c5566cab"
+   },
+   "why": "a character of 256 or more is weighed by `weigh`"
+  }
+ ],
+ "append": [
+  {
+   "image": "osos",
+   "offset": "0x379c1c",
+   "vaddr": "0x28379c1c",
+   "bytes": 112,
+   "sha256": "c9e467d2966275b914a38585b50ffd16b93401c630eaa8fe9527decd9c03d61b",
+   "file": "append.hex"
+  }
+ ],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "missing-characters-sort.md",
+  "builder_name": "sortunk"
+ },
+ "license": "MIT"
+}

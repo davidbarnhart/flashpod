@@ -1,0 +1,113 @@
+{
+ "format": 3,
+ "id": "large-disks",
+ "author": "openpod",
+ "title": "Use disks larger than 128 GiB",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0xce350",
+   "vaddr": "0x280ce350",
+   "patched": "9e930aea",
+   "check": {
+    "offset": "0xce340",
+    "bytes": 48,
+    "sha256": "f304cd83a7915e3ff99bd0dab5befe3e43390e209c39a41fccfecdb822ea8b76"
+   },
+   "why": "builder 0x280ce324 (C8/20, read: DMA or SECTORS): reaching 2^28 or past it, drop the LBA nibble and leave the high bytes"
+  },
+  {
+   "image": "osos",
+   "offset": "0xce4f4",
+   "vaddr": "0x280ce4f4",
+   "patched": "46930aea",
+   "check": {
+    "offset": "0xce4e0",
+    "bytes": 48,
+    "sha256": "953815197ca206cbffdc837ac7c9a383d9ab500b98aa706c39c77f03df823aec"
+   },
+   "why": "builder 0x280ce4c8 (C8/C4, read: DMA or MULTIPLE): reaching 2^28 or past it, drop the LBA nibble and leave the high bytes"
+  },
+  {
+   "image": "osos",
+   "offset": "0xce5ec",
+   "vaddr": "0x280ce5ec",
+   "patched": "19930aea",
+   "check": {
+    "offset": "0xce5d0",
+    "bytes": 48,
+    "sha256": "6ba4144211e8a600468e233df0fd9b8146487e5dbf5ba76b2fc6864019bdbfc0"
+   },
+   "why": "builder 0x280ce5c0 (CA/C5, write: DMA or MULTIPLE): reaching 2^28 or past it, drop the LBA nibble and leave the high bytes"
+  },
+  {
+   "image": "osos",
+   "offset": "0xce754",
+   "vaddr": "0x280ce754",
+   "patched": "d0920aea",
+   "check": {
+    "offset": "0xce740",
+    "bytes": 48,
+    "sha256": "953815197ca206cbffdc837ac7c9a383d9ab500b98aa706c39c77f03df823aec"
+   },
+   "why": "builder 0x280ce728 (CA/30, write: DMA or SECTORS): reaching 2^28 or past it, drop the LBA nibble and leave the high bytes"
+  },
+  {
+   "image": "osos",
+   "offset": "0xd1820",
+   "vaddr": "0x280d1820",
+   "patched": "ae860aea",
+   "check": {
+    "offset": "0xd1810",
+    "bytes": 48,
+    "sha256": "9eb42f5a01c29dfd40c02ab4341d3e59ce5bcb5dc69bf35f13d325009e98da63"
+   },
+   "why": "issue routine: when armed, the EXT opcode and the four previous bytes, then the stock flush"
+  },
+  {
+   "image": "osos",
+   "offset": "0xced18",
+   "vaddr": "0x280ced18",
+   "patched": "9e910aea",
+   "check": {
+    "offset": "0xced00",
+    "bytes": 48,
+    "sha256": "b7c7e008876120431d8d58516f149eaf744dd9033fab0160ee14ead1836f616a"
+   },
+   "why": "the driver's capacity (what the partition scan compares against): words 100/101 when word 83 says so"
+  },
+  {
+   "image": "osos",
+   "offset": "0xb4394",
+   "vaddr": "0x280b4394",
+   "patched": "06fc0aea",
+   "check": {
+    "offset": "0xb4380",
+    "bytes": 48,
+    "sha256": "61eed9518ae54c761f343a8cac627184ed0e28707dbba4865951a40b1f5f1b43"
+   },
+   "why": "the drive-info capacity: the same"
+  }
+ ],
+ "append": [
+  {
+   "image": "osos",
+   "offset": "0x3731cc",
+   "vaddr": "0x283731cc",
+   "bytes": 516,
+   "sha256": "9865e55f7dc4306b7cc8f3fbb4e8de67c036b6f47735d682f72127bedd16f23b",
+   "file": "append.hex"
+  }
+ ],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "large-disks.md",
+  "builder_name": "lba48"
+ },
+ "license": "MIT"
+}

@@ -1,0 +1,41 @@
+{
+ "format": 3,
+ "id": "missing-characters",
+ "author": "openpod",
+ "title": "Draw a '?' for a character the font does not have",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x53ab4",
+   "vaddr": "0x28053ab4",
+   "patched": "3f980ceb",
+   "check": {
+    "offset": "0x53aa0",
+    "bytes": 48,
+    "sha256": "d4af7f3f59275c757608847dcd64fa848c7432739670e92fa90f20068e194778"
+   },
+   "why": "the last-resort glyph lookup falls back to '?'"
+  }
+ ],
+ "append": [
+  {
+   "image": "osos",
+   "offset": "0x379bb8",
+   "vaddr": "0x28379bb8",
+   "bytes": 100,
+   "sha256": "20d7859c426c40a6f62b1299bdc8599e3e0390ec4087e0c22fcba25e4bf46d3f",
+   "file": "append.hex"
+  }
+ ],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "missing-characters.md",
+  "builder_name": "noglyph"
+ },
+ "license": "MIT"
+}

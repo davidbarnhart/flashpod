@@ -1,0 +1,80 @@
+{
+ "format": 3,
+ "id": "disk-mode-large-disks",
+ "author": "openpod",
+ "title": "Disk mode: use disks larger than 128 GiB, reading and writing",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "aupd",
+   "offset": "0xf457c",
+   "vaddr": "0x280f457c",
+   "patched": "10402de9c80052e340005213ca0052132e00001affc001e200005ce301cca0030ce090e00100002a01025ee32700009ae0002de90040a0e10c50a0e10260a0e10370a0e1e000a0e37c1b00eb0311a0e3031a81e3e000a0e3f801c1e5390000eb0000a0e3e401c1e5360000eb2504a0e1e801c1e5330000eb240ca0e1ec01c1e5300000eb0000a0e3f001c1e52d0000ebf401c1e52b0000ebe471c1e5290000ebe851c1e5270000eb0400a0e1ec01c1e5240000eb2404a0e1f001c1e5210000eb2408a0e1f401c1e51e0000eb2d0000ea781c00ea",
+   "check": {
+    "offset": "0xf4570",
+    "bytes": 224,
+    "sha256": "8973805af66af4bf7b62bef332adb58a09753edf2b5fe74d205f29db6c43c10c"
+   },
+   "why": "the 48-bit issue, over the unreferenced WRITE_SECTORS"
+  },
+  {
+   "image": "aupd",
+   "offset": "0xf46c4",
+   "vaddr": "0x280f46c4",
+   "patched": "24c091e540001ce3fcffff0a0ef0a0e1781095e5b63ad5e1010b13e30ef0a001cc3095e5000053e30010e0130ef0a011c83095e5010053e10310a0810ef0a0e1400056e30500000ac80056e32500a0033500a01324faffeb0000a0e3060000ea4200a0e3fc01c1e5e4ffffeb0101a0e3360b80e32c0090e50000d0e5e000bde81080bde8",
+   "check": {
+    "offset": "0xf46c0",
+    "bytes": 144,
+    "sha256": "8128b802920788a7d5429f5d2f6efe76d55fae689f8aa009fd62d0da4ada5d67"
+   },
+   "why": "poll, capacity and the end of the 48-bit issue, over its unreferenced sibling"
+  },
+  {
+   "image": "aupd",
+   "offset": "0xf3f20",
+   "vaddr": "0x280f3f20",
+   "patched": "eb0100eb",
+   "check": {
+    "offset": "0xf3f10",
+    "bytes": 48,
+    "sha256": "6dc8b22eadac9cbdcc9221798cacf22b63436b71169bb130b867cf1a8aa0e1ed"
+   },
+   "why": "capacity: IDENTIFY words 100/101 when the drive is 48-bit"
+  },
+  {
+   "image": "aupd",
+   "offset": "0xfb830",
+   "vaddr": "0x280fb830",
+   "patched": "51e3ffea",
+   "check": {
+    "offset": "0xfb820",
+    "bytes": 48,
+    "sha256": "b3f6d680413ea62eb829354a5f2b5bb29abaf103cc67c3995363bfcdedb6da20"
+   },
+   "why": "ata_issue: READ DMA / WRITE DMA / READ VERIFY past 2^28 go out as EXT"
+  },
+  {
+   "image": "aupd",
+   "offset": "0x1075cc",
+   "vaddr": "0x281075cc",
+   "patched": "4fcd6c00",
+   "check": {
+    "offset": "0x1075b0",
+    "bytes": 48,
+    "sha256": "58b2a7dbba19f247cf6294e69ef5665f99b8301a66b3b4e8486bc38eb24ef301"
+   },
+   "why": "flsh directory: flshdisk's checksum, redone"
+  }
+ ],
+ "append": [],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "disk-mode-large-disks.md",
+  "builder_name": "aupdlba48rw"
+ },
+ "license": "MIT"
+}

@@ -685,6 +685,18 @@ in with the build's sha256 and what flashpod read. flashpod sends nothing
 itself: open the link, add where the file came from, and submit it if you
 want the build added. `inspect --json` doesn't carry the link.
 
+### `flashpod firmware patches [--offline]`
+
+Lists the patch library: each base firmware, the patches written against
+it (with their status), and the named builds such as flashpod 1.6. The
+library is [ipod-patches](https://github.com/davidbarnhart/ipod-patches).
+flashpod fetches its index, downloads only the files that changed, and
+checks every file's sha256 against the index before keeping it, in
+`~/.cache/flashpod/patches`. Offline, or when the download fails a
+check, it uses the last copy it downloaded, then the copy built into
+flashpod, and says which one it used and why. `--offline` skips the
+download.
+
 ### `flashpod music export [--to DIR]`
 
 Copies every song off the iPod into `DIR/Artist/Album/NN Title.ext`, with

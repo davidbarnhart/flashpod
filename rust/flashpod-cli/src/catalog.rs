@@ -59,7 +59,7 @@ fn ljust(s: &str, w: usize) -> String {
 
 /// _fmt_table: every column sized to its content but `wrap_col`, which takes
 /// the leftover width and wraps.
-fn fmt_table(headers: &[&str], rows: &[Vec<String>], wrap_col: usize) -> Vec<String> {
+pub(crate) fn fmt_table(headers: &[&str], rows: &[Vec<String>], wrap_col: usize) -> Vec<String> {
     let (indent, max_width) = (2usize, 78usize);
     let ncol = headers.len();
     let len = |s: &str| s.chars().count();
@@ -247,13 +247,13 @@ fn sha256(path: &str) -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn agent() -> Result<ureq::Agent, String> {
+pub(crate) fn agent() -> Result<ureq::Agent, String> {
     Ok(ureq::agent())
 }
 
 /// The system TLS stack (Security.framework, SChannel) and its trust store.
 #[cfg(not(target_os = "linux"))]
-fn agent() -> Result<ureq::Agent, String> {
+pub(crate) fn agent() -> Result<ureq::Agent, String> {
     let tls = native_tls::TlsConnector::new().map_err(|e| format!("<urlopen error {}>", e))?;
     Ok(ureq::AgentBuilder::new().tls_connector(std::sync::Arc::new(tls)).build())
 }

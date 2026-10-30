@@ -1,0 +1,43 @@
+{
+ "format": 3,
+ "id": "shuffle-audiobooks",
+ "author": "openpod",
+ "title": "Keep audiobooks out of Shuffle Songs without looking every track up",
+ "base": "apple-1g2g-1.5",
+ "requires": [
+  "track-record"
+ ],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x36238",
+   "vaddr": "0x28036238",
+   "patched": "3b0e0deb000050e30070a013030000ea",
+   "check": {
+    "offset": "0x36230",
+    "bytes": 32,
+    "sha256": "7f1e1c1788d0acb2e3491e9a31b238bfb92509541ba0dec07a3b8b97cf1a1022"
+   },
+   "why": "the audiobook test on the path in memory; resolve is not called in the queue loop"
+  }
+ ],
+ "append": [
+  {
+   "image": "osos",
+   "offset": "0x379b2c",
+   "vaddr": "0x28379b2c",
+   "bytes": 140,
+   "sha256": "6ca0afc97b201406ce61d9236cc3362ddc7111ca08dcda82981e986082c0dcb8",
+   "file": "append.hex"
+  }
+ ],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "shuffle-audiobooks.md",
+  "builder_name": "shufbooks"
+ },
+ "license": "MIT"
+}

@@ -1,0 +1,44 @@
+{
+ "format": 3,
+ "id": "test-script-scan",
+ "author": "openpod",
+ "title": "Do not list every music file at every start",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x69610",
+   "vaddr": "0x28069610",
+   "patched": "0000a0e1",
+   "check": {
+    "offset": "0x69600",
+    "bytes": 48,
+    "sha256": "858012ea66031137b782a0a0d6453ad854f27284d641d42ff2366ef76c2e5955"
+   },
+   "why": "bl fn_28069758 (choose the path string) -> nop"
+  },
+  {
+   "image": "osos",
+   "offset": "0x69618",
+   "vaddr": "0x28069618",
+   "patched": "0000a0e1",
+   "check": {
+    "offset": "0x69600",
+    "bytes": 48,
+    "sha256": "858012ea66031137b782a0a0d6453ad854f27284d641d42ff2366ef76c2e5955"
+   },
+   "why": "bl fn_280694fc (enumerate, call back on .amx) -> nop"
+  }
+ ],
+ "append": [],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "test-script-scan.md",
+  "builder_name": "skip_test_script_scan"
+ },
+ "license": "MIT"
+}

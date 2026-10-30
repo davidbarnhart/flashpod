@@ -1,0 +1,65 @@
+{
+ "format": 3,
+ "id": "artist-menu",
+ "author": "openpod",
+ "title": "Build the Artists menu without comparing a name with itself",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x35878",
+   "vaddr": "0x28035878",
+   "patched": "cf0d0dea",
+   "check": {
+    "offset": "0x35860",
+    "bytes": 48,
+    "sha256": "89577993b0c3b67bd7e47ba5a96b78a7bccbe382097642a1fbc217bae9daac18"
+   },
+   "why": "a new walk: nothing is remembered"
+  },
+  {
+   "image": "osos",
+   "offset": "0x358b0",
+   "vaddr": "0x280358b0",
+   "patched": "c60d0dea",
+   "check": {
+    "offset": "0x358a0",
+    "bytes": 48,
+    "sha256": "500e09e5447913bd0ab8ff9dfd46eba4481140227238ac976527b92e1466b560"
+   },
+   "why": "a track whose name id is the one that just compared equal is the same row"
+  },
+  {
+   "image": "osos",
+   "offset": "0x358f8",
+   "vaddr": "0x280358f8",
+   "patched": "cd0d0dea",
+   "check": {
+    "offset": "0x358e0",
+    "bytes": 48,
+    "sha256": "de7b764ccd923be2b47e844866ea58b5c9a80d8dead32a5075ef0128d73c435a"
+   },
+   "why": "the name compared equal to the row: remember its id"
+  }
+ ],
+ "append": [
+  {
+   "image": "osos",
+   "offset": "0x378fbc",
+   "vaddr": "0x28378fbc",
+   "bytes": 164,
+   "sha256": "7b68700c92c5f0e8a0dfadb9e543d6a0339fd78c7148b157e75062fccdf9f4fa",
+   "file": "append.hex"
+  }
+ ],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "artist-menu.md",
+  "builder_name": "artlist"
+ },
+ "license": "MIT"
+}

@@ -210,6 +210,7 @@ jobs:
           rustup target add wasm32-unknown-unknown
           (cd rust && cargo test -q && cargo build -q --lib --release --target wasm32-unknown-unknown)
           PYTHONPATH=. python scripts/rust_parity.py --require-wasm
+          python scripts/test_patchlib.py --rust rust/target/release/fpcore
 
       - name: flashpod burn checks (a file stands in for the card)
         if: runner.os == 'Linux'
@@ -299,6 +300,7 @@ jobs:
         run: |
           sudo apt-get install -yq hfsprogs || true
           PYTHONPATH=. python scripts/test_cli_1_0.py --rust rust/target/release/flashpod
+          python scripts/test_patchlib.py --cli rust/target/release/flashpod
 
   # The Rust CLI's Platform layer (rust/flashpod-cli/src/platform) driving a
   # real block device: simulate_card.py attaches a backing file (losetup,

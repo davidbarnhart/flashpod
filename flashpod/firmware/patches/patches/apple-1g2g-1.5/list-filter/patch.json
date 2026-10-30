@@ -1,0 +1,89 @@
+{
+ "format": 3,
+ "id": "list-filter",
+ "author": "openpod",
+ "title": "Do not ask twice about the same artist while building a list",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x35890",
+   "vaddr": "0x28035890",
+   "patched": "6c0d0deb",
+   "check": {
+    "offset": "0x35880",
+    "bytes": 48,
+    "sha256": "5367ef4a8fed524fa7881525c9cb09f858c1c3561c7c07784db30454303dc3a1"
+   },
+   "why": "the walk for a menu of albums / artists / genres / composers"
+  },
+  {
+   "image": "osos",
+   "offset": "0x35ae8",
+   "vaddr": "0x28035ae8",
+   "patched": "d60c0deb",
+   "check": {
+    "offset": "0x35ad0",
+    "bytes": 48,
+    "sha256": "c01851240a27898b631acb9013c4c45ba8e4dd4cfc900cb638e0d1c46dafc7b6"
+   },
+   "why": "the walk for a track list"
+  },
+  {
+   "image": "osos",
+   "offset": "0x36214",
+   "vaddr": "0x28036214",
+   "patched": "410b0deb",
+   "check": {
+    "offset": "0x36200",
+    "bytes": 48,
+    "sha256": "ba66fb92b3882ccb2cbf23a02a40c34463839ee6b0f33c2151f43ee23936d087"
+   },
+   "why": "the walk for the play queue (item N only)"
+  },
+  {
+   "image": "osos",
+   "offset": "0x3567c",
+   "vaddr": "0x2803567c",
+   "patched": "410e0d1a",
+   "check": {
+    "offset": "0x35660",
+    "bytes": 48,
+    "sha256": "47c2ab6ea74998939459f194a3455ddc7d2b715675840d40cba2b42444456282"
+   },
+   "why": "the filter remembers the artist name it refused"
+  },
+  {
+   "image": "osos",
+   "offset": "0x35724",
+   "vaddr": "0x28035724",
+   "patched": "1c0e0dea",
+   "check": {
+    "offset": "0x35710",
+    "bytes": 48,
+    "sha256": "fddb6e1b96545370c99681d3a7c87ec3979aed91f9282632b341ac54be0575f7"
+   },
+   "why": "the filter remembers the album name it refused"
+  }
+ ],
+ "append": [
+  {
+   "image": "osos",
+   "offset": "0x378e48",
+   "vaddr": "0x28378e48",
+   "bytes": 372,
+   "sha256": "11b3246fe9fe204e3113abf4a7935df5e784f8298ad1b9f1cc93722b1d6be521",
+   "file": "append.hex"
+  }
+ ],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "list-filter.md",
+  "builder_name": "artrun"
+ },
+ "license": "MIT"
+}

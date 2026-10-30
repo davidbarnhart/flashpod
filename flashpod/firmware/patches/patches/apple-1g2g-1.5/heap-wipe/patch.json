@@ -1,0 +1,32 @@
+{
+ "format": 3,
+ "id": "heap-wipe",
+ "author": "openpod",
+ "title": "Do not clear all of free memory at every start",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x3db8",
+   "vaddr": "0x28003db8",
+   "patched": "040000ea",
+   "check": {
+    "offset": "0x3da0",
+    "bytes": 48,
+    "sha256": "55015e09d29dc3d9fc72b4e23d4009dc83ea0d3700f2b971240415946e400c16"
+   },
+   "why": "arena_init zero-loop guard: BHS -> B, skip 7,006,236 word stores (26.71 MiB) before the first menu draw"
+  }
+ ],
+ "append": [],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "heap-wipe.md",
+  "builder_name": "nozero_heap_1_1_5"
+ },
+ "license": "MIT"
+}

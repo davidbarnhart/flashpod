@@ -1,0 +1,88 @@
+{
+ "format": 3,
+ "id": "article-memory",
+ "author": "openpod",
+ "title": "Remember what the article rule said about the last artist",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x6fd40",
+   "vaddr": "0x2806fd40",
+   "patched": "f3110cea",
+   "check": {
+    "offset": "0x6fd30",
+    "bytes": 48,
+    "sha256": "400c205a643e7c5fc30c97422836e5c4c894018cdee4b3a3bb2d0ab6c4ab8fa1"
+   },
+   "why": "article_prefix_rewrite: before walking every article, ask whether this name's start was just seen"
+  },
+  {
+   "image": "osos",
+   "offset": "0x6fda0",
+   "vaddr": "0x2806fda0",
+   "patched": "f4110cea",
+   "check": {
+    "offset": "0x6fd90",
+    "bytes": 48,
+    "sha256": "4a04686823590a339cca775e67fe4d0af670b4dfd455bacf36072e6ca49d7d59"
+   },
+   "why": "article_prefix_rewrite: the walk found an article; remember which"
+  },
+  {
+   "image": "osos",
+   "offset": "0x6fddc",
+   "vaddr": "0x2806fddc",
+   "patched": "f4110cea",
+   "check": {
+    "offset": "0x6fdc0",
+    "bytes": 48,
+    "sha256": "a964de66d20d525700276d362c61c495fb43aab79a6e6c0c2c99e239282cb450"
+   },
+   "why": "article_prefix_rewrite: the walk's loop branch; when it runs out, remember that none fits"
+  },
+  {
+   "image": "osos",
+   "offset": "0x3176c",
+   "vaddr": "0x2803176c",
+   "patched": "9e0b0dea",
+   "check": {
+    "offset": "0x31750",
+    "bytes": 48,
+    "sha256": "2dc76c0072e7426a965bb97e5332d98f052aaa8f465dda0bfa70c438758a164b"
+   },
+   "why": "article_tables_load: the articles are being replaced, so forget"
+  }
+ ],
+ "append": [
+  {
+   "image": "osos",
+   "offset": "0x374514",
+   "vaddr": "0x28374514",
+   "bytes": 820,
+   "sha256": "0ee5a67e9bb5d492afef7d3e4a1e7a418e8ce9b0bc791375496904606ede8991",
+   "file": "append.hex"
+  }
+ ],
+ "copies": [
+  {
+   "image": "osos",
+   "offset": "0x374518",
+   "from": {
+    "image": "osos",
+    "offset": "0x6fd48",
+    "bytes": 16,
+    "sha256": "36c865179f244e9c80a5378d200929c997471c1d15deac2cb029dd521293ce91"
+   }
+  }
+ ],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "article-memory.md",
+  "builder_name": "artmemo"
+ },
+ "license": "MIT"
+}

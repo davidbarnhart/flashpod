@@ -1,0 +1,345 @@
+{
+ "format": 3,
+ "files": [
+  {
+   "path": "bases/apple-1g2g-1.5.json",
+   "bytes": 899,
+   "sha256": "d211260034952a065ee5fd3d191cd8710162cba47a8d5bda5fdfb296cd007c0c"
+  },
+  {
+   "path": "builds/flashpod-1.6.json",
+   "bytes": 1151,
+   "sha256": "6d9b922ac3119cd39526923fb39b062514feb17d13e2bec2bb9b255233abf624"
+  },
+  {
+   "path": "catalog/firmware.json",
+   "bytes": 1123,
+   "sha256": "9becec6f09af7e1fe38a8ce18c0e973c1caabcd3c44443f0d00b9cde3eaa2ba3"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/article-memory/README.md",
+   "bytes": 3324,
+   "sha256": "bdbaf2a8a498ec65a1395a3aedd5cdef3c229d2cf22378a46a035af643b4ee8d"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/article-memory/append.hex",
+   "bytes": 1666,
+   "sha256": "29f15e3f4a9306c12ebcd97a2884e00654f3aafb17914f7f85afc99dbf0195e5"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/article-memory/patch.json",
+   "bytes": 2167,
+   "sha256": "0f66a8f2e3f9a2d09c9f8ffe1f67cfb6eaa96256b8295c2314cf878481449755"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/artist-albums/README.md",
+   "bytes": 3667,
+   "sha256": "e884fc10bdc9fc0cc8b7f3918ca5999f0c28bfc39e492502eebfe2544b409d09"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/artist-albums/append.hex",
+   "bytes": 130,
+   "sha256": "af674ab8252f510519be00d331dbf57b18cbe231048a3d11d7f582f9937a28ff"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/artist-albums/patch.json",
+   "bytes": 1265,
+   "sha256": "cf56483e6378686a709b051209b3492acfe75e77af6d7e7116168d918a545ad7"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/artist-menu/README.md",
+   "bytes": 3245,
+   "sha256": "f2255ba73a2144627a52fcff7d3afe27543d3c30ff88080785901267a50246f8"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/artist-menu/append.hex",
+   "bytes": 334,
+   "sha256": "1718f706e563afd69045141c8c908dd6dc5373d0dd9c3f888617f6a7c97765f4"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/artist-menu/patch.json",
+   "bytes": 1528,
+   "sha256": "418bfe0b6949a8ac7e165a2bb9d272cfbb7a6073d8526920078735c2143565cd"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/disk-mode-large-disks/README.md",
+   "bytes": 3146,
+   "sha256": "73eefcab65a929cf02a432e1b8b76a868a2dcc2c2668863c61510a09f41b002a"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/disk-mode-large-disks/patch.json",
+   "bytes": 2691,
+   "sha256": "e9c3452cd1d16f33eb3b401cc836be64f09081a19c7a26e429d821f6d771754c"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/flac-refill/README.md",
+   "bytes": 3841,
+   "sha256": "757ae6940a378c9bbd4265e40ccda4c1e683be1226360043f4d26458ba09e123"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/flac-refill/append.hex",
+   "bytes": 171,
+   "sha256": "7c25333b5f91b40327fc1d2ea30c781647282458879f2c16224bdfe9cc1293dc"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/flac-refill/patch.json",
+   "bytes": 1571,
+   "sha256": "2a6be486fffcfe29bcfb7f30b15e4b779e6d64aad500832cd27b4b74b97d213b"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/flac/README.md",
+   "bytes": 5652,
+   "sha256": "0477716392c906ddb0e5ed92083f7b8b1e6a6a683457f5839235b16eb35ef9d0"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/flac/append.hex",
+   "bytes": 739205,
+   "sha256": "36d0fc39a18a03a603ea04b52f5192b0bb7398fe1644c99b559a68a61f4471d4"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/flac/patch.json",
+   "bytes": 4755,
+   "sha256": "2e40928989c5e78ef8058d66e2a9b73df568a8841ad29cee3e523006989464af"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/heap-wipe/README.md",
+   "bytes": 1198,
+   "sha256": "0e1fa8d92cd9cf93cfd135693055f944b3637bdf631ed5b46524c0c58642fb52"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/heap-wipe/patch.json",
+   "bytes": 740,
+   "sha256": "90c4950e3e084cebc7c1995c461eefe9ea320f51824f84e4fd07b58b0cd4e117"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/large-disks/README.md",
+   "bytes": 4725,
+   "sha256": "962819f55186eec7a40d54a3bb31a4f9e8a03c625cf919ec0b49c4d232b6ee71"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/large-disks/append.hex",
+   "bytes": 1049,
+   "sha256": "228220a631e05fc0553ebf8518d9b912381a3f3e992587b9345457d264ddb82e"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/large-disks/patch.json",
+   "bytes": 3091,
+   "sha256": "592097358018cc30b7269612734a4e5bc207e9a5d4ce4c81a429568948b52a59"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/library-leak/README.md",
+   "bytes": 1426,
+   "sha256": "decd3e83357baf6bfac5d9b0a73ded1907c02cd071b39df67346084aed34afe7"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/library-leak/patch.json",
+   "bytes": 960,
+   "sha256": "8a1fba8dc21f6eaf3433dd7501af1e81713247eeedaf9b9863b7d74654c48b18"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/list-filter/README.md",
+   "bytes": 3617,
+   "sha256": "324f510ea9303ae92aa51b132c28e39b4be0a1cb9e07cb8001dea35e40096d7c"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/list-filter/append.hex",
+   "bytes": 756,
+   "sha256": "8f60b80f9e471caa26946b2cb644baefa17b28cfaf77e048086ec9059c59245c"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/list-filter/patch.json",
+   "bytes": 2112,
+   "sha256": "fcf880d27862fd459931772d491468087ef6471ae3113db7df229600736b0f64"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/list-reset/README.md",
+   "bytes": 2923,
+   "sha256": "30c51367e6ce00fbf10984249f87b5ff1addf123256eb2efd92b2c7928669b24"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/list-reset/append.hex",
+   "bytes": 204,
+   "sha256": "6213348c0fc93da2e1b4f11e226f4aecd4bf3eea575e849fa85a092f63f93bd3"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/list-reset/patch.json",
+   "bytes": 924,
+   "sha256": "c1b72ddd7b493fea386f24af3135618597293875b9438a64adbef6f0f8229503"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/menu-sort/README.md",
+   "bytes": 4123,
+   "sha256": "f7acc58bf9c3da7bcb3496add406133fdb66c4c3022baa160f5136c248f208b2"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/menu-sort/append.hex",
+   "bytes": 8775,
+   "sha256": "383ebb8af01c530683d7698886c9ff2532769bb4d7be488ca6aa1605b638c2b8"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/menu-sort/patch.json",
+   "bytes": 919,
+   "sha256": "06f2c6eeeaaa6c001e03cce3bccd4ff5da49a3b1075c7c57ea2702629a0d10bd"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/missing-characters-sort/README.md",
+   "bytes": 3453,
+   "sha256": "3a571d1840b43e7cf4025e89b1b6d24d71c954f2729c1adf710f9525fb733c45"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/missing-characters-sort/append.hex",
+   "bytes": 228,
+   "sha256": "ddd47c06e639537db3f2aceb87d5e2e971b90200da187aaa1a5d9445b1c24198"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/missing-characters-sort/patch.json",
+   "bytes": 918,
+   "sha256": "9f39a8865c0007ad0ddd4bce9388d529df5abce732e1c07fab3d70f5eef4c3cb"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/missing-characters/README.md",
+   "bytes": 2576,
+   "sha256": "132bca764a02ead9b513d2f128c99d788db44ee6a5048cf334ffd77f7d249825"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/missing-characters/append.hex",
+   "bytes": 204,
+   "sha256": "d59142d75dd2cd1d2eb73e81861c11d142af30b28f6e08ee61634ec2c6120d4a"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/missing-characters/patch.json",
+   "bytes": 899,
+   "sha256": "34c2148da186ed1fb01c121b1ba5ea89131ace421e6ae6d009c6571025144879"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/name-lookup/README.md",
+   "bytes": 3854,
+   "sha256": "af60b777ca7447311601bc8d9c3e0ee0962ac63f36f3ded62651034bde836157"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/name-lookup/append.hex",
+   "bytes": 36270,
+   "sha256": "fe99c7529f3c5516d73f97bb378b36a4eaf68a44f94a6ccf1cc7f75f6816b06d"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/name-lookup/patch.json",
+   "bytes": 1549,
+   "sha256": "c07f9c8a47d4a6712208568a598cb2769b4e27a15047844153dc9fa80169edb6"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/name-table-growth/README.md",
+   "bytes": 1656,
+   "sha256": "3dd53a0c34396188e413a383b549c423c56dd945eb787e3a355bc77debc227a7"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/name-table-growth/patch.json",
+   "bytes": 2334,
+   "sha256": "e8791e2f45855e8bb3ea1235ed739c838fd1f6b32dfc1da5a98c5b727caadbe4"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/shuffle-audiobooks/README.md",
+   "bytes": 3745,
+   "sha256": "505ac9eb81fdc0172ed0d45e47c11525a733beb04e27055d2760c4d54743903e"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/shuffle-audiobooks/append.hex",
+   "bytes": 285,
+   "sha256": "29c4b81e88be9e69fac8b1c1b287f1e0f7b7cbba1af91e42933871e69b816b4f"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/shuffle-audiobooks/patch.json",
+   "bytes": 997,
+   "sha256": "89bb70a4db2581bf090d58340bd5e65115c09d600078cf8470972b56684f89d3"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/startup-clear/README.md",
+   "bytes": 1261,
+   "sha256": "bc54266868416a22edc871a6f4242b4116742327969e17876cd91693a699ddd9"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/startup-clear/append.hex",
+   "bytes": 147,
+   "sha256": "d29565127c22920334db0fc0117b2b62ac1edc6e79e105148d5ee0c00f7dc715"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/startup-clear/patch.json",
+   "bytes": 1127,
+   "sha256": "b70d1324acabe3fbcf18f7e36e51144cb2dcf7f6a8515bdb888ef7d2a1bb7994"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/test-script-scan/README.md",
+   "bytes": 1315,
+   "sha256": "7b31ed2be682afc88b3e300efb2e015448763b1e9ece106ae74bd596c84b5d34"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/test-script-scan/patch.json",
+   "bytes": 1013,
+   "sha256": "175095f3d038034d4e01156ae2ac9036f60f723424583b28ce05878853ae4e0d"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/time-stamp/README.md",
+   "bytes": 1210,
+   "sha256": "3619186fd4a5586fbb5dc8dec4f76e75782e7a9f702fa785ad23c8b20c837ac2"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/time-stamp/append.hex",
+   "bytes": 455,
+   "sha256": "dc2034c30bd16f2c36da189e467a946d0c078950ec4cfd26dd2801f35045aaf5"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/time-stamp/patch.json",
+   "bytes": 1117,
+   "sha256": "98d1c3cc45e3b501d3f97a721b9a15e3fae1ec86cc5c7d767e5e7dde5267cf3d"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/track-record/README.md",
+   "bytes": 6284,
+   "sha256": "64b042898591a9f9cb330784ffc27df75ae775ca184d4f88b93b323f036030d8"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/track-record/append.hex",
+   "bytes": 2438,
+   "sha256": "f311b0c63f8f2360ea6bc55e17a15e49a8bf8b3f73af7e87bd7065610a00c889"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/track-record/patch.json",
+   "bytes": 10969,
+   "sha256": "5cb6f1a30971532ad5754663a4cfcd1ec60bf054ded275b07ef00b4832a39a4b"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/version/README.md",
+   "bytes": 1707,
+   "sha256": "b4fb8aad8056aecbab43115e43c8a0ee0f43c54a64ba5988ba226cda8c46ea72"
+  },
+  {
+   "path": "patches/apple-1g2g-1.5/version/patch.json",
+   "bytes": 927,
+   "sha256": "af642437d1220f913b2c11d721a4acaaf4b273ceb322611eb8326838521045b2"
+  },
+  {
+   "path": "schema/base.schema.json",
+   "bytes": 1303,
+   "sha256": "f7dc9c67af45bb037f908f2a1480371363667ce4b8e0dc4637f2f62b846d4cd6"
+  },
+  {
+   "path": "schema/build.schema.json",
+   "bytes": 1309,
+   "sha256": "3884e46e8da1dca0f874edd8d7739824ef8ede7b8ed90b0d679f50cede92f473"
+  },
+  {
+   "path": "schema/catalog.schema.json",
+   "bytes": 2067,
+   "sha256": "7f100aeb8cb39f3b2ed561c0b4d3166f1f82b764e648efeed28c53903d034dd4"
+  },
+  {
+   "path": "schema/index.schema.json",
+   "bytes": 555,
+   "sha256": "3fcfa8e373b0d5aa36c2e8b7ca4a938a25bf96de2b7e795c13f5192178d7c542"
+  },
+  {
+   "path": "schema/patch.schema.json",
+   "bytes": 3723,
+   "sha256": "07e1da00b49abdb9efa14a93e8b8d3c5f40e466a7d20e07a0c067d8c12eaada8"
+  }
+ ]
+}

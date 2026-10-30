@@ -23,6 +23,7 @@ mod host;
 mod rawdev;
 mod mount;
 mod pathpicker;
+mod patches;
 mod platform;
 mod sys;
 mod term;
@@ -377,7 +378,9 @@ fn build_cli() -> Cli {
     exp.add(Arg::opt(&["--image"]).choices(&["osos", "aupd", "rsrc"]).help("one image from the firmware directory, not the whole partition"));
     let w = cli.add_parser_at(fw, "write", &[], "write iPod firmware to a CF/SD card (erases it)", &[]);
     flash_args(cli.parser(w));
-    for (name, help) in [("patch", "build a patched firmware"), ("patches", "list the patch library"),
+    let pp = cli.add_parser_at(fw, "patches", &[], "list the patch library", &[]);
+    cli.parser(pp).add(Arg::flag(&["--offline"]).help("don't refresh the library; use the copy on this computer"));
+    for (name, help) in [("patch", "build a patched firmware"),
                          ("arm", "arm a disk-mode (boot ROM) update"), ("recover", "the boot ROM recovery routine")] {
         let i = cli.add_parser_at(fw, name, &[], help, &[]);
         cli.parser(i).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
@@ -550,6 +553,7 @@ fn main() {
     let code = match command.as_str() {
         "flash" => cmd_flash(&mut ns),
         "firmware extract" => cmd_extract(&ns),
+        "firmware patches" => patches::cmd_patches(&ns),
         "inspect" => cmd_inspect(&ns),
         "card new" => cmd_card_new(&ns),
         "burn" => cmd_burn(&ns),
