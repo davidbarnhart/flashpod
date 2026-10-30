@@ -99,6 +99,18 @@ impl<'a> PyFile<'a> {
     }
 }
 
+/// Python's OSError text for a failed open: "[Errno N] message: 'path'".
+pub fn os_error(e: &std::io::Error, path: &str) -> String {
+    match e.raw_os_error() {
+        Some(code) => {
+            let msg = e.to_string();
+            let msg = msg.split(" (os error").next().unwrap_or(&msg).to_string();
+            format!("[Errno {}] {}: {}", code, msg, crate::text::py_repr(path))
+        }
+        None => e.to_string(),
+    }
+}
+
 fn io(e: std::io::Error) -> TagError {
     TagError(format!("[Errno] {}", e))
 }
@@ -347,7 +359,7 @@ impl crate::library::TagSource for FileTags {
     fn read(&mut self, path: &str) -> TagResult {
         match std::fs::File::open(path) {
             Ok(mut f) => audio_info(path, &mut f),
-            Err(e) => TagResult::Unreadable(io(e).0),
+            Err(e) => TagResult::Unreadable(os_error(&e, path)),
         }
     }
     fn read_stream(&mut self, path: &str, file: &mut dyn ReadAt) -> TagResult {

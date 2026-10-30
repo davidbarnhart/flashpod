@@ -147,3 +147,40 @@ pub fn verify_region(dev: &mut dyn crate::BlockDevice, fw: &[u8]) -> Result<(), 
     }
     Ok(())
 }
+
+/// layout.kept_data_problems: why a flash that keeps the data partition
+/// would be unsafe on this card; empty when it is safe.
+pub fn kept_data_problems(dev: &mut dyn crate::BlockDevice, total: u64, lba48: bool, max_data_sectors: Option<u64>) -> Vec<String> {
+    let (_, data_start, data_blocks) = match build_mbr_layout(total, lba48, max_data_sectors) {
+        Ok(l) => l,
+        Err(e) => return vec![e],
+    };
+    let mbr = dev.read_vec(0, SECTOR as usize).unwrap_or_default();
+    if mbr.len() < SECTOR as usize || mbr[510..512] != [0x55, 0xaa] {
+        return vec!["no partition table, so no data partition to keep".into()];
+    }
+    let mut data = None;
+    for off in [446usize, 462, 478, 494] {
+        if FAT_TYPES.contains(&mbr[off + 4]) {
+            let u = |o: usize| u32::from_le_bytes([mbr[o], mbr[o + 1], mbr[o + 2], mbr[o + 3]]) as u64;
+            data = Some((u(off + 8), u(off + 12)));
+            break;
+        }
+    }
+    let (start, len) = match data {
+        None => return vec!["no FAT32 data partition (type 0x0b/0x0c) to keep".into()],
+        Some(d) => d,
+    };
+    let mut problems = Vec::new();
+    if (start, len) != (data_start, data_blocks) {
+        problems.push(format!(
+            "the data partition is at sectors {}..{}, but this flash would put it at {}..{}",
+            start, (start + len) as i64 - 1, data_start, data_start + data_blocks - 1
+        ));
+    }
+    let boot = dev.read_vec(start * SECTOR, SECTOR as usize).unwrap_or_default();
+    if boot.len() < SECTOR as usize || boot[510..512] != [0x55, 0xaa] || &boot[82..87] != b"FAT32" {
+        problems.push(format!("no FAT32 filesystem at sector {}", start));
+    }
+    problems
+}

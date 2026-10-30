@@ -34,7 +34,7 @@ pub trait BlockDevice {
 
 /// A card image file.
 pub struct FileDevice {
-    file: std::fs::File,
+    pub file: std::fs::File,
 }
 
 impl FileDevice {
@@ -67,6 +67,23 @@ impl FileDevice {
             ));
         }
         Ok(dev)
+    }
+}
+
+impl FileDevice {
+    /// card._lock: flock the whole image, shared to read and exclusive to
+    /// write, never blocking; a conflict is CardBusy.
+    pub fn try_lock(&self, exclusive: bool, path: &str) -> Result<(), Error> {
+        let r = if exclusive { self.file.try_lock() } else { self.file.try_lock_shared() };
+        match r {
+            Ok(()) => Ok(()),
+            Err(std::fs::TryLockError::WouldBlock) => Err(Error::new(
+                ErrorKind::CardBusy,
+                format!("{} is in use by another program", path),
+            )
+            .detail("wanted", if exclusive { "exclusive" } else { "shared" })),
+            Err(std::fs::TryLockError::Error(e)) => Err(e.into()),
+        }
     }
 }
 

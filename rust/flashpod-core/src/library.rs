@@ -50,6 +50,15 @@ pub trait Hooks {
     fn cancelled(&mut self) -> bool {
         false
     }
+    /// plan_add's ``report``: a file skipped as unreadable or not audio,
+    /// as it happens.
+    fn report(&mut self, _msg: &str) {}
+    /// plan_add's ``on_duplicate(nr, nfiles, path)``.
+    fn duplicate(&mut self, _nr: u64, _total: u64, _path: &str) {}
+    /// copy_batch's ``on_copied(nr, total, track)``.
+    fn copied(&mut self, _nr: u64, _total: u64, _size: u64) {}
+    /// copy_batch's ``on_failed(nr, total, path, track, exc)``.
+    fn failed(&mut self, _nr: u64, _total: u64, _path: &str, _size: u64, _error: &str) {}
 }
 
 /// No progress, never cancelled.
@@ -184,7 +193,13 @@ pub fn read_batch(lib: &Library, files: &[String], src: &mut dyn TagSource, ent:
             break;
         }
         hooks.progress("tags", i as u64 + 1, n as u64, path);
-        let track = match make_track(path, i + 1, n, src, ent, report) {
+        let mut said = Vec::new();
+        let made = make_track(path, i + 1, n, src, ent, &mut |m| said.push(m));
+        for m in said {
+            hooks.report(&m);
+            report(m);
+        }
+        let track = match made {
             None => {
                 b.failed.push(path.clone());
                 continue;
@@ -193,6 +208,7 @@ pub fn read_batch(lib: &Library, files: &[String], src: &mut dyn TagSource, ent:
         };
         let key = track_key(&track);
         if seen.contains(&key) || rebuilt.contains(&(track.size, track.tracklen)) {
+            hooks.duplicate(i as u64 + 1, n as u64, path);
             b.skipped.push(path.clone());
             continue;
         }

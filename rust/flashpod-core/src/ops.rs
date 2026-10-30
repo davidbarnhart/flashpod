@@ -14,6 +14,65 @@ use serde_json::{json, Value};
 
 pub const DB: &str = "iPod_Control/iTunes/iTunesDB";
 
+/// What the data commands need from a card: target.RawTarget's operations
+/// (implemented here for the FAT on an image or device) and
+/// target.MountTarget's (the CLI implements it over an OS mount).
+pub trait Target {
+    /// None without an iTunesDB, CorruptLibrary if it won't parse.
+    fn load_library(&mut self, ent: &mut Entropy) -> Result<Option<Library>, Error>;
+    fn save_library(&mut self, lib: &Library, ent: &mut Entropy) -> Result<(), Error>;
+    fn init_structure(&mut self, name: &str, ent: &mut Entropy) -> Result<(), Error>;
+    fn remove_location(&mut self, location: &Option<String>) -> Result<(), Error>;
+    /// The track's new ':'-style location; Err is the OSError's text.
+    fn copy(&mut self, src: &str, read_source: &mut dyn FnMut(&str) -> std::io::Result<Vec<u8>>,
+            ent: &mut Entropy, progress: &mut dyn FnMut(u64, u64)) -> Result<String, String>;
+    /// Free bytes, or why they can't be told.
+    fn free_bytes(&mut self) -> Result<i64, String>;
+    /// The library-fix probe of the card's firmware, memoized in `memo`.
+    fn probe(&mut self, memo: &mut Option<Option<bool>>) -> Option<bool>;
+    /// The iTunesDB file's bytes, None when it can't be read (the picker's
+    /// status bar: cli._raw_db_facts / _mounted_db_facts).
+    fn db_bytes(&mut self) -> Option<Vec<u8>>;
+    /// The library rebuilt from the music files on the card (not saved).
+    fn rebuild_library(&mut self, name: &str, src: &mut dyn TagSource, ent: &mut Entropy, hooks: &mut dyn Hooks,
+                       report: &mut dyn FnMut(String)) -> Result<Library, Error>;
+}
+
+impl Target for Fat32<'_> {
+    fn load_library(&mut self, ent: &mut Entropy) -> Result<Option<Library>, Error> {
+        load_library(self, ent)
+    }
+    fn save_library(&mut self, lib: &Library, ent: &mut Entropy) -> Result<(), Error> {
+        save_library(self, lib, ent)
+    }
+    fn init_structure(&mut self, name: &str, ent: &mut Entropy) -> Result<(), Error> {
+        ensure_dirs(self)?;
+        let lib = Library::new(name, ent);
+        save_library(self, &lib, ent)?;
+        self.sync().map_err(os_err)
+    }
+    fn remove_location(&mut self, location: &Option<String>) -> Result<(), Error> {
+        remove_location(self, location)
+    }
+    fn copy(&mut self, src: &str, read_source: &mut dyn FnMut(&str) -> std::io::Result<Vec<u8>>,
+            ent: &mut Entropy, progress: &mut dyn FnMut(u64, u64)) -> Result<String, String> {
+        copy(self, src, read_source, ent, progress)
+    }
+    fn db_bytes(&mut self) -> Option<Vec<u8>> {
+        self.read_file(DB).ok().flatten()
+    }
+    fn free_bytes(&mut self) -> Result<i64, String> {
+        Fat32::free_bytes(self).map(|v| v as i64).ok_or_else(|| "free-cluster count unavailable (FSInfo has none)".to_string())
+    }
+    fn probe(&mut self, memo: &mut Option<Option<bool>>) -> Option<bool> {
+        probe(self, memo)
+    }
+    fn rebuild_library(&mut self, name: &str, src: &mut dyn TagSource, ent: &mut Entropy, hooks: &mut dyn Hooks,
+                       report: &mut dyn FnMut(String)) -> Result<Library, Error> {
+        rebuild_raw(self, name, src, ent, hooks, report)
+    }
+}
+
 fn os_err(e: String) -> Error {
     Error::new(ErrorKind::Error, e)
 }
@@ -37,8 +96,8 @@ pub fn load_library(fs: &mut Fat32, ent: &mut Entropy) -> Result<Option<Library>
 }
 
 /// card._load.
-pub fn load(fs: &mut Fat32, ent: &mut Entropy) -> Result<Library, Error> {
-    load_library(fs, ent)?
+pub fn load(t: &mut dyn Target, ent: &mut Entropy) -> Result<Library, Error> {
+    t.load_library(ent)?
         .ok_or_else(|| Error::new(ErrorKind::NotInitialized, "no iTunesDB on the card (init it first)"))
 }
 
@@ -81,10 +140,7 @@ pub fn init(dev: &mut dyn BlockDevice, name: &str, overwrite: bool, ent: &mut En
             return Err(Error::new(ErrorKind::AlreadyInitialized, "the card already has an iTunesDB"));
         }
     }
-    ensure_dirs(&mut fs)?;
-    let lib = Library::new(name, ent);
-    save_library(&mut fs, &lib, ent)?;
-    fs.sync().map_err(os_err)?;
+    fs.init_structure(name, ent)?;
     Ok(json!({"name": name}))
 }
 
@@ -104,12 +160,18 @@ fn remove_location(fs: &mut Fat32, location: &Option<String>) -> Result<(), Erro
 /// card.remove: the removed tracks as dicts.
 pub fn remove(dev: &mut dyn BlockDevice, what: &[String], ent: &mut Entropy) -> Result<Value, Error> {
     let mut fs = open_fat(dev)?;
-    let mut lib = load(&mut fs, ent)?;
+    let victims = remove_fs(&mut fs, what, ent)?;
+    Ok(json!(victims.iter().map(|t| t.to_dict()).collect::<Vec<_>>()))
+}
+
+/// card.remove on an open target: the removed tracks.
+pub fn remove_fs(fs: &mut dyn Target, what: &[String], ent: &mut Entropy) -> Result<Vec<Track>, Error> {
+    let mut lib = load(fs, ent)?;
     let idx = library::select_for_removal(&lib, what)?;
     let victims: Vec<Track> = idx.iter().map(|&i| lib.tracks[i].clone()).collect();
     let mut taken = vec![false; lib.tracks.len()];
     for &i in &idx {
-        remove_location(&mut fs, &lib.tracks[i].location)?;
+        fs.remove_location(&lib.tracks[i].location)?;
         taken[i] = true;
     }
     let mut k = 0;
@@ -118,8 +180,8 @@ pub fn remove(dev: &mut dyn BlockDevice, what: &[String], ent: &mut Entropy) -> 
         k += 1;
         keep
     });
-    save_library(&mut fs, &lib, ent)?;
-    Ok(json!(victims.iter().map(|t| t.to_dict()).collect::<Vec<_>>()))
+    fs.save_library(&lib, ent)?;
+    Ok(victims)
 }
 
 /// RawTarget.copy: a collision-free fp###### name in a random F## folder.
@@ -165,7 +227,7 @@ pub struct Plan {
 
 /// The library-fix probe, memoized, over the FAT's block device (the disk's
 /// sector 0 is -part_start, as RawTarget.firmware_read reads it).
-fn probe(fs: &mut Fat32, memo: &mut Option<Option<bool>>) -> Option<bool> {
+pub fn probe(fs: &mut Fat32, memo: &mut Option<Option<bool>>) -> Option<bool> {
     if let Some(v) = memo {
         return *v;
     }
@@ -206,7 +268,7 @@ fn probe(fs: &mut Fat32, memo: &mut Option<Option<bool>>) -> Option<bool> {
 /// card.plan_add. `files` expanded unless `expand_dirs`.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
-pub fn plan_add_fs(fs: &mut Fat32, files: &[String], src: &mut dyn TagSource, ent: &mut Entropy, opts: Options,
+pub fn plan_add_fs(fs: &mut dyn Target, files: &[String], src: &mut dyn TagSource, ent: &mut Entropy, opts: Options,
                    expand_dirs: bool, assess: bool, lib: Option<Library>, hooks: &mut dyn Hooks)
     -> Result<Plan, Error> {
     let mut warnings = Vec::new();
@@ -228,14 +290,14 @@ pub fn plan_add_fs(fs: &mut Fat32, files: &[String], src: &mut dyn TagSource, en
     let (mut free, mut free_error) = (None, None);
     if !b.pending.is_empty() {
         match fs.free_bytes() {
-            Some(v) => free = Some(v as i64),
-            None => free_error = Some("free-cluster count unavailable (FSInfo has none)".to_string()),
+            Ok(v) => free = Some(v),
+            Err(e) => free_error = Some(e),
         }
     }
     let mut memo = None;
     let new: Vec<&Track> = b.pending.iter().map(|(_, t)| t).collect();
     let db = if assess && !b.pending.is_empty() {
-        Some(library::ceiling(&lib, &new, opts, &mut || probe(fs, &mut memo), ent))
+        Some(library::ceiling(&lib, &new, opts, &mut || fs.probe(&mut memo), ent))
     } else {
         None
     };
@@ -296,7 +358,7 @@ pub fn plan_add(dev: &mut dyn BlockDevice, files: &[String], src: &mut dyn TagSo
 
 /// card.apply_add: copy `keep` (default: the plan's tracks), save once.
 #[allow(clippy::too_many_arguments)]
-pub fn apply_add_fs(fs: &mut Fat32, plan: &mut Plan, keep: Option<usize>, save_anyway: bool,
+pub fn apply_add_fs(fs: &mut dyn Target, plan: &mut Plan, keep: Option<usize>, save_anyway: bool,
                     read_source: &mut dyn FnMut(&str) -> std::io::Result<Vec<u8>>, ent: &mut Entropy,
                     hooks: &mut dyn Hooks)
     -> Result<Value, Error>
@@ -311,19 +373,23 @@ pub fn apply_add_fs(fs: &mut Fat32, plan: &mut Plan, keep: Option<usize>, save_a
         }
         let title = track.title.clone().unwrap_or_default();
         hooks.progress("copy", nr as u64 + 1, n as u64, &title);
-        let located = copy(fs, &path, read_source, ent, &mut |d, t| hooks.progress("write", d, t, &title));
+        let located = fs.copy(&path, read_source, ent, &mut |d, t| hooks.progress("write", d, t, &title));
         match located {
-            Err(e) => failed.push(json!({"path": path, "error": e})),
+            Err(e) => {
+                hooks.failed(nr as u64 + 1, n as u64, &path, track.size as u64, &e);
+                failed.push(json!({"path": path, "error": e}));
+            }
             Ok(loc) => {
                 track.location = Some(loc);
                 track.id = plan.lib.next_track_id();
                 plan.lib.tracks.push(track.clone());
+                hooks.copied(nr as u64 + 1, n as u64, track.size as u64);
                 added.push(track);
             }
         }
     }
     if !added.is_empty() || save_anyway {
-        save_library(fs, &plan.lib, ent)?;
+        fs.save_library(&plan.lib, ent)?;
     }
     let cancelled = hooks.cancelled() && added.len() + failed.len() < n;
     Ok(json!({
@@ -367,7 +433,7 @@ pub fn add(dev: &mut dyn BlockDevice, files: &[String], full: &str, ceiling_pol:
     if keep > 0 {
         let new: Vec<&Track> = now.items[..keep].iter().map(|(_, t)| t).collect();
         let mut memo = now.fixed;
-        let c = library::ceiling(&now.lib, &new, opts, &mut || probe(&mut fs, &mut memo), ent);
+        let c = library::ceiling(&now.lib, &new, opts, &mut || Target::probe(&mut fs, &mut memo), ent);
         if c.fit < keep {
             if ceiling_pol == "refuse" || (ceiling_pol == "fit" && c.fit == 0) {
                 let msg = if c.kind == Some("tracks") {
@@ -399,9 +465,29 @@ pub fn rebuild(dev: &mut dyn BlockDevice, name: &str, save: bool, src: &mut dyn 
     -> Result<Value, Error>
 {
     let mut fs = open_fat(dev)?;
-    ensure_dirs(&mut fs)?;
-    let files = fs.music_files().map_err(os_err)?;
     let mut skipped = Vec::new();
+    let lib = rebuild_fs(&mut fs, name, save, src, ent, hooks, &mut |m| skipped.push(m))?;
+    Ok(json!({"tracks": lib.tracks.len(), "skipped": skipped}))
+}
+
+/// card.rebuild on an open target: the rebuilt library; each skipped
+/// file's message goes to `report` as it happens.
+pub fn rebuild_fs(fs: &mut dyn Target, name: &str, save: bool, src: &mut dyn TagSource, ent: &mut Entropy,
+                  hooks: &mut dyn Hooks, report: &mut dyn FnMut(String))
+    -> Result<Library, Error>
+{
+    let lib = fs.rebuild_library(name, src, ent, hooks, report)?;
+    if save {
+        fs.save_library(&lib, ent)?;
+    }
+    Ok(lib)
+}
+
+/// RawTarget.rebuild_library.
+fn rebuild_raw(fs: &mut Fat32, name: &str, src: &mut dyn TagSource, ent: &mut Entropy, hooks: &mut dyn Hooks,
+               report: &mut dyn FnMut(String)) -> Result<Library, Error> {
+    ensure_dirs(fs)?;
+    let files = fs.music_files().map_err(os_err)?;
     let mut located: Vec<(String, Track)> = Vec::new();
     let total = files.len() as u64;
     for (nr, (relpath, location)) in files.into_iter().enumerate() {
@@ -412,17 +498,17 @@ pub fn rebuild(dev: &mut dyn BlockDevice, name: &str, save: bool, src: &mut dyn 
             Ok(Some(e)) if e.attr & crate::fat::ATTR_DIRECTORY == 0 => e,
             Ok(_) => continue,
             Err(e) => {
-                skipped.push(format!("skipping {}: {}", relpath, e));
+                report(format!("skipping {}: {}", relpath, e));
                 continue;
             }
         };
         let size = entry.size as u64;
-        let result = match crate::tags::FatFile::open(&mut fs, entry.first_cluster, size) {
+        let result = match crate::tags::FatFile::open(fs, entry.first_cluster, size) {
             Ok(mut file) => src.read_stream(&relpath, &mut file),
             Err(e) => library::TagResult::Unreadable(e),
         };
         match result {
-            library::TagResult::Unreadable(e) => skipped.push(format!("skipping {}: {}", relpath, e)),
+            library::TagResult::Unreadable(e) => report(format!("skipping {}: {}", relpath, e)),
             library::TagResult::Unrecognized => {}
             library::TagResult::Audio(a) => {
                 let (_, ext) = library::splitext(&relpath);
@@ -438,8 +524,5 @@ pub fn rebuild(dev: &mut dyn BlockDevice, name: &str, save: bool, src: &mut dyn 
         t.id = lib.next_track_id();
         lib.tracks.push(t);
     }
-    if save {
-        save_library(&mut fs, &lib, ent)?;
-    }
-    Ok(json!({"tracks": lib.tracks.len(), "skipped": skipped}))
+    Ok(lib)
 }

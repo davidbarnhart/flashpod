@@ -65,9 +65,20 @@ _free = int(os.environ.get("FP_DISK_FREE", str(10 << 30)))
 shutil.disk_usage = lambda p: shutil._ntuple_diskusage(_free * 2, _free, _free)
 sys.argv = ["flashpod"] + sys.argv[1:]
 from flashpod import cli
+# the flash_catalog scenario's firmware catalog, served from 127.0.0.1
+if os.environ.get("FP_MANIFEST"):
+    cli.FIRMWARE_MANIFEST = os.environ["FP_MANIFEST"]
+if os.environ.get("FLASHPOD_SEED"):
+    # --rust: ids and the clock come from the SplitMix64 source the Rust
+    # binary also uses, so written images can be compared byte for byte
+    from flashpod import entropy
+    with entropy.deterministic(int(os.environ["FLASHPOD_SEED"]),
+                               int(os.environ["FLASHPOD_NOW"])):
+        sys.exit(cli.main())
 sys.exit(cli.main())
 '''
 
+RUST_MODE = False          # set by --rust
 IMG = "ipod.img"
 MNT = "ipod-mount"
 
@@ -81,6 +92,16 @@ MNT = "ipod-mount"
 #   expect   substring that must appear in the baseline's output
 #   py       name of a harness action instead of a command (same for both)
 #   size     (for "image" py action) bytes
+
+ESC, UP, DN, RT, LT = "\x1b", "\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D"
+SUP, SDN, PGUP, PGDN = "\x1b[1;2A", "\x1b[1;2B", "\x1b[5~", "\x1b[6~"
+
+
+def K(*keys):
+    """pty answers for the picker: Enter at the typed-path prompt, then one
+    key per drawn frame ("" just waits for a frame)."""
+    return [(r"or type a path\): ", "\r")] + [(r"\x1b\[J", k) for k in keys]
+
 
 def S(argv, **kw):
     d = {"argv": shlex.split(argv)}
@@ -231,6 +252,46 @@ SCENARIOS = {
         S("add --raw {img} {big} {music}", write=True,
           pty=[(r"enter add", "\r")], expect="dropped to fit free space"),
     ],
+    # Every key of the cursor selector (rows: (unknown) 60 MiB, Alpha Band,
+    # Beta Group): over budget refused, toggles, arrows, all/none; then
+    # the numbered fallback, forced by a terminal too short for the list.
+    "terminal_keys": [
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --firmware {fw} --yes", write=True),
+        S("init --raw {img}", write=True),
+        S("add --raw {img} {big} {music}", write=True,
+          pty=[(r"enter add", " \rj \x1b[A anx\x1b[B\x1b[B k \r")],
+          expect="tracks added"),
+    ],
+    "terminal_lines": [
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --firmware {fw} --yes", write=True),
+        S("init --raw {img}", write=True),
+        S("add --raw {img} {big} {music}", env={"LINES": "4"}, write=True,
+          pty=[(r"q=quit: ", "1\r"), (r"q=quit: ", "\r"),
+               (r"q=quit: ", "1,x\r"), (r"q=quit: ", ",2\r"),
+               (r"q=quit: ", "a\r"), (r"q=quit: ", "n\r"),
+               (r"q=quit: ", "3 9\r"), (r"q=quit: ", "3  2\r"),
+               (r"q=quit: ", "\r")],
+          expect="tracks added"),
+    ],
+    # A corrupt database met in a terminal: the rebuild offer, declined and
+    # accepted, and `rebuild` itself drawing its progress line.
+    "terminal_rebuild": [
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --firmware {fw} --yes", write=True),
+        S("init --raw {img}", write=True),
+        S("add --raw {img} {music}", write=True, expect="tracks added"),
+        {"py": "corrupt_db"},
+        S("add --raw {img} {music}", pty=[(r"\[Aye/Nay\] ", "n\r")],
+          expect="belay that"),
+        S("add --raw {img} {music}", write=True,
+          pty=[(r"\[Aye/Nay\] ", "\r")], expect="skipped"),
+        {"py": "corrupt_db"},
+        S("rebuild --raw {img}", write=True, pty=[],
+          expect="Rebuilt the iTunesDB"),
+        S("ls --raw {img} all", expect="tracks"),
+    ],
     # The --mount path (an OS-mounted iPod) on a plain directory: same
     # commands, the kernel's FAT replaced by the host filesystem.
     "mount": [
@@ -281,6 +342,111 @@ SCENARIOS = {
         S("add --mount {mnt} {big} {music}", env={"FP_DISK_FREE": "40000000"},
           write=True, pty=[(r"enter add", "\r")],
           expect="dropped to fit free space"),
+    ],
+    # add with no paths: the directory picker, driven key by key. Each key
+    # is sent once a frame has been drawn (a frame ends with ESC[J).
+    "picker": [
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --firmware {fw} --yes", write=True),
+        S("init --raw {img}", write=True),
+        S('add --raw {img} "{music}/Beta Group"', write=True),
+        {"py": "picker_home"},
+        S("add --raw {img}", pty=K(ESC), expect="cancelled"),
+        S("add --raw {img}", pty=K("q"), expect="cancelled"),
+        S("add --raw {img}", pty=K("\x03"), expect="cancelled"),
+        S("add --raw {img}", pty=K("\r"), expect="nothing selected"),
+        # a tour of every key, ending in a cancel
+        S("add --raw {img}", pty=K(
+            DN, DN, DN, RT,                     # Empty: nothing to open
+            DN, RT,                             # HiddenOnly: only a dotfile
+            ".", RT, LT, ".",                   # shown, opened, hidden again
+            DN, DN, RT,                         # Many
+            PGDN, PGDN, "\x1b[F", PGUP, "\x1b[H",
+            "\x1b[4~", "\x1b[1~", "\x1b[6~", "\x1b[5~", "\x1bOB", "\x1bOA",
+            "\x1bOF", "\x1bOH", "\x1b[B", "\x1b[A",
+            SDN, SDN, SDN, SUP, "\x1b[b", "\x1b[a", " ",
+            "v", DN, DN, "v", DN, "v", UP, UP, UP, "v",
+            "x", "\x1bOP", "\x1b[Z", "\x1b[1;5A", "\x1bq", "\u00e9", "",
+            RT,                                 # a file: nothing to open
+            LT, "\x1b[H", RT, RT, " ", LT, LT,     # into the long name
+            RT,                                 # (now up in work/) back down the trail
+            "\x1b[H", DN, DN, RT, RT, RT, RT, RT, RT, RT,   # deep/one/.../five
+            LT, LT, LT, LT, LT, LT, LT, RT,
+            ESC), expect="cancelled"),
+        # pick an album and a track that's already on the iPod, then add
+        S("add --raw {img}", write=True, pty=K(
+            "\x1b[F", UP, UP, UP, UP, RT, RT, " ", LT, DN, RT, RT, " ", "\r"),
+          expect="Adding 2 selected paths"),
+        # a small terminal: columns scroll off, the header path is cut
+        S("add --raw {img}", env={"COLUMNS": "60", "LINES": "12"}, pty=K(
+            RT, LT, DN, DN, RT, RT, RT, RT, RT, RT, PGDN, LT, LT, LT, LT, LT, LT,
+            "\x1b[H", DN, DN, DN, DN, DN, DN, RT, PGDN, PGDN, ESC),
+          expect="cancelled"),
+        S("add --raw {img}", env={"COLUMNS": "25", "LINES": "6"},
+          pty=K(DN, RT, DN, " ", LT, ESC), expect="cancelled"),
+        # a home whose parent can't be listed
+        S("add --raw {img}", env={"HOME": "{work}/locked/home2"},
+          pty=K(DN, " ", LT, LT, RT, RT, ESC), expect="unreadable: [Errno 13]"),
+        # a small DB budget: the status bar goes red as the selection grows
+        S("add --raw {img}", env={"FLASHPOD_DB_LIMIT": "6000"}, pty=K(
+            "\x1b[F", UP, UP, UP, UP, " ", DN, DN, " ", UP, UP, UP, UP, UP, " ",
+            " ", ESC), expect="of DB budget"),
+    ],
+    # `terminal`'s flash -> init -> add offers, judged against the current
+    # tree (that scenario's expectations are the 2686d4a baseline's), plus
+    # the answers that decline each offer and a mistyped path.
+    "terminal_flash": [
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --firmware {fw}", write=True, pty=[
+            (r'Type "ERASE ipod\.img" to proceed: ', "ERASE ipod.img\r"),
+            (r"Run init on .* now\? \[Y/n\] ", "y\r"),
+            (r"Load music onto the card now\? \[Y/n\] ", "y\r"),
+            (r"or type a path\): ", "{music}\r"),
+        ], expect="tracks added"),
+        S("add --raw {img}", pty=[(r"or type a path\): ", "{music}/nope\r")],
+          expect="no such file"),
+        S("add --raw {img}", pty=[(r"or type a path\): ", "{music}\r")],
+          expect="already on iPod"),
+        S("flash {img} --firmware {fw}", write=True, pty=[
+            (r'Type "ERASE ipod\.img" to proceed: ', "ERASE ipod.img\r"),
+            (r"Run init on .* now\? \[Y/n\] ", "n\r"),
+        ], expect="Skipped"),
+        S("flash {img} --firmware {fw}", write=True, pty=[
+            (r'Type "ERASE ipod\.img" to proceed: ', "ERASE ipod.img\r"),
+            (r"Run init on .* now\? \[Y/n\] ", "\r"),
+            (r"Load music onto the card now\? \[Y/n\] ", "n\r"),
+        ], expect="Initialized"),
+        S("ls --raw {img}", expect='"iPod": 0 tracks'),
+    ],
+    # A file of many 64 KiB chunks copied over a mount in a terminal: the
+    # copy's own progress throttle shows in the window.
+    "mount_terminal_big": [
+        {"py": "mkdir"},
+        S("init --mount {mnt}", write=True),
+        S("add --mount {mnt} {big}", write=True, pty=[],
+          expect="1 track added"),
+    ],
+    # flash without --firmware: the model and firmware choosers over a
+    # catalog served from 127.0.0.1, the download, the cache, checksums.
+    "flash_catalog": [
+        {"py": "image", "size": 80 << 20},
+        S("flash {img} --yes", env={"FP_MANIFEST": "{manifest}"}, write=True,
+          expect="verified and cached"),
+        S("flash {img} --yes --dry-run", env={"FP_MANIFEST": "{manifest}"},
+          expect="using default firmware"),
+        S("flash {img} --yes --model 9G", env={"FP_MANIFEST": "{manifest}"},
+          expect="unknown model"),
+        S("flash {img} --yes --dry-run --model 2G", env={"FP_MANIFEST": "{manifest}"},
+          pty=[(r"Select firmware \[1\]: ", "0\r")], expect="checksum"),
+        S("flash {img} --yes --dry-run --model 2g", env={"FP_MANIFEST": "{manifest}"},
+          pty=[(r"Select firmware \[1\]: ", "2\r")], expect="404"),
+        S("flash {img} --dry-run", env={"FP_MANIFEST": "{manifest}"},
+          pty=[(r"Select model: ", "1\r"), (r"Select firmware \[1\]: ", "\r")],
+          expect="dry-run"),
+        S("flash {img} --dry-run", env={"FP_MANIFEST": "{manifest}"},
+          pty=[(r"Select model: ", "x\r")], expect="invalid selection"),
+        S("flash {img} --dry-run --model 1G", env={"FP_MANIFEST": "{manifest}"},
+          pty=[(r"Select firmware \[0\]: ", "7\r")], expect="invalid selection"),
     ],
     "wrong_confirm": [
         {"py": "image", "size": 64 << 20},
@@ -401,6 +567,37 @@ def run_pty(cmd, env, cwd, answers, timeout=120):
     return rc, out.decode("utf-8", "replace") + note, ""
 
 
+def picker_home(work):
+    """The home directory the picker opens on: dirs and files to sort
+    (case, Unicode), an empty directory, one holding only a dotfile, a
+    dotdir, a long name, a deep chain, a page-overflowing listing, a
+    broken symlink and a symlinked directory, plus the synthetic music.
+    work/locked (no read permission) holds a second home whose parent
+    can't be listed."""
+    home = os.path.join(work, "home")
+    shutil.copytree(os.path.join(work, "music"), os.path.join(home, "Music"))
+
+    def touch(*parts):
+        path = os.path.join(home, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").close()
+    os.makedirs(os.path.join(home, "Empty"))
+    touch("HiddenOnly", ".keep")
+    touch(".config", "settings.txt")
+    touch("A folder whose name is far too long to fit one column", "song.mp3")
+    touch("Caf\u00e9 \u00fcn\u00efcode", "na\u00efve.mp3")
+    for i in range(1, 31):
+        touch("Many", "Track %02d.mp3" % i)
+    touch("deep", "one", "two", "three", "four", "five", "end.mp3")
+    for name in ("alpha.txt", "Beta.MP3", "._junk.mp3", "notes.txt"):
+        touch(name)
+    os.symlink("nowhere", os.path.join(home, "dangling"))
+    os.symlink("Music", os.path.join(home, "linkdir"))
+    os.makedirs(os.path.join(work, "locked", "home2", "inner"))
+    open(os.path.join(work, "locked", "home2", "x.mp3"), "w").close()
+    os.chmod(os.path.join(work, "locked"), 0o311)
+
+
 def corrupt_db_dir(mnt):
     """The --mount twin of corrupt_db: break the magic of the DB file."""
     db = os.path.join(mnt, "iPod_Control", "iTunes", "iTunesDB")
@@ -430,13 +627,17 @@ def corrupt_db(img):
             raise RuntimeError("no iTunesDB in the image to corrupt")
 
 
-def run_scenario(name, steps, tree, work, fixtures, runner):
+def run_scenario(name, steps, tree, work, fixtures, runner, rust=None):
+    locked = os.path.join(work, "locked")
+    if os.path.isdir(locked):
+        os.chmod(locked, 0o755)          # picker_home's unreadable directory
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(os.path.join(work, "home"))
     shutil.copytree(fixtures["music"], os.path.join(work, "music"))
-    ctx = {"img": IMG, "mnt": MNT, "fw": fixtures["fw"],
+    ctx = {"img": IMG, "mnt": MNT, "fw": fixtures["fw"], "work": work,
            "badfw": fixtures["badfw"], "music": os.path.join(work, "music"),
+           "manifest": fixtures["manifest"],
            "big": fixtures["big"]}
     # the target whose bytes each step is judged by: the image, or for the
     # --mount scenarios the directory standing in for a mounted iPod
@@ -453,11 +654,20 @@ def run_scenario(name, steps, tree, work, fixtures, runner):
                 (corrupt_db_dir if os.path.isdir(img) else corrupt_db)(img)
             elif step["py"] == "mkdir":
                 os.makedirs(img)
+            elif step["py"] == "picker_home":
+                picker_home(work)
             records.append({"step": i, "py": step["py"], "sha": sha(img)})
             continue
         argv = [expand_arg(a, ctx) for a in step["argv"]]
-        cmd = [sys.executable, runner] + argv
-        env = env_for(work, tree, step.get("env"))
+        cmd = ([rust] if rust else [sys.executable, runner]) + argv
+        extra = {k: v.format(**ctx) for k, v in (step.get("env") or {}).items()}
+        if RUST_MODE:
+            extra.setdefault("FLASHPOD_SEED", "1234")
+            extra.setdefault("FLASHPOD_NOW", "1760000000")
+            # the runner's shutil.disk_usage default, said out loud for the
+            # Rust binary, which reads FP_DISK_FREE in its place
+            extra.setdefault("FP_DISK_FREE", str(10 << 30))
+        env = env_for(work, tree, extra)
         before = sha(img)
         if "pty" in step:
             answers = [(rx, ans.format(**ctx)) for rx, ans in step["pty"]]
@@ -567,23 +777,80 @@ def compare(name, a, b, steps=None):
     return diffs
 
 
+def serve_catalog(root, fw):
+    """A firmware catalog like firmware/firmware.json, its images served by
+    a local HTTP server for the run's lifetime: a good default, one whose
+    sha256 is wrong, one the server doesn't have. Returns the manifest."""
+    import hashlib
+    import http.server
+    import json
+    import threading
+    site = os.path.join(root, "site")
+    os.makedirs(site, exist_ok=True)
+    with open(fw, "rb") as f:
+        data = f.read()
+    for name in ("good.bin", "tampered.bin"):
+        with open(os.path.join(site, name), "wb") as f:
+            f.write(data)
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=site, **kw)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = "http://127.0.0.1:%d" % srv.server_address[1]
+    sha = hashlib.sha256(data).hexdigest()
+    manifest = {
+        "base_url": base,
+        "models": [
+            {"id": "1G", "name": "1st generation", "years": "2001-02",
+             "tell": "scroll wheel physically turns"},
+            {"id": "2G", "name": "2nd generation", "years": "2002-03",
+             "tell": "touch wheel, four buttons ring the wheel; a "
+                     "description long enough that the table has to wrap"},
+        ],
+        "firmwares": [
+            {"file": "tampered.bin", "sha256": "0" * 64, "size": len(data),
+             "generation": "synthetic", "models": ["2G"], "version": "9.9",
+             "maker": "test", "description": "checksum will not match"},
+            {"file": "good.bin", "sha256": sha, "size": len(data),
+             "generation": "synthetic", "models": ["1G", "2G"],
+             "version": "1.5", "build_date": "2005-02-18",
+             "description": "the synthetic image, the default",
+             "default": True},
+            {"file": "missing.bin", "generation": "synthetic",
+             "models": ["2G"], "version": "0.1",
+             "description": "the server has no such file"},
+        ],
+    }
+    path = os.path.join(root, "manifest.json")
+    with open(path, "w") as f:
+        json.dump(manifest, f)
+    return path
+
+
 def make_fixtures(root):
     music = synth.make_music(os.path.join(root, "music"))
     fw = synth.write_firmware(os.path.join(root, "fw.bin"))
     badfw = synth.write_firmware(os.path.join(root, "badfw.bin"),
                                  bad_checksum=True)
     big = synth.big_wav(os.path.join(root, "big.wav"), 60)
-    return {"music": music, "fw": fw, "badfw": badfw, "big": big}
+    return {"music": music, "fw": fw, "badfw": badfw, "big": big,
+            "manifest": serve_catalog(root, fw)}
 
 
-def run_all(tree, root, fixtures, runner, only=None):
+def run_all(tree, root, fixtures, runner, only=None, rust=None):
     out = {}
     for name, steps in SCENARIOS.items():
         if only and name not in only:
             continue
         out[name] = run_scenario(name, steps, tree,
                                  os.path.join(root, "work-" + name),
-                                 fixtures, runner)
+                                 fixtures, runner, rust)
     return out
 
 
@@ -623,6 +890,9 @@ def main():
                     help="a checkout of the pre-refactor commit")
     ap.add_argument("--tree", default=os.path.dirname(HERE),
                     help="tree under test (default: this checkout)")
+    ap.add_argument("--rust", metavar="BIN",
+                    help="run the tree-under-test side with this Rust "
+                         "flashpod binary (the baseline stays Python)")
     ap.add_argument("--self", action="store_true",
                     help="compare the baseline against itself (determinism)")
     ap.add_argument("--mutants", action="store_true",
@@ -633,6 +903,8 @@ def main():
                     help="print every baseline step's output (for writing "
                          "expectations)")
     opts = ap.parse_args()
+    global RUST_MODE
+    RUST_MODE = bool(opts.rust)
 
     baseline = os.path.abspath(opts.baseline)
     tree = os.path.abspath(baseline if opts.self else opts.tree)
@@ -674,7 +946,8 @@ def main():
         print("baseline %s: %d scenarios, %d commands, all meaningful"
               % (baseline, len(base), nsteps))
 
-        new = run_all(tree, root, fixtures, runner, opts.only)
+        new = run_all(tree, root, fixtures, runner, opts.only,
+                      os.path.abspath(opts.rust) if opts.rust else None)
         diffs = []
         for name in base:
             diffs += compare(name, base[name], new[name], SCENARIOS[name])
