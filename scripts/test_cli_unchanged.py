@@ -52,6 +52,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import synth_fixtures as synth  # noqa: E402
+import result_line  # noqa: E402
 
 RUNNER = r'''
 import os, random, sys, time
@@ -735,6 +736,10 @@ def rewrite_baseline(records):
     return used
 
 
+#: streams compared so far, for the RESULT line
+COMPARED = [0]
+
+
 def compare(name, a, b, steps=None):
     """Differences between baseline records ``a`` and tree records ``b``. A
     step with ``intended`` = {"why", "stdout"/"stderr": exact new text} is a
@@ -745,6 +750,8 @@ def compare(name, a, b, steps=None):
     for ra, rb, step in zip(a, b, steps):
         intended = step.get("intended") or {}
         for key in ("rc", "stdout", "stderr", "sha"):
+            if "argv" in ra:             # a py setup step runs no command
+                COMPARED[0] += 1
             if key + "_has" in intended:          # named: must contain
                 if intended[key + "_has"] not in (rb.get(key) or ""):
                     diffs.append("%s step %d: intended change (%s) not as "
@@ -930,6 +937,19 @@ def main():
             f.write(RUNNER)
         fixtures = make_fixtures(os.path.join(root, "fixtures"))
         base = run_all(baseline, root, fixtures, runner, opts.only)
+        asked = sum(1 for r in base.values() for x in r if "argv" in x)
+        bin_ = os.path.abspath(opts.rust) if opts.rust else None
+        main_compared = [0]          # the mutant runs below compare too
+
+        def result(failed, new=None, mutants=None):
+            entered = 0
+            if new is not None:
+                entered = sum(1 for name in base
+                              for ra, rb in zip(base[name], new.get(name, []))
+                              if "argv" in ra and "rc" in ra and "rc" in rb)
+            return result_line.emit(
+                "cli_unchanged", tree, asked, entered, main_compared[0], failed,
+                {"baseline": base, "tree": new}, binary=bin_, mutants=mutants)
         if opts.dump:
             for name, recs in base.items():
                 for r in recs:
@@ -943,7 +963,7 @@ def main():
         if problems:
             print("BASELINE RUN IS NOT MEANINGFUL:")
             print("\n".join("  " + p for p in problems))
-            return 1
+            return result(True)
         if opts.self:
             # the baseline against itself: no named change applies
             NAMED_REWRITES[:] = []
@@ -956,7 +976,7 @@ def main():
         stale = [w for w, _o, _n in NAMED_REWRITES if w not in used]
         if stale and not opts.only:
             print("NAMED REWRITE NEVER MATCHED (stale): " + "; ".join(stale))
-            return 1
+            return result(True)
         nsteps = sum(1 for r in base.values() for x in r if "argv" in x)
         print("baseline %s: %d scenarios, %d commands, all meaningful"
               % (baseline, len(base), nsteps))
@@ -966,10 +986,11 @@ def main():
         diffs = []
         for name in base:
             diffs += compare(name, base[name], new[name], SCENARIOS[name])
+        main_compared[0] = COMPARED[0]
         if diffs:
             print("DIFFERENT from baseline (%s):" % tree)
             print("\n\n".join(diffs))
-            return 1
+            return result(True, new)
         named = [(n, i, st["intended"]["why"]) for n, steps in SCENARIOS.items()
                  if n in base for i, st in enumerate(steps) if st.get("intended")]
         print("IDENTICAL: %s matches the baseline on every step "
@@ -1003,11 +1024,13 @@ def main():
                     print("mutant caught (%s): %s" % (desc, d[0].splitlines()[0]))
                 else:
                     failed_to_catch.append(desc)
+            caught = (len(MUTANTS) - len(failed_to_catch), len(MUTANTS))
             if failed_to_catch:
                 print("MUTANTS NOT CAUGHT: " + "; ".join(failed_to_catch))
-                return 1
-            print("all %d mutants caught" % len(MUTANTS))
-        return 0
+            else:
+                print("all %d mutants caught" % len(MUTANTS))
+            return result(False, new, caught)
+        return result(False, new)
     finally:
         if opts.keep:
             print("kept " + root)
