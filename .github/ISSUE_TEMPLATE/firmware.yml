@@ -1,7 +1,6 @@
 name: Firmware build flashpod doesn't know
 description: Offer an iPod firmware build for flashpod's catalog. `flashpod inspect` and `flashpod firmware extract` print a link that fills this in.
 title: "Unknown firmware build: osos "
-labels: ["firmware-contribution"]
 body:
   - type: markdown
     attributes:
