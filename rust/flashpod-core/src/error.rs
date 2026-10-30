@@ -23,6 +23,7 @@ pub enum ErrorKind {
     AlreadyInitialized,
     PlanStale,
     PatchLibraryUnavailable,
+    FirmwareUnavailable,
 }
 
 impl ErrorKind {
@@ -48,6 +49,7 @@ impl ErrorKind {
             AlreadyInitialized => "already_initialized",
             PlanStale => "plan_stale",
             PatchLibraryUnavailable => "patch_library_unavailable",
+            FirmwareUnavailable => "firmware_unavailable",
         }
     }
 }

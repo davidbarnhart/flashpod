@@ -16,7 +16,7 @@ flashpod 1.0 groups its commands by what they act on:
 | Group | Commands |
 | --- | --- |
 | `flashpod inspect TARGET` | everything about a card, iPod or image |
-| `flashpod firmware ...` | `extract`, `write` (also `flashpod flash`), `patches`; not built yet: `list`, `patch`, `arm`, `recover` |
+| `flashpod firmware ...` | `list`, `extract`, `write` (also `flashpod flash`), `patches`; not built yet: `patch`, `arm`, `recover` |
 | `flashpod card ...` | `new`, `burn` |
 | `flashpod music ...` | `ls`, `add`, `rm`, `init`, `rebuild`, `export`, `playlist` |
 | `flashpod emulate` | boot a firmware or card in emupod (not built yet) |
@@ -481,7 +481,22 @@ $ flashpod firmware write                       # ← the usual way: pick a disk
 $ flashpod firmware write /dev/sdb              # name the device yourself
 $ flashpod firmware write /dev/sdb --dry-run    # print the plan, write nothing (no root)
 $ flashpod firmware write --self-test           # validate layout logic, no hardware
+$ flashpod firmware write /dev/sdb apple-1g2g-1.5   # a firmware by name (see below)
 ```
+
+**`flashpod firmware list`** shows the firmware you can name: the preserved
+Apple releases, flashpod's own releases and your builds, with what each is for,
+its base, its patch count, whether a hardware test is recorded, and its sha256.
+Its catalog comes from [ipod-patches](https://github.com/davidbarnhart/ipod-patches);
+`--offline` uses the copy on this computer and `--json` prints it for a program.
+
+`firmware write` takes one of those names, or a file, as FIRMWARE or with
+`--firmware`. A name is downloaded the first time, trying each of its URLs in
+order, and checked by sha256 twice: the download, then the firmware inside it.
+The copy in your cache is checked again on each use, and needs no network. A
+path (one with a `/`, or ending in `.bin`, `.gz`, `.ipsw` or `.zip`) is always
+a file and never touches the network. If a bare name is both a file here and a
+firmware in the list, flashpod refuses to guess: say `./name` for the file.
 
 **4th generation and later are read-only for now.** flashpod has never
 had a card it wrote boot on a 4G or an iPod photo, so `firmware write`

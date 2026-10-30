@@ -19,6 +19,7 @@ mod export;
 mod detect;
 mod devices;
 mod flash;
+mod fwlist;
 mod host;
 mod rawdev;
 mod mount;
@@ -245,8 +246,20 @@ fn cmd_flash(ns: &mut Ns) -> i32 {
     let device = s(ns, "device").filter(|d| !d.is_empty());
     let image = device.as_deref().map(flash::is_image).unwrap_or(false);
     let mut max_data_gb = None;
-    let firmware = match s(ns, "firmware").filter(|f| !f.is_empty()) {
-        Some(f) => f,
+    let named = s(ns, "firmware_name").filter(|f| !f.is_empty());
+    let flagged = s(ns, "firmware").filter(|f| !f.is_empty());
+    if named.is_some() && flagged.is_some() {
+        eprintln!("flashpod flash: give the firmware once: as FIRMWARE or with --firmware, not both");
+        return 2;
+    }
+    let firmware = match named.or(flagged) {
+        Some(f) => match fwlist::resolve(&f, s(ns, "model").as_deref().filter(|m| !m.is_empty())) {
+            Ok(path) => path,
+            Err(why) => {
+                eprintln!("flashpod flash: {}", why);
+                return 1;
+            }
+        },
         None => {
             let manifest = match catalog::load_manifest() {
                 Some(m) => m,
@@ -370,7 +383,9 @@ fn build_cli() -> Cli {
 
     let fw = cli.add_parser_at(0, "firmware", &[], "inspect, extract, patch and write firmware", &[]);
     cli.add_subparsers_at(fw, "firmware_command");
-    cli.add_parser_at(fw, "list", &[], "the firmware flashpod can write", &[]);
+    let ls = cli.add_parser_at(fw, "list", &[], "the firmware flashpod can write", &[]);
+    cli.parser(ls).add(Arg::flag(&["--offline"]).help("don't refresh the catalog; use the copy on this computer"));
+    cli.parser(ls).add(Arg::flag(&["--json"]).help("print the list as JSON"));
     let ex = cli.add_parser_at(fw, "extract", &[], "copy the firmware partition (or one image) off a card", &[]);
     let exp = cli.parser(ex);
     exp.add(Arg::pos("target", Nargs::One).help("card image file, or a card or iPod disk (needs root)"));
@@ -450,8 +465,10 @@ fn burn_args(burn: &mut Parser) {
 /// flash's arguments (firmware write, and its alias flash).
 fn flash_args(fl: &mut Parser) {
     fl.add(Arg::pos("device", Nargs::Optional).help("target disk, e.g. /dev/sdb (else interactive chooser)"));
+    fl.add(Arg::pos("firmware_name", Nargs::Optional).metavar("FIRMWARE").help(
+        "a name from `flashpod firmware list`, or a firmware file"));
     fl.add(Arg::opt(&["--firmware"]).help(
-        "firmware image: raw Firmware-*, .bin.gz or .ipsw (default: choose from firmware/firmware.json)"));
+        "the same as FIRMWARE. A file is raw Firmware-*, .bin.gz or .ipsw (default: choose from firmware/firmware.json)"));
     fl.add(Arg::opt(&["--model"]).help(
         "iPod model to flash for, e.g. 1G, 2G, 3G (default: ask; decides which firmware is offered)"));
     fl.add(Arg::flag(&["--yes"]).help("skip the typed ERASE confirmation"));
@@ -553,6 +570,7 @@ fn main() {
     let code = match command.as_str() {
         "flash" => cmd_flash(&mut ns),
         "firmware extract" => cmd_extract(&ns),
+        "firmware list" => fwlist::cmd_list(&ns),
         "firmware patches" => patches::cmd_patches(&ns),
         "inspect" => cmd_inspect(&ns),
         "card new" => cmd_card_new(&ns),
