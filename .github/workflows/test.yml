@@ -209,7 +209,7 @@ jobs:
         run: |
           rustup target add wasm32-unknown-unknown
           (cd rust && cargo test -q && cargo build -q --lib --release --target wasm32-unknown-unknown)
-          PYTHONPATH=. python scripts/rust_parity.py
+          PYTHONPATH=. python scripts/rust_parity.py --require-wasm
 
       - name: flashpod burn checks (a file stands in for the card)
         if: runner.os == 'Linux'
