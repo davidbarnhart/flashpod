@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """flashpod 1.6 flashes from the catalog and is recognised (local check).
 
-    PYTHONPATH=. python3 scripts/test_flashpod_16.py --asset flashpod_1.1.6_2026_10_16.bin.gz
+    PYTHONPATH=. python3 scripts/test_flashpod_16.py --asset flashpod_1.1.6.bin
 
 Needs the catalog's 1.6 asset (it is not in the repo; until it is published
 on the `firmware` release, pass the built file). The asset is copied into a
@@ -10,7 +10,7 @@ temporary XDG cache, so nothing is downloaded and ~/.cache is not touched.
   * the asset matches the catalog entry (sha256, size);
   * the library: card.fetch_firmware finds it in the cache, card.flash
     writes it to a synthetic card, and card.inspect names it "flashpod 1.6",
-    maker flashpod, version word 1.6, with all 23 fixes;
+    maker flashpod, version word 1.6, with all 22 fixes;
   * the CLI: `flashpod flash IMG --model 1G` on a terminal offers 1.6 first,
     labelled "(flashpod)" and NOT AN APPLE RELEASE; choosing it asks whether
     to arm (Enter: no), flashes the card unarmed, and the firmware region is
@@ -62,6 +62,9 @@ def main():
           "the catalog has flashpod 1.6")
     if entry is None:
         return 1
+    check(entry.get("url") == "https://archive.org/download/"
+          "flashpod-firmware-1.6/" + entry["file"],
+          "its url is the archive.org item, with no fallback to the base_url")
     check(sha(opts.asset) == entry["sha256"]
           and os.path.getsize(opts.asset) == entry["size"],
           "the asset matches the entry's sha256 and size")
@@ -78,7 +81,7 @@ def main():
     check(f["build"] == "flashpod 1.6" and f["maker"] == "flashpod"
           and f["catalog_file"] == entry["file"],
           "inspect: %r, maker %r" % (f["build"], f["maker"]))
-    check(f["version_word_means"] == "1.6" and len(f["fixes"]) == 23,
+    check(f["version_word_means"] == "1.6" and len(f["fixes"]) == 22,
           "version word %s, %d fixes" % (f["version_word_means"],
                                          len(f["fixes"])))
 

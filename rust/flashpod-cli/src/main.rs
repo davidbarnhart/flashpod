@@ -26,7 +26,7 @@ mod term;
 mod window;
 mod winnow;
 
-const VERSION: &str = "0.5.2";
+const VERSION: &str = "0.5.3";
 
 /// What Python's `orunknown` does.
 fn orunknown(s: &Option<String>) -> String {

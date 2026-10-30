@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """`add` lifts the iTunesDB byte ceiling on firmware with the library-leak fix.
 
-    PYTHONPATH=. python3 scripts/test_library_fix_detect.py [--asset flashpod_1.1.6_....bin.gz]
+    PYTHONPATH=. python3 scripts/test_library_fix_detect.py [--asset flashpod_1.1.6.bin]
 
 Stock 1G/2G firmware shows zero songs once the iTunesDB passes ~3.78 MB, so
 `add` refuses (or trims) past IPOD_DB_SIZE_LIMIT. openpod's library-leak fix,

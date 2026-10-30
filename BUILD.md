@@ -87,10 +87,13 @@ To bake the firmware into the binary so it never needs the network, place the
 image files **the manifest actually references** next to it before building —
 the spec bundles the whole `flashpod/firmware/` directory, and at runtime
 flashpod prefers a bundled copy (verified against its SHA-256) over
-downloading. The manifest references the **`.bin.gz`** assets:
+downloading. The manifest references the **`.bin.gz`** assets, and flashpod's
+1.6 as a raw `.bin` on archive.org:
 
 ```sh
 gh release download firmware --pattern '*.bin.gz' --dir flashpod/firmware
+curl -L -o flashpod/firmware/flashpod_1.1.6.bin \
+  https://archive.org/download/flashpod-firmware-1.6/flashpod_1.1.6.bin
 pyinstaller --clean --noconfirm flashpod.spec           # now a heavy build
 ```
 
@@ -176,7 +179,7 @@ no `--firmware`. See "Self-contained builds" above.
    base = m["base_url"].rstrip("/") + "/"
    for e in m["firmwares"]:
        print("fetching " + e["file"])
-       u.urlretrieve(base + e["file"], os.path.join(os.path.dirname(src), e["file"]))
+       u.urlretrieve(e.get("url") or base + e["file"], os.path.join(os.path.dirname(src), e["file"]))
    EOF
    ```
    …or copy a prepared tree over a network share (SSH works fine into 10.8 —

@@ -287,7 +287,8 @@ def writers(par, tmp, images, fw_cache):
             p = os.path.join(w, "fw-%s.bin" % name.replace(" ", "_"))
             open(p, "wb").write(fws[name])
             fws[name] = p
-    real = sorted(glob.glob(os.path.join(fw_cache, "*.bin.gz")))
+    real = sorted(glob.glob(os.path.join(fw_cache, "*.bin.gz"))
+                  + glob.glob(os.path.join(fw_cache, "flashpod_1.1.6*.bin")))
     picks = [x for x in real if any(k in x for k in (
         "flashpod_1.1.6", "iPod_1.1.5", "iPod_1.0.0", "iPod_2.2.3",
         "iPod_4.3.1.1", "iPod_5.1.2.1"))]
@@ -330,8 +331,8 @@ def writers(par, tmp, images, fw_cache):
          ["flash", "@", fw])
     case("flash --arm, no disk-mode program", blank,
          lambda a: card.flash(a, fw, arm=True), ["flash", "@", fw, "--arm"])
-    if "flashpod_1.1.6_2026_10_16.bin.gz" in fws:
-        f16 = fws["flashpod_1.1.6_2026_10_16.bin.gz"]
+    if "flashpod_1.1.6.bin" in fws:
+        f16 = fws["flashpod_1.1.6.bin"]
         case("flash --arm, flashpod 1.6", blank,
              lambda a: card.flash(a, f16, arm=True), ["flash", "@", f16, "--arm"])
         case("flash_firmware 1.6 onto a card with music", music,
@@ -681,7 +682,7 @@ def library_ops(par, tmp, images, fw_cache):
         case("add past the free space, full %s" % full, small,
              lambda a, full=full: card.add(a, bigs, policy={"full": full}),
              ["add", "@"] + bigs + ["--full", full], tags=t_big)
-    f16 = [x for x in glob.glob(os.path.join(fw_cache, "flashpod_1.1.6*.bin.gz"))]
+    f16 = [x for x in glob.glob(os.path.join(fw_cache, "flashpod_1.1.6*.bin"))]
     if f16:
         c16 = os.path.join(w, "c16.img")
         card.create_blank(c16, 96 << 20)
