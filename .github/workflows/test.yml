@@ -302,6 +302,13 @@ jobs:
           PYTHONPATH=. python scripts/test_cli_1_0.py --rust rust/target/release/flashpod
           python scripts/test_patchlib.py --cli rust/target/release/flashpod
 
+      # #112: each command names its target, on an image file, a mount and a
+      # loop device; --mutants proves the check fails when a command doesn't.
+      - name: Every 1.0 command names its target
+        run: |
+          python scripts/test_cli_targets.py --rust rust/target/release/flashpod --loop
+          python scripts/test_cli_targets.py --rust rust/target/release/flashpod --mutants
+
   # The Rust CLI's Platform layer (rust/flashpod-cli/src/platform) driving a
   # real block device: simulate_card.py attaches a backing file (losetup,
   # hdiutil, a diskpart VHD), runs `flash` with the init and music prompts,

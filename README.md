@@ -16,7 +16,7 @@ flashpod 1.0 groups its commands by what they act on:
 | Group | Commands |
 | --- | --- |
 | `flashpod inspect TARGET` | everything about a card, iPod or image |
-| `flashpod firmware ...` | `extract`, `write` (also `flashpod flash`); not built yet: `list`, `patch`, `patches`, `arm`, `recover` |
+| `flashpod firmware ...` | `extract`, `write` (also `flashpod flash`), `patches`; not built yet: `list`, `patch`, `arm`, `recover` |
 | `flashpod card ...` | `new`, `burn` |
 | `flashpod music ...` | `ls`, `add`, `rm`, `init`, `rebuild`, `export`, `playlist` |
 | `flashpod emulate` | boot a firmware or card in emupod (not built yet) |
@@ -24,6 +24,10 @@ flashpod 1.0 groups its commands by what they act on:
 The 0.x names point you to the new ones: `flashpod ls` says
 "that command is now `flashpod music ls`" and does nothing else.
 `flashpod flash` still works, as `flashpod firmware write`.
+
+Every command says what it is acting on. The music commands start with a line
+on stderr, `Target: /dev/sdc (card)`, `Target: my.img (image file)` or
+`Target: /media/you/IPOD (mounted iPod)`; stdout stays the command's own output.
 
 ## Requirements
 

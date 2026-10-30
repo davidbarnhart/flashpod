@@ -3,8 +3,9 @@ binary while the Python 0.x tree stays the behaviour oracle.
 
     argv_1_0(["--raw", "x.img", "ls", "all"]) -> ["--raw", "x.img", "music", "ls", "all"]
     output_0x(text) maps the 1.0 program names in usage/error lines back
-    ("usage: flashpod music ls" -> "usage: flashpod ls"), so only real
-    differences remain; normalize() reports how many lines it changed.
+    ("usage: flashpod music ls" -> "usage: flashpod ls") and drops the 1.0
+    target line (#112), so only real differences remain; normalize() reports
+    how many lines it changed.
 """
 import re
 
@@ -36,6 +37,7 @@ def argv_1_0(argv):
     return out
 
 
+_TARGET = re.compile(r"Target: .* \((image file|mounted iPod|card)\)\r?$")
 _PROG = re.compile(r"flashpod (music|card|firmware) (ls|list|add|rm|remove|delete|erase|init|rebuild|burn|write)\b")
 
 
@@ -44,6 +46,9 @@ def normalize(text):
     n = 0
     lines = []
     for line in text.split("\n"):
+        if _TARGET.fullmatch(line):
+            n += 1
+            continue
         new = _PROG.sub(lambda m: "flashpod " + ("flash" if m.group(2) == "write" else m.group(2)), line)
         # argparse pads the usage continuation to the program name's width
         if new != line:

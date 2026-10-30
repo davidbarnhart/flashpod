@@ -870,6 +870,12 @@ fn data_cmd<'a>(cmd: &str, name: &'a Option<String>, files: &'a [String], what: 
     }
 }
 
+/// #112: which thing this command acts on, once it is certain, on success
+/// and failure alike. stderr, so stdout stays the command's own output.
+fn say_target(path: &str, kind: &str) {
+    eprintln!("Target: {} ({})", path, kind);
+}
+
 /// run_raw: ls/add/rm/init/rebuild over the raw device or image `node`,
 /// elevating with sudo first when we lack root. `image`: platform.use_image
 /// took --raw for a card image (decided once, from the argument).
@@ -882,6 +888,7 @@ fn run_raw(ns: &Ns, command: &str, node: &str, image: bool) -> i32 {
         eprintln!("flashpod: couldn't get root for raw access to {}.", node);
         return 1;
     }
+    say_target(node, if image { "image file" } else { "card" });
     if command == "export" {
         return export_raw(ns, node, image);
     }
@@ -955,6 +962,7 @@ fn data_command(ns: &Ns, command: &str) -> i32 {
                   mount, bad.join(", "), UDEV_RULE, d = disk);
         return 1;
     }
+    say_target(&mount, "mounted iPod");
     if command == "export" {
         let (dest, others) = export_opts(ns);
         return export::export(&mut export::MountSource(mount.clone()), &mount, dest.as_deref(), others);
