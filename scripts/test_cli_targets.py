@@ -152,7 +152,7 @@ def loop_mount_cells(binary, fw, music, work):
     os.makedirs(mnt)
     mounted = False
     try:
-        sudo("mount", "-o", "uid=%d,gid=%d" % (os.getuid(), os.getgid()), node + "p2", mnt)
+        sudo("mount", "-o", "uid=%d,gid=%d" % (os.getuid(), os.getgid()), node, mnt)
         mounted = True
         music_steps(binary, "--mount", mnt, "mount (mounted image)", None, music, work)
     finally:
