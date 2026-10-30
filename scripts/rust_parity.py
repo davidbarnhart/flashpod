@@ -28,6 +28,7 @@ any mismatch. Synthetic inputs only (no real music, no David's cards).
 import argparse
 import copy
 import glob
+import hashlib
 import json
 import os
 import shutil
@@ -495,10 +496,11 @@ def tag_files(par, tmp, n_damaged):
     from flashpod import tracks
     named = {}
     files = tag_corpus.build(os.path.join(tmp, "tags"))
+    corpus = hashlib.sha256(b"".join(open(p, "rb").read() for _, p in files)).hexdigest()
     made = open(os.path.join(RUST, "flashpod-core", "src", "tags",
                              "tables.rs")).readline()
-    print("tags: %d synthetic files, mutagen %s%s"
-          % (len(files), mutagen.version_string,
+    print("tags: %d synthetic files (sha256 %s), mutagen %s%s"
+          % (len(files), corpus[:16], mutagen.version_string,
              "" if "mutagen %s," % mutagen.version_string in made else
              " (the port follows the mutagen in tables.rs: %s)"
              % made.split("mutagen ")[1].split(",")[0]))
@@ -511,13 +513,14 @@ def tag_files(par, tmp, n_damaged):
             _, part = par.rust("tags", *[p for _, p in items[i:i + 400]])
             rs.update(part)
         labels = [(p, lab) for lab, p in items]
+        checked = par.checked
         bad = compare_tags(par, what, labels, py, rs, named)
         kinds = {}
         for v in py.values():
             k = sorted(v)[0]
             kinds[k] = kinds.get(k, 0) + 1
-        print("  %s %d files, %d differ (Python: %s)"
-              % ("ok  " if not bad else "FAIL", len(items), bad,
+        print("  %s %d files, %d differ, %d values (Python: %s)"
+              % ("ok  " if not bad else "FAIL", len(items), bad, par.checked - checked,
                  ", ".join("%d %s" % (n, k) for k, n in sorted(kinds.items()))))
     run("tags", files)
 
