@@ -1,0 +1,83 @@
+{
+ "$schema": "http://json-schema.org/draft-07/schema#",
+ "title": "ipod-patches format 3 base (bases/<id>.json)",
+ "type": "object",
+ "required": [
+  "format",
+  "id",
+  "title",
+  "maker",
+  "version",
+  "models",
+  "bytes",
+  "sha256",
+  "images"
+ ],
+ "properties": {
+  "format": {
+   "const": 3
+  },
+  "id": {
+   "type": "string",
+   "pattern": "^[a-z0-9][a-z0-9.-]*$"
+  },
+  "title": {
+   "type": "string"
+  },
+  "maker": {
+   "type": "string"
+  },
+  "version": {
+   "type": "string"
+  },
+  "models": {
+   "type": "array",
+   "items": {
+    "type": "string"
+   }
+  },
+  "file": {
+   "type": "string"
+  },
+  "bytes": {
+   "type": "integer"
+  },
+  "sha256": {
+   "type": "string",
+   "pattern": "^[0-9a-f]{64}$"
+  },
+  "images": {
+   "type": "object",
+   "minProperties": 1,
+   "additionalProperties": {
+    "type": "object",
+    "required": [
+     "bytes",
+     "sha256",
+     "addr",
+     "max_bytes"
+    ],
+    "properties": {
+     "bytes": {
+      "type": "integer"
+     },
+     "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+     },
+     "addr": {
+      "type": "string",
+      "pattern": "^0x[0-9a-f]+$"
+     },
+     "max_bytes": {
+      "type": "string",
+      "pattern": "^0x[0-9a-f]+$"
+     },
+     "max_bytes_why": {
+      "type": "string"
+     }
+    }
+   }
+  }
+ }
+}

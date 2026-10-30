@@ -22,6 +22,7 @@ pub enum ErrorKind {
     Cancelled,
     AlreadyInitialized,
     PlanStale,
+    PatchLibraryUnavailable,
 }
 
 impl ErrorKind {
@@ -46,6 +47,7 @@ impl ErrorKind {
             Cancelled => "cancelled",
             AlreadyInitialized => "already_initialized",
             PlanStale => "plan_stale",
+            PatchLibraryUnavailable => "patch_library_unavailable",
         }
     }
 }

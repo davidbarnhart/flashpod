@@ -1,0 +1,92 @@
+{
+ "format": 3,
+ "id": "name-table-growth",
+ "author": "openpod",
+ "title": "Enlarge the name tables in big steps",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x33980",
+   "vaddr": "0x28033980",
+   "patched": "021aa0e3",
+   "check": {
+    "offset": "0x33970",
+    "bytes": 48,
+    "sha256": "614e0dcf5c3d55e111479835c3e0113b90d438b77693527f0989e23ec5b609b0"
+   },
+   "why": "string_table_add: entries: grow by 1024 (was 50)"
+  },
+  {
+   "image": "osos",
+   "offset": "0x3399c",
+   "vaddr": "0x2803399c",
+   "patched": "011aa0e3",
+   "check": {
+    "offset": "0x33980",
+    "bytes": 48,
+    "sha256": "301ce3a1c0bf48035c23bf3f2a8a499023f7080a52b588899edae215c36ab91c"
+   },
+   "why": "string_table_add: reference counts: grow by 1024 (was 50)"
+  },
+  {
+   "image": "osos",
+   "offset": "0x339fc",
+   "vaddr": "0x280339fc",
+   "patched": "010b50e3",
+   "check": {
+    "offset": "0x339e0",
+    "bytes": 48,
+    "sha256": "bb8c23901ff5a7955818f2cb5a93ca7b5e81dcc0e330f4e713a138dec983d382"
+   },
+   "why": "string_table_add: thread 1024 new entries onto the free list (was 50)"
+  },
+  {
+   "image": "osos",
+   "offset": "0x33a14",
+   "vaddr": "0x28033a14",
+   "patched": "010b80e2",
+   "check": {
+    "offset": "0x33a00",
+    "bytes": 48,
+    "sha256": "89e3f8a48c0ce16a8ecfeae8ad27701a24213300fa08a61a42fc123c3c70000b"
+   },
+   "why": "string_table_add: the entry count goes up by 1024 (was 50)"
+  },
+  {
+   "image": "osos",
+   "offset": "0x33a64",
+   "vaddr": "0x28033a64",
+   "patched": "010750e3",
+   "check": {
+    "offset": "0x33a50",
+    "bytes": 48,
+    "sha256": "a3c1ebbd80512515eb44ad61eadef7512c5afa1af8fc99f3d68415f339407850"
+   },
+   "why": "string_table_add: string space: the step doubles up to 256 KB (was 8)"
+  },
+  {
+   "image": "osos",
+   "offset": "0x33b30",
+   "vaddr": "0x28033b30",
+   "patched": "00e0ffff",
+   "check": {
+    "offset": "0x33b20",
+    "bytes": 48,
+    "sha256": "5979e324fdf17468a7e64e0edf939d7d579b33a5a0151c2d4074b36fbe5791bc"
+   },
+   "why": "string_table_add: the entries' growth, undone if the reference counts cannot grow"
+  }
+ ],
+ "append": [],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "name-table-growth.md",
+  "builder_name": "string_table_growth"
+ },
+ "license": "MIT"
+}

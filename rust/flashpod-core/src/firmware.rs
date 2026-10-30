@@ -7,12 +7,14 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 pub const CATALOG_JSON: &str = include_str!("../../../flashpod/firmware/firmware.json");
-pub const FIXES_JSON: &str = include_str!("../../../flashpod/firmware/fixes.json");
+pub(crate) const FIXES_JSON: &str = include_str!("../../../flashpod/firmware/fixes.json");
 
-pub const PP5002_OSOS_ADDR: u32 = 0x2800_0000;
-pub const VERSION_WORD_OFFSET: usize = 0x3174c;
+pub(crate) const PP5002_OSOS_ADDR: u32 = 0x2800_0000;
+/// osos address of PP502x firmware (4th generation and later).
+pub(crate) const PP502X_OSOS_ADDR: u32 = 0x1000_0000;
+pub(crate) const VERSION_WORD_OFFSET: usize = 0x3174c;
 
-pub fn version_word_means(w: u32) -> Option<&'static str> {
+pub(crate) fn version_word_means(w: u32) -> Option<&'static str> {
     match w {
         0x0150_8000 => Some("1.5"),
         0x0160_8000 => Some("1.6"),
@@ -20,14 +22,14 @@ pub fn version_word_means(w: u32) -> Option<&'static str> {
     }
 }
 
-pub fn known_osos(sha: &str) -> Option<&'static str> {
+pub(crate) fn known_osos(sha: &str) -> Option<&'static str> {
     match sha {
         "109ed777110982e2a31d7f724e4a7f78b73bef17bee90952e2c35c79f0714e21" => Some("openpod 1.6 gate build (withdrawn)"),
         _ => None,
     }
 }
 
-pub fn known_aupd(sha: &str) -> Option<&'static str> {
+pub(crate) fn known_aupd(sha: &str) -> Option<&'static str> {
     match sha {
         "dc68f0fc5d9aae12a30a293507969821915b432d07e1e6b83ccf861650a656fb" => {
             Some("flashpod 1.6 (openpod's disk-mode program, with large disks)")
@@ -45,17 +47,17 @@ pub fn catalog() -> Vec<Value> {
         .unwrap_or_default()
 }
 
-pub fn fixes_table() -> Option<Value> {
+pub(crate) fn fixes_table() -> Option<Value> {
     serde_json::from_str(FIXES_JSON).ok()
 }
 
-pub fn sha256_hex(b: &[u8]) -> String {
+pub(crate) fn sha256_hex(b: &[u8]) -> String {
     let d = Sha256::digest(b);
     d.iter().map(|x| format!("{:02x}", x)).collect()
 }
 
 /// firmware.walk_directory: (entry offset, type, 8 fields).
-pub fn walk_directory(fw: &[u8], base: usize) -> Vec<(usize, [u8; 4], [u32; 8])> {
+pub(crate) fn walk_directory(fw: &[u8], base: usize) -> Vec<(usize, [u8; 4], [u32; 8])> {
     let mut out = Vec::new();
     let mut off = base;
     while off < base + 10 * 40 {
@@ -75,7 +77,7 @@ pub fn walk_directory(fw: &[u8], base: usize) -> Vec<(usize, [u8; 4], [u32; 8])>
 }
 
 /// firmware.aupd_armed.
-pub fn aupd_armed(fw: &[u8]) -> Option<bool> {
+pub(crate) fn aupd_armed(fw: &[u8]) -> Option<bool> {
     if fw.len() < 0x108 || &fw[0x100..0x104] != b"]ih[" {
         return None;
     }
@@ -104,7 +106,7 @@ fn parse_addr(s: &str) -> i64 {
 
 /// firmware.fixes_present: names of the fixes whose edits and appended code
 /// are all there. `aupd` None means "not read".
-pub fn fixes_present(osos: &[u8], addr: u32, table: &Value, aupd: Option<(&[u8], u32)>) -> Vec<String> {
+pub(crate) fn fixes_present(osos: &[u8], addr: u32, table: &Value, aupd: Option<(&[u8], u32)>) -> Vec<String> {
     let mut found = Vec::new();
     for fix in table.get("fixes").and_then(Value::as_array).cloned().unwrap_or_default() {
         let mut ok = true;
@@ -154,7 +156,7 @@ pub fn fixes_present(osos: &[u8], addr: u32, table: &Value, aupd: Option<(&[u8],
 
 /// firmware.describe_installed. `read(offset, n)` reads the firmware
 /// partition (short at its end, empty past it).
-pub fn describe_installed(read: &mut dyn FnMut(i64, usize) -> Vec<u8>, catalog: &[Value]) -> Value {
+pub(crate) fn describe_installed(read: &mut dyn FnMut(i64, usize) -> Vec<u8>, catalog: &[Value]) -> Value {
     if read(0, 4) != b"{{~~" {
         return json!({"present": false, "reason": "no STOP boot block"});
     }
@@ -254,6 +256,56 @@ pub fn describe_installed(read: &mut dyn FnMut(i64, usize) -> Vec<u8>, catalog: 
     Value::Object(out)
 }
 
+/// Where unknown builds are reported (#107): the repo's firmware issue form.
+pub const CONTRIBUTE_ISSUE_URL: &str = "https://github.com/davidbarnhart/flashpod/issues/new";
+
+/// For an installed firmware the catalog doesn't know (``build`` is
+/// "unrecognized"), a GitHub new-issue link with the firmware issue form
+/// prefilled from ``installed`` (describe_installed's dict): the osos
+/// sha256 in the title, the identifying fields, and the dict itself as
+/// JSON. Only a link: flashpod uploads nothing; the person opens it,
+/// reads it, and submits it or not. None for a known build or no firmware.
+/// The dict carries no local path, so the link names no file on the machine.
+pub fn contribute_url(installed: &Value) -> Option<String> {
+    if installed["present"] != json!(true) || installed["build"] != json!("unrecognized") {
+        return None;
+    }
+    let osos = &installed["osos"];
+    let sha = osos["sha256"].as_str()?;
+    let text = |v: &Value| match v {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        v => v.to_string(),
+    };
+    let fields = [
+        ("template", "firmware.yml".to_string()),
+        ("title", format!("Unknown firmware build: osos {}", &sha[..16.min(sha.len())])),
+        ("osos_sha256", sha.to_string()),
+        ("osos_length", text(&osos["length"])),
+        ("osos_addr", osos["addr"].as_u64().map(|a| format!("0x{:08x}", a)).unwrap_or_default()),
+        ("format", text(&installed["format"])),
+        ("version_word", text(&installed["version_word"])),
+        ("aupd_sha256", text(&installed["aupd"]["sha256"])),
+        ("note", serde_json::to_string_pretty(installed).unwrap_or_default()),
+    ];
+    let query: Vec<String> = fields.iter().filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| format!("{}={}", k, url_encode(v))).collect();
+    Some(format!("{}?{}", CONTRIBUTE_ISSUE_URL, query.join("&")))
+}
+
+/// Percent-encoding for a query value: everything but RFC 3986 unreserved.
+fn url_encode(s: &str) -> String {
+    let mut o = String::with_capacity(s.len() * 3);
+    for &b in s.as_bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+            o.push(b as char);
+        } else {
+            o += &format!("%{:02X}", b);
+        }
+    }
+    o
+}
+
 // ---------------------------------------------------------------------------
 // Loading firmware for a flash: firmware.load_firmware, fixup_directories,
 // validate_firmware, arm_firmware. Err strings are the Python ValueError
@@ -262,7 +314,7 @@ pub fn describe_installed(read: &mut dyn FnMut(i64, usize) -> Vec<u8>, catalog: 
 
 /// The Firmware-* image inside raw bytes / a .bin.gz / an .ipsw (zip),
 /// by magic bytes, as load_firmware does (before the fix-ups).
-pub fn unwrap_container(data: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn unwrap_container(data: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Read;
     if data.starts_with(b"PK") {
         let mut zf = zip::ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| e.to_string())?;
@@ -343,6 +395,22 @@ pub fn validate_firmware(fw: &[u8]) -> Result<(), String> {
         return Err(format!("firmware ({} bytes) larger than the 32 MiB firmware partition", fw.len()));
     }
     Ok(())
+}
+
+/// 1.0 writes firmware for 1st to 3rd generation iPods only (PP5002, osos at
+/// 0x28000000). 4th generation and later (PP502x, osos at 0x10000000) are
+/// read-only until a written card has booted on one (David, 2026-10-29):
+/// inspect and extract still read them, card writes refuse them here.
+pub fn check_writable(fw: &[u8]) -> Result<(), String> {
+    if fw.len() < 0x10c || &fw[0x100..0x104] != b"]ih[" {
+        return Ok(());   // validate_firmware's to refuse
+    }
+    match walk_directory(fw, ptr_of(fw) + 0x200).into_iter().find(|(_, typ, _)| typ == b"osos") {
+        Some((_, _, f)) if f[3] == PP502X_OSOS_ADDR => Err(format!(
+            "this firmware is for a 4th-generation or later iPod (osos at 0x{:08x}); this version of flashpod \
+             doesn't write those yet (untested on hardware). inspect and firmware extract still read them.", f[3])),
+        _ => Ok(()),
+    }
 }
 
 /// firmware.load_firmware on bytes: unwrap, fix up, validate.
@@ -432,4 +500,44 @@ pub fn fix_on_card(read: &mut dyn FnMut(u64, usize) -> Option<Vec<u8>>, name: &s
     let one = serde_json::json!({"fixes": [fix]});
     let found = fixes_present(&o, addr, &one, aupd.as_ref().map(|(b, a)| (b.as_slice(), *a)));
     Some(found.iter().any(|n| n == name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn installed(build: &str) -> Value {
+        json!({"present": true, "format": 2, "build": build,
+               "osos": {"sha256": "ab".repeat(32), "length": 4096, "addr": PP5002_OSOS_ADDR, "checksum_ok": true},
+               "version_word": null, "aupd": null})
+    }
+
+    #[test]
+    fn contribute_url_only_for_unrecognized() {
+        assert_eq!(contribute_url(&installed("stock 1.1.5")), None);
+        assert_eq!(contribute_url(&json!({"present": false, "reason": "no STOP boot block"})), None);
+        let u = contribute_url(&installed("unrecognized")).unwrap();
+        assert!(u.starts_with("https://github.com/davidbarnhart/flashpod/issues/new?template=firmware.yml&title=Unknown%20firmware%20build%3A%20osos%20abababababababab&"));
+        assert!(u.contains(&format!("&osos_sha256={}&", "ab".repeat(32))));
+        assert!(u.contains("&osos_length=4096&osos_addr=0x28000000&format=2&note=%7B"));
+        assert!(!u.contains("version_word=") && !u.contains("aupd_sha256="), "empty fields are left out: {}", u);
+    }
+
+    #[test]
+    fn url_encode_reserved() {
+        assert_eq!(url_encode("a b/c?d&e=\"\n~"), "a%20b%2Fc%3Fd%26e%3D%22%0A~");
+    }
+
+    #[test]
+    fn check_writable_refuses_pp502x_only() {
+        let mut fw = vec![0u8; 0x4400];
+        fw[0x100..0x104].copy_from_slice(b"]ih[");
+        fw[0x104..0x108].copy_from_slice(&0x4000u32.to_le_bytes());
+        // one live-directory entry at 0x4200: dev, type (byte-reversed), then id, devOffset, len, addr
+        fw[0x4200..0x4208].copy_from_slice(b"ksidsoso");
+        fw[0x4214..0x4218].copy_from_slice(&PP502X_OSOS_ADDR.to_le_bytes());
+        assert!(check_writable(&fw).unwrap_err().contains("4th-generation"));
+        fw[0x4214..0x4218].copy_from_slice(&PP5002_OSOS_ADDR.to_le_bytes());
+        assert_eq!(check_writable(&fw), Ok(()));
+    }
 }

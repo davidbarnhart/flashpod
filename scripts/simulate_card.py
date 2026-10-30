@@ -54,6 +54,17 @@ if not IS_WIN:
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+LAYOUT_1 = [False]         # set by --layout-1
+
+
+def words(command):
+    """A 0.x command word as the flashpod under test spells it."""
+    if LAYOUT_1[0]:
+        import layout1
+        return layout1.RENAMED[command]
+    return [command]
+
+
 GRN, RED, YEL, RST = "\033[32m", "\033[31m", "\033[33m", "\033[0m"
 
 
@@ -531,10 +542,10 @@ def raw_path_exercise(img, size, opts):
         # ls again proves the write round-trips (titles = filename stems).
         # With --music the flash-time titles are unknown -- only check exit.
         for argv, expect in (
-                (cmd + ["ls", "all", "--raw", node],
+                (cmd + words("ls") + ["all", "--raw", node],
                  None if opts.music else "test-track"),
-                (cmd + ["add", "--raw", node, tune], None),
-                (cmd + ["ls", "all", "--raw", node], "raw-path-extra")):
+                (cmd + words("add") + ["--raw", node, tune], None),
+                (cmd + words("ls") + ["all", "--raw", node], "raw-path-extra")):
             say("running: %s" % " ".join(argv))
             r = subprocess.run(argv, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT,
@@ -571,9 +582,13 @@ def main():
                     help="keep the backing file after verifying")
     ap.add_argument("--model", default="0",
                     help="answer for the model picker (default 0 = 1st gen)")
+    ap.add_argument("--layout-1", action="store_true",
+                    help="the flashpod under test speaks the 1.0 command names "
+                         "(music ls, firmware write, ...)")
     ap.add_argument("--flashpod", default=None,
                     help="flashpod command to test (default: this checkout)")
     opts = ap.parse_args()
+    LAYOUT_1[0] = opts.layout_1
 
     require_elevation()
 
@@ -607,7 +622,7 @@ def main():
 
         cmd = opts.flashpod.split() if opts.flashpod else \
             [sys.executable, "-m", "flashpod"]
-        argv = cmd + ["flash", node, "--yes"]
+        argv = cmd + words("flash") + [node, "--yes"]
         if opts.firmware:
             argv += ["--firmware", opts.firmware]
         say("running: %s" % " ".join(argv))

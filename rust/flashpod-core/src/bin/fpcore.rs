@@ -343,6 +343,36 @@ fn main() {
             let n: usize = args[2].parse().expect("count");
             Ok(serde_json::json!((0..n).map(|_| r.next_u64().to_string()).collect::<Vec<_>>()))
         }
+        Some("patch-index") if args.len() == 2 => {
+            let data = std::fs::read(&args[1]).expect("index file");
+            flashpod_core::patchlib::parse_index(&data).map(|v| serde_json::to_value(v).unwrap())
+        }
+        Some("patch-library") if args.len() == 2 => {
+            // the library a directory holds, opened as the bundled source
+            struct Dir(String);
+            impl flashpod_core::patchlib::Store for Dir {
+                fn get(&mut self, url: &str) -> Result<Vec<u8>, String> {
+                    Err(format!("offline: {}", url))
+                }
+                fn read(&self, _: flashpod_core::patchlib::Source, path: &str) -> Option<Vec<u8>> {
+                    std::fs::read(std::path::Path::new(&self.0).join(path)).ok()
+                }
+                fn write_cache(&mut self, _: &str, _: &[u8]) -> Result<(), String> {
+                    Err("read-only".into())
+                }
+            }
+            let store = Dir(args[1].clone());
+            flashpod_core::patchlib::open_source(&store, flashpod_core::patchlib::Source::Bundled).and_then(|lib| {
+                let ids = |v: Vec<serde_json::Value>| v.iter().map(|x| x["id"].clone()).collect::<Vec<_>>();
+                Ok(serde_json::json!({
+                    "files": lib.files.len(),
+                    "bases": ids(lib.bases()?),
+                    "builds": ids(lib.builds()?),
+                    "patches": ids(lib.patches(None)?),
+                    "catalog": lib.catalog()?,
+                }))
+            })
+        }
         _ => {
             eprintln!("usage: fpcore inspect IMAGE | tracks IMAGE | splitmix SEED COUNT | entropy SEED COUNT");
             std::process::exit(2);

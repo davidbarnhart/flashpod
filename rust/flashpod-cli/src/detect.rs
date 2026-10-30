@@ -34,12 +34,34 @@ fn ns_list(ns: &Ns, k: &str) -> Vec<String> {
 /// _cmd_args for the data commands (ls/add/rm/init/rebuild).
 pub fn cmd_args(ns: &Ns) -> Vec<String> {
     let c = ns_s(ns, "command").unwrap_or_default();
-    let mut a = vec![c.clone()];
+    // the 1.0 spelling of the command (main sets group): music ls, card
+    // burn, firmware write; flash stays flash
+    let mut a = match (ns_s(ns, "group").as_deref(), c.as_str()) {
+        (Some("music"), _) => vec!["music".to_string(), c.clone()],
+        (Some("card"), _) => vec!["card".to_string(), c.clone()],
+        (Some("firmware"), "flash") => vec!["firmware".to_string(), "write".to_string()],
+        _ => vec![c.clone()],
+    };
     match c.as_str() {
         "ls" | "list" => a.extend(ns_s(ns, "field").filter(|s| !s.is_empty())),
         "add" => a.extend(ns_list(ns, "files")),
         "rm" | "remove" | "delete" | "erase" => a.extend(ns_list(ns, "what")),
         "init" | "rebuild" => a.extend(ns_s(ns, "name").filter(|s| !s.is_empty())),
+        "export" => {
+            if let Some(t) = ns_s(ns, "to").filter(|s| !s.is_empty()) {
+                a.extend(["--to".into(), t]);
+            }
+            for (flag, k) in [("--other-files", "other_files"), ("--no-other-files", "no_other_files")] {
+                if ns_b(ns, k) {
+                    a.push(flag.into());
+                }
+            }
+        }
+        "playlist" => {
+            a.extend(ns_s(ns, "playlist_command"));
+            a.extend(ns_s(ns, "name").filter(|s| !s.is_empty()));
+            a.extend(ns_list(ns, "ids"));
+        }
         "burn" => {
             a.extend(ns_s(ns, "image"));
             a.extend(ns_s(ns, "device").filter(|s| !s.is_empty()));
@@ -139,7 +161,7 @@ fn ask(prompt: &str) -> Option<String> {
 /// candidate_mounts: (score, mountpoint), best first.
 pub fn candidate_mounts() -> Vec<(i32, String)> {
     let mut cands = Vec::new();
-    for (dev, mnt, fstype) in host::mounted_filesystems() {
+    for (dev, mnt, fstype) in crate::platform::current().mounted_filesystems() {
         let ft = fstype.to_lowercase();
         if !(ft.contains("fat") || ft.contains("msdos") || ft.contains("hfs")) {
             continue;
@@ -217,7 +239,7 @@ pub fn unmounted_candidates() -> Vec<(i32, String, String, String)> {
 /// _unmounted_disks: the candidates not mounted (a whole disk counts as
 /// mounted when one of its partitions is).
 fn unmounted_disks(disks: &[(String, String)]) -> Vec<(String, String)> {
-    let mounted: Vec<String> = host::mounted_filesystems().into_iter()
+    let mounted: Vec<String> = crate::platform::current().mounted_filesystems().into_iter()
         .filter(|(d, _, _)| d.starts_with("/dev/")).map(|(d, _, _)| host::realpath(&d)).collect();
     let part_suffix = |t: &str| {
         let t = t.strip_prefix('p').unwrap_or(t);
@@ -312,15 +334,10 @@ fn shell_quote(s: &str) -> String {
 
 /// _sudo_mount.
 fn sudo_mount(dev: &str, label: &str) -> Option<String> {
-    let user = std::env::var("SUDO_USER").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| {
-        unsafe {
-            let pw = libc::getpwuid(libc::getuid());
-            if pw.is_null() { String::new() } else { std::ffi::CStr::from_ptr((*pw).pw_name).to_string_lossy().into_owned() }
-        }
-    });
+    let user = std::env::var("SUDO_USER").ok().filter(|s| !s.is_empty()).unwrap_or_else(crate::sys::user_name);
     let name = if label.trim().is_empty() { "IPOD".to_string() } else { label.trim().to_string() };
     let mountpoint = format!("/media/{}/{}", user, name);
-    let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+    let (uid, gid) = crate::sys::user_ids();
     eprintln!("flashpod: udisks unavailable; mounting {} via sudo (you may be prompted for your password)...", dev);
     let script = format!("mkdir -p {} && mount -o uid={},gid={} {} {}", shell_quote(&mountpoint), uid, gid, shell_quote(dev), shell_quote(&mountpoint));
     if run_quiet_mount(&["sudo".into(), "sh".into(), "-c".into(), script]) != 0 {
@@ -480,7 +497,7 @@ fn ls_from_raw(node: &str, desc: &str) -> Option<Source> {
     match flashpod_core::ops::load_library(&mut fs, &mut crate::entropy()) {
         Err(e) if e.kind == flashpod_core::error::ErrorKind::CorruptLibrary => {
             let n = count_music_files(&mut fs);
-            eprintln!("{} \u{2014} {} music file(s) on the card, but its iTunesDB is corrupt ({}).\n  The library can't be listed until the database is rebuilt \u{2014} run `flashpod rebuild` (or `flashpod add`, which offers to rebuild first).", found, n, e.message);
+            eprintln!("{} \u{2014} {} music file(s) on the card, but its iTunesDB is corrupt ({}).\n  The library can't be listed until the database is rebuilt \u{2014} run `flashpod music rebuild` (or `flashpod music add`, which offers to rebuild first).", found, n, e.message);
             None
         }
         Err(e) => {
@@ -488,7 +505,7 @@ fn ls_from_raw(node: &str, desc: &str) -> Option<Source> {
             None
         }
         Ok(None) => {
-            eprintln!("flashpod: {} has an iPod directory structure but no iTunesDB \u{2014} run `flashpod rebuild` (or `flashpod init` for an empty library).", node);
+            eprintln!("flashpod: {} has an iPod directory structure but no iTunesDB \u{2014} run `flashpod music rebuild` (or `flashpod music init` for an empty library).", node);
             None
         }
         Ok(Some(lib)) => {
@@ -519,7 +536,7 @@ fn pick_among_sources(ns: &Ns, mounts: &[(i32, String)], unmounted: &[(String, S
     if !is_admin() {
         if term::stdin_isatty() {
             eprintln!("flashpod: another disk is attached alongside the mounted iPod; checking whether it's a second iPod means reading it raw, which needs root \u{2014} elevating via sudo...");
-            host::sudo_reexec(&cmd_args(ns));
+            crate::platform::current().elevate(&cmd_args(ns));
         }
         eprintln!("flashpod: couldn't get root to check the other attached disk(s); using the mounted iPod. Pass --raw <device> to target another:");
         for (node, desc) in unmounted {
@@ -561,7 +578,7 @@ pub fn detect_ls_source(ns: &Ns) -> Option<Source> {
     }
     if !is_admin() {
         eprintln!("flashpod: looking for an iPod means reading attached disks, which needs root \u{2014} elevating via sudo...");
-        host::sudo_reexec(&cmd_args(ns));
+        crate::platform::current().elevate(&cmd_args(ns));
         eprintln!("flashpod: couldn't get root to scan. Re-run with sudo, or pass --raw <device>. Candidate disk(s):");
         for (node, desc) in &disks {
             eprintln!("  {}", with_desc(node, desc));
@@ -661,7 +678,7 @@ pub fn resolve_raw_target(ns: &Ns) -> Option<Source> {
     }
     if !is_admin() {
         eprintln!("flashpod: {} over the iPod's raw device needs root \u{2014} elevating via sudo...", command);
-        host::sudo_reexec(&cmd_args(ns));
+        crate::platform::current().elevate(&cmd_args(ns));
         eprintln!("flashpod: couldn't get root. Re-run with sudo, or pass --raw <device>. Candidate disk(s):");
         for (node, desc) in &disks {
             eprintln!("  {}", with_desc(node, desc));
@@ -673,7 +690,7 @@ pub fn resolve_raw_target(ns: &Ns) -> Option<Source> {
     }
     let found = scan_for_ipod(&disks);
     if found.is_empty() {
-        eprintln!("flashpod: scanned {} disk(s); none held an iPod database. For a fresh card, run `flashpod init` first.", disks.len());
+        eprintln!("flashpod: scanned {} disk(s); none held an iPod database. For a fresh card, run `flashpod music init` first.", disks.len());
         host::hint_if_bridge_collapsed();
         return None;
     }
@@ -698,7 +715,7 @@ pub fn device_for_mount(mount: &str) -> Option<String> {
         return None;
     }
     let want = host::realpath(mount);
-    host::mounted_filesystems().into_iter().find(|(_, m, _)| host::realpath(m) == want).map(|(d, _, _)| d)
+    crate::platform::current().mounted_filesystems().into_iter().find(|(_, m, _)| host::realpath(m) == want).map(|(d, _, _)| d)
 }
 
 /// ipod_flash.device_mountpoints.
@@ -783,8 +800,8 @@ pub fn offer_eject(dev: Option<&str>, rc: i32) {
         return;
     }
     for attempt in 0..3 {
-        eject(dev);
-        if device_mountpoints(dev).is_empty() {
+        crate::platform::current().eject(dev);
+        if crate::platform::current().device_mountpoints(dev).is_empty() {
             println!("Ejected \u{2014} safe to disconnect.");
             return;
         }

@@ -18,12 +18,19 @@ fn say(msg: &str, c: Option<&str>) {
 }
 
 fn fail(msg: &str) -> Exit {
-    Exit(color(&format!("flashpod burn: {}", msg), C_RED))
+    Exit(color(&format!("flashpod card burn: {}", msg), C_RED))
 }
 
+#[cfg(unix)]
 fn is_block_device(dev: &str) -> bool {
     use std::os::unix::fs::FileTypeExt;
     std::fs::metadata(dev).map(|m| m.file_type().is_block_device()).unwrap_or(false)
+}
+
+/// burn is refused before any of this runs off Linux.
+#[cfg(not(unix))]
+fn is_block_device(_dev: &str) -> bool {
+    false
 }
 
 /// burn.check_target: a removable whole disk at least as big as the image.
@@ -40,7 +47,7 @@ fn check_target(dev: &str, image_bytes: u64) -> Result<(u64, Value), Exit> {
     let entry = devices::list_candidates()?
         .into_iter()
         .find(|d| d["name"].as_str() == Some(name.as_str()))
-        .ok_or_else(|| fail(&format!("{} is not a removable disk (USB, MMC or hot-plug, per lsblk); flashpod burn only writes those. `lsblk -o NAME,SIZE,TRAN,RM` shows what is attached.", dev)))?;
+        .ok_or_else(|| fail(&format!("{} is not a removable disk (USB, MMC or hot-plug, per lsblk); flashpod card burn only writes those. `lsblk -o NAME,SIZE,TRAN,RM` shows what is attached.", dev)))?;
     if matches!(entry["tran"].as_str(), Some("sbp" | "ieee1394")) {
         return Err(fail(&format!("{} is on FireWire; early iPod FireWire bridges crash on large writes. Put the card in a USB reader instead.", dev)));
     }
@@ -65,6 +72,9 @@ fn py_str(v: &Value) -> String {
 }
 
 pub fn burn(image: &str, device: Option<&str>, assume_yes: bool, dry_run: bool, verify: bool) -> Result<i32, Exit> {
+    if !cfg!(target_os = "linux") {
+        return Err(fail("burn is Linux-only for now. Elsewhere, write the image with your system's disk imager."));
+    }
     // card.inspect: the image under a shared lock, read-only
     let info = {
         let dev = FileDevice::open_image(image, false).and_then(|d| d.try_lock(false, image).map(|_| d));

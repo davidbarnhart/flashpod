@@ -1,0 +1,44 @@
+{
+ "format": 3,
+ "firmwares": [
+  {
+   "id": "apple-1g2g-1.5",
+   "title": "Apple iPod Software 1.5 (internal 1.1.5)",
+   "maker": "apple",
+   "version": "1.5",
+   "models": [
+    "1G",
+    "2G"
+   ],
+   "bytes": 5068800,
+   "sha256": "af3950c2253dfd0a9f743440f01634ddb8ce018115c05d9ca0e675912202a3df",
+   "base": "apple-1g2g-1.5",
+   "urls": [
+    {
+     "url": "https://secure-appldnld.apple.com/iPod/SBML/osx/bundles/061-2686.20060912.ipTsW/iPod_1.1.5.ipsw",
+     "role": "primary",
+     "container": "ipsw",
+     "bytes": 2092355,
+     "sha256": "0edbb2d512bc84d333c0749f4d51398890b3a5934476311dd67e2314809e9103",
+     "note": "Apple's own download; verified 2026-10-29 (holds the firmware file named by sha256 above)"
+    }
+   ],
+   "tested_on_hardware": true
+  },
+  {
+   "id": "flashpod-1.6",
+   "title": "flashpod 1.6: Apple's 1.5 plus 22 fixes",
+   "maker": "flashpod",
+   "version": "1.6",
+   "models": [
+    "1G",
+    "2G"
+   ],
+   "bytes": 5479893,
+   "sha256": "ec2d2db17f2550929a37449b6992d9d13d729a11928841ed163f2855824b2573",
+   "build": "flashpod-1.6",
+   "urls": [],
+   "tested_on_hardware": true
+  }
+ ]
+}

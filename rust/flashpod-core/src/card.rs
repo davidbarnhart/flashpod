@@ -6,6 +6,7 @@ use crate::block::BlockDevice;
 use crate::error::{Error, ErrorKind};
 use crate::fat32fmt::{self, FormatError, FAT32_MIN_CLUSTERS};
 use crate::firmware;
+use crate::hfsplus;
 use crate::layout::{self, DATA_START, FW_BLOCKS, FW_START, SECTOR, TAIL_RESERVE};
 use serde::Serialize;
 
@@ -59,6 +60,12 @@ pub fn firmware_bytes(data: &[u8], raw: bool) -> Result<Vec<u8>, Error> {
     r.map_err(|e| Error::new(ErrorKind::FirmwareInvalid, format!("firmware error: {}", e)).detail("reason", e))
 }
 
+/// firmware::check_writable as a library error (reason "unsupported_generation").
+fn writable(fw: &[u8]) -> Result<(), Error> {
+    firmware::check_writable(fw)
+        .map_err(|e| Error::new(ErrorKind::FirmwareInvalid, e).detail("reason", "unsupported_generation"))
+}
+
 #[derive(Debug, Serialize)]
 pub struct FlashResult {
     pub firmware_bytes: usize,
@@ -74,6 +81,11 @@ pub struct FlashOptions {
     pub max_data_gb: Option<f64>,
     pub format: bool,
     pub arm: bool,
+    /// A Mac card (#104): Apple Partition Map and a wrapped HFS+ volume
+    /// instead of an MBR and FAT32. `hfs_time` dates the volume, in seconds
+    /// since 1904 (the library reads no clock).
+    pub mac: bool,
+    pub hfs_time: u32,
 }
 
 fn io_err(e: std::io::Error) -> Error {
@@ -82,6 +94,7 @@ fn io_err(e: std::io::Error) -> Error {
 
 /// card.flash on a device: `fw` is install-ready firmware (firmware_bytes).
 pub fn flash(dev: &mut dyn BlockDevice, fw: Vec<u8>, o: FlashOptions) -> Result<FlashResult, Error> {
+    writable(&fw)?;
     let fw = if o.arm {
         firmware::arm_firmware(&fw)
             .map_err(|e| Error::new(ErrorKind::FirmwareInvalid, e).detail("reason", "cannot_arm"))?
@@ -93,6 +106,9 @@ pub fn flash(dev: &mut dyn BlockDevice, fw: Vec<u8>, o: FlashOptions) -> Result<
         _ => None,
     };
     let total = dev.len()? / SECTOR;
+    if o.mac {
+        return flash_mac(dev, fw, total, max_data_sectors, o);
+    }
     let (header, data_start, data_blocks) =
         layout::build_mbr_layout(total, o.lba48, max_data_sectors).map_err(too_small)?;
     if o.format {
@@ -122,6 +138,30 @@ pub fn flash(dev: &mut dyn BlockDevice, fw: Vec<u8>, o: FlashOptions) -> Result<
     })
 }
 
+/// The Mac card: the same sequence with the APM written last (blocks
+/// 0..62) and the data partition formatted as a wrapped HFS+ volume.
+fn flash_mac(dev: &mut dyn BlockDevice, fw: Vec<u8>, total: u64, max_data_sectors: Option<u64>, o: FlashOptions)
+    -> Result<FlashResult, Error>
+{
+    let (header, data_start, data_blocks) =
+        layout::build_apm_layout(total, o.lba48, max_data_sectors).map_err(too_small)?;
+    layout::write_layout_body(dev, &fw, total, data_start).map_err(io_err)?;
+    if o.format {
+        hfsplus::format_wrapped(dev, data_start, data_blocks, "iPod", o.hfs_time).map_err(io_err)?;
+    }
+    dev.flush()?;
+    layout::verify_region(dev, &fw)?;
+    dev.write_at(0, &header)?;
+    dev.flush()?;
+    Ok(FlashResult {
+        firmware_bytes: fw.len(),
+        data_start,
+        data_sectors: data_blocks,
+        clusters: None,
+        cluster_bytes: None,
+    })
+}
+
 fn partitions_or(dev: &mut dyn BlockDevice) -> Result<(Vec<layout::Partition>, u64), Error> {
     let size = dev.len()?;
     let mbr = dev.read_vec(0, SECTOR as usize)?;
@@ -139,6 +179,7 @@ pub struct FirmwareResult {
 /// card.flash_firmware: only the firmware partition; LayoutMismatch unless
 /// the card has flashpod's layout.
 pub fn flash_firmware(dev: &mut dyn BlockDevice, fw: Vec<u8>) -> Result<FirmwareResult, Error> {
+    writable(&fw)?;
     let (parts, size) = partitions_or(dev)
         .map_err(|_| Error::new(ErrorKind::LayoutMismatch, "no partition table").detail("reason", "no_mbr"))?;
     let (fwp, data, problems) = layout::layout_facts(&parts, size);

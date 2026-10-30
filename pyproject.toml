@@ -55,5 +55,10 @@ include = ["flashpod*"]
 flashpod = [
     "firmware/firmware.json",
     "firmware/fixes.json",
+    # the bundled ipod-patches snapshot (scripts/sync_patches_snapshot.py)
+    "firmware/patches/index.json",
+    "firmware/patches/*/*",
+    "firmware/patches/*/*/*",
+    "firmware/patches/*/*/*/*",
     "contrib/*.rules",
 ]

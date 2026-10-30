@@ -223,6 +223,27 @@ def validate_firmware(fw):
 #: osos load address of the 1G-3G (PP5002) images; the 1.x version word and
 #: the openpod fixes are addressed relative to it.
 PP5002_OSOS_ADDR = 0x28000000
+PP502X_OSOS_ADDR = 0x10000000     # osos of 4th generation and later
+
+
+def check_writable(fw):
+    """1.0 writes firmware for 1st to 3rd generation iPods only. 4th
+    generation and later (PP502x: osos at 0x10000000) are read-only until a
+    written card has booted on one (David, 2026-10-29): inspect and extract
+    still read them; card writes refuse them (ValueError). Mirrors the Rust
+    core's firmware::check_writable."""
+    if len(fw) < 0x10c or fw[0x100:0x104] != b"]ih[":
+        return          # validate_firmware's to refuse
+    ptr, = struct.unpack_from("<I", fw, 0x104)
+    for _off, typ, f in walk_directory(fw, ptr + 0x200):
+        if typ == b"osos":
+            if f[3] == PP502X_OSOS_ADDR:
+                raise ValueError(
+                    "this firmware is for a 4th-generation or later iPod "
+                    "(osos at 0x%08x); this version of flashpod doesn't write "
+                    "those yet (untested on hardware). inspect and firmware "
+                    "extract still read them." % f[3])
+            return
 
 #: Where 1.5 keeps its version, as a word (0x01508000 = "1.5"): osos offset of
 #: vaddr 0x2803174c (openpod firmware session, bridge #1083). The 1.6 version

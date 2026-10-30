@@ -9,6 +9,22 @@ the initial music database, and loads the card with music. Then, once you pop
 the card into an iPod and connect it over USB or FireWire, flashpod manages
 the library on the device too — adding and removing songs right on the iPod.
 
+## flashpod 1.0: commands are grouped
+
+flashpod 1.0 groups its commands by what they act on:
+
+| Group | Commands |
+| --- | --- |
+| `flashpod inspect TARGET` | everything about a card, iPod or image |
+| `flashpod firmware ...` | `extract`, `write` (also `flashpod flash`); not built yet: `list`, `patch`, `patches`, `arm`, `recover` |
+| `flashpod card ...` | `new`, `burn` |
+| `flashpod music ...` | `ls`, `add`, `rm`, `init`, `rebuild`, `export`, `playlist` |
+| `flashpod emulate` | boot a firmware or card in emupod (not built yet) |
+
+The 0.x names point you to the new ones: `flashpod ls` says
+"that command is now `flashpod music ls`" and does nothing else.
+`flashpod flash` still works, as `flashpod firmware write`.
+
 ## Requirements
 
 - **iPod:** Gen 1, 2, or 3 (tested successfully); Gen 4 should work but isn't
@@ -111,7 +127,7 @@ cd flashpod-macos-vintage-no-internet
 ```
 
 The **Linux, Windows, and modern-macOS** builds don't bundle firmware —
-`flashpod flash` downloads the image you pick (verified by checksum), or you
+`flashpod firmware write` downloads the image you pick (verified by checksum), or you
 supply your own with `--firmware`. (The **Vintage Mac OS 10.8** build is the exception) 
 Building the binaries yourself is documented in [BUILD.md](BUILD.md).
 
@@ -123,17 +139,17 @@ over FireWire.** Flash it, then let flashpod initialize the database and load
 your music, all in one sitting:
 
 ```sh
-flashpod flash    # full workflow to partition and format a card,
+flashpod firmware write    # full workflow to partition and format a card,
                   # write the firmware, init the database, and
                   # add music all at once
 ```
 
 <details>
-<summary><strong>See a full <code>flashpod flash</code> session</strong> — model and firmware pick, card selection, erase, verify, init, and first music load</summary>
+<summary><strong>See a full <code>flashpod firmware write</code> session</strong> — model and firmware pick, card selection, erase, verify, init, and first music load</summary>
 
 ```
-$ flashpod flash
-flashpod flash: writing to a disk needs root — elevating via sudo...
+$ flashpod firmware write
+flashpod firmware write: writing to a disk needs root — elevating via sudo...
 [sudo] password for david:
 Which iPod are you flashing for?
 
@@ -142,8 +158,6 @@ Which iPod are you flashing for?
   0  1st generation  2001-02  scroll wheel physically turns
   1  2nd generation  2002     wheel does not move (touch-sensitive)
   2  3rd generation  2003     four buttons in a row above the wheel
-  3  4th generation  2004     click wheel, buttons on the wheel, grayscale
-  4  iPod photo      2004-05  click wheel, color display
 
 Select model: 0
 Firmware for 1st generation (newest first):
@@ -162,10 +176,10 @@ Firmware for 1st generation (newest first):
   * recommended default
 
 Select firmware [0]: 0
-flashpod flash: downloading iPod_1.1.5_2005_02_18.bin.gz
+flashpod firmware write: downloading iPod_1.1.5_2005_02_18.bin.gz
   from https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_1.1.5_2005_02_18.bin.gz
   91% (1.8/2.0 MiB)
-flashpod flash: verified and cached iPod_1.1.5_2005_02_18.bin.gz
+flashpod firmware write: verified and cached iPod_1.1.5_2005_02_18.bin.gz
 firmware OK: iPod_1.1.5_2005_02_18.bin.gz (5068800 bytes, structure validated)
 Attached removable storage:
 
@@ -191,7 +205,7 @@ Select device number (or 'q' to quit): 0
   verifying firmware on the card byte-for-byte (5068800 bytes @ sector 63) ...
   verify OK: 5068800 firmware bytes on the card match the image exactly.
 
-The card still needs the iPod database before it can take music ("flashpod init").
+The card still needs the iPod database before it can take music ("flashpod music init").
 Run init on /dev/sdb2 now? [Y/n] Y
 Initialized iPod directory structure on /dev/sdb2
 
@@ -200,7 +214,7 @@ Load music onto the card now? [Y/n] Y
   (the directory picker opens — Space to select, Enter to confirm)
 Adding 1 selected path:
   /mnt/homestore/sound/mp3/New Order/Technique/
-flashpod add: this batch is 54.8 MiB. You've got 118.94 GiB more than you need, Dude. That's gnarly!
+flashpod music add: this batch is 54.8 MiB. You've got 118.94 GiB more than you need, Dude. That's gnarly!
 [6/9] Adding: Run — New Order... 100% (6.2/6.2 MiB)
 [7/9] Adding: Mr. Disco — New Order... 100% (6.0/6.0 MiB)
 [8/9] Adding: Vanishing Point — New Order... 100% (7.3/7.3 MiB)
@@ -221,7 +235,7 @@ Now pop the card into the iPod and connect the iPod to your computer. flashpod
 finds it on its own — no mounting, no device paths, no `sudo` to type:
 
 ```
-$ flashpod list
+$ flashpod music list
 flashpod: looking for an iPod means reading attached disks, which needs root — elevating via sudo...
 [sudo] password for david:
 Found iPod on /dev/sdb2 (IPOD FireWire 119.1G) — 25 tracks.
@@ -236,12 +250,12 @@ New Order
 Add or remove the odd track right on the device:
 
 ```
-$ flashpod add ~/music/New\ Order\ -\ Blue\ Monday.mp3
+$ flashpod music add ~/music/New\ Order\ -\ Blue\ Monday.mp3
 Found iPod on /dev/rdisk1 — 82 tracks.
 [1/1] Adding: Blue Monday — New Order... 100% (6.8/6.8 MiB)
 1 track added in 26s (6.8 MiB at 268 KiB/s)
 
-$ flashpod rm album Substance
+$ flashpod music rm album Substance
 Found iPod on /dev/rdisk1 — 83 tracks.
 Removed: New Order - Ceremony
 Removed: New Order - Temptation
@@ -252,7 +266,7 @@ Removed 12 tracks
 ## Commands
 
 The easiest way to use flashpod is to run a simple command — like `flashpod
-flash` or `flashpod add` — and let it walk you through the options. Many
+firmware write` or `flashpod music add` — and let it walk you through the options. Many
 commands accept extra flags, but you don't need to supply any.
 
 **flashpod finds your iPod for you.** With no flags, it uses one that's already
@@ -273,12 +287,13 @@ is plugged in but the kernel hasn't attached it as a disk yet, flashpod loads
 the driver it needs first, so the iPod shows up instead of silently going
 missing.
 
-All library commands — `list`, `add`, `rm`, `init`, `rebuild` — work this way.
+All library commands — `music ls`, `music add`, `music rm`, `music init`,
+`music rebuild`, `music export`, `music playlist` — work this way.
 
-### `flashpod list`
+### `flashpod music list`
 
 ```
-$ flashpod list               # artist → album tree with track counts
+$ flashpod music list               # artist → album tree with track counts
 iPod "iPod": 25 tracks, 2 artists, 3 albums
 Can
   Tago Mago (7 tracks)
@@ -286,16 +301,16 @@ New Order
   Brotherhood (9 tracks)
   Technique (9 tracks)
 
-$ flashpod list all           # same tree + every track (id, track no., duration)
-$ flashpod list artist        # flat per-artist track counts (or `artists`)
-$ flashpod list album         # flat per-album track counts (or `albums`)
+$ flashpod music list all           # same tree + every track (id, track no., duration)
+$ flashpod music list artist        # flat per-artist track counts (or `artists`)
+$ flashpod music list album         # flat per-album track counts (or `albums`)
 ```
 
 <details>
-<summary><strong>See full <code>flashpod list all</code> output</strong> — every track with its id, track number, and duration</summary>
+<summary><strong>See full <code>flashpod music list all</code> output</strong> — every track with its id, track number, and duration</summary>
 
 ```
-$ flashpod list all
+$ flashpod music list all
 flashpod: looking for an iPod means reading attached disks, which needs root — elevating via sudo...
 Found iPod on /dev/sdb2 (IPOD FireWire 119.1G) — 25 tracks.
 iPod "iPod": 25 tracks, 2 artists, 3 albums
@@ -333,9 +348,9 @@ New Order
 
 </details>
 
-Track ids shown by `list all` are what `flashpod rm <id>` takes.
+Track ids shown by `list all` are what `flashpod music rm <id>` takes.
 
-### `flashpod add [path ...]`
+### `flashpod music add [path ...]`
 
 Add audio files and/or directories. Directories are scanned recursively in
 sorted order. Recognized extensions: `.mp3 .m4a .m4b .aac .wav .aif .aiff`.
@@ -349,9 +364,9 @@ duplicate when its size, duration, and title all match one already present
 copies have a different size and are added as new.
 
 ```
-$ flashpod add                                # ← the usual way: prompts, with tab completion
-$ flashpod add ~/music/Some\ Album            # a directory
-$ flashpod add a.mp3 b.mp3 ~/music/More/      # mix files and directories
+$ flashpod music add                                # ← the usual way: prompts, with tab completion
+$ flashpod music add ~/music/Some\ Album            # a directory
+$ flashpod music add a.mp3 b.mp3 ~/music/More/      # mix files and directories
 ```
 
 Progress is one line per track, shown in a scrolling 4-line window so a big
@@ -370,16 +385,16 @@ window, are counted in the summary, and don't stop the batch:
 ```
 
 <details>
-<summary><strong>See a full <code>flashpod add</code> session</strong> — adding an album to the iPod over FireWire</summary>
+<summary><strong>See a full <code>flashpod music add</code> session</strong> — adding an album to the iPod over FireWire</summary>
 
 ```
-$ flashpod add
+$ flashpod music add
 flashpod: add over the iPod's raw device needs root — elevating via sudo...
 Found iPod on /dev/sdb2 (IPOD FireWire 119.1G).
   (the directory picker opens — Space to select, Enter to confirm)
 Adding 1 selected path:
   /mnt/homestore/sound/mp3/New Order/Brotherhood/
-flashpod add: this batch is 51.0 MiB. You've got 118.89 GiB more than you need, Dude. That's gnarly!
+flashpod music add: this batch is 51.0 MiB. You've got 118.89 GiB more than you need, Dude. That's gnarly!
 [6/9] Adding: Bizarre Love Triangle — New Order... 100% (6.0/6.0 MiB)
 [7/9] Adding: All Day Long — New Order... 100% (7.2/7.2 MiB)
 [8/9] Adding: Angel Dust — New Order... 100% (5.1/5.1 MiB)
@@ -406,7 +421,7 @@ tracks 1–5 scrolled away above.
 > **zero songs** — no error. Measured on real 1st-gen hardware: the cliff is at
 > ~3.78 MB of iTunesDB (roughly 5,000–5,500 tracks with typical tags; it's the
 > *bytes* that matter, not the track count, so rich tags cost capacity).
-> `flashpod add` projects the database size before copying and offers to trim
+> `flashpod music add` projects the database size before copying and offers to trim
 > the batch to what fits. Firmware with openpod's library-leak fix (flashpod
 > 1.6) has no such ceiling: when a batch would pass it, `add` reads the card's
 > firmware (a few sectors; over an OS mount that may ask for your sudo
@@ -414,19 +429,19 @@ tracks 1–5 scrolled away above.
 > playlist cap. `FLASHPOD_DB_LIMIT=<bytes>` overrides the ceiling and skips
 > that check (`0` disables it — e.g. for later models that may load more).
 
-### `flashpod rm`
+### `flashpod music rm`
 
 ```
-$ flashpod rm 52 53           # by track id (see `flashpod list all`)
-$ flashpod rm artist Relic Pop      # every track by the artist
-$ flashpod rm album Thick As Thieves # every track in the album
+$ flashpod music rm 52 53           # by track id (see `flashpod music list all`)
+$ flashpod music rm artist Relic Pop      # every track by the artist
+$ flashpod music rm album Thick As Thieves # every track in the album
 ```
 
 Artist/album matching is case-insensitive exact match; multiword names need
 no quotes. `remove`, `delete`, and `erase` all work as synonyms for `rm`.
 **Removal is immediate — there is no confirmation prompt.**
 
-### `flashpod init [name]`
+### `flashpod music init [name]`
 
 Create the `iPod_Control` directory structure and an **empty** music database.
 Use on a freshly flashed/formatted card or after a wipe. Destroys any
@@ -435,37 +450,42 @@ existing database, but not music files already in the `F##` folders. To
 missing/corrupt, use `rebuild` (below) — it keeps the music; `init` does not
 re-index it.
 
-### `flashpod rebuild [name]`
+### `flashpod music rebuild [name]`
 
 Rebuild the iTunes database **from the music files already on the iPod**. Walks
 `iPod_Control/Music/F##`, reads each track's tags, and writes a fresh database
 pointing at the existing files — so a corrupt or missing database is recovered
 without re-copying or losing music. (It reads every track to sniff its tags, so
-it's slow over FireWire; fine for a one-off recovery.) `flashpod list` points you
-here when it finds an iPod with an unparseable database, and `flashpod add` onto
+it's slow over FireWire; fine for a one-off recovery.) `flashpod music list` points you
+here when it finds an iPod with an unparseable database, and `flashpod music add` onto
 such an iPod offers to rebuild first, then adds your new files on top.
 
-### `flashpod flash [/dev/sdX]`
+### `flashpod firmware write [/dev/sdX]`
 
 Write the iPod firmware and partition layout to a CF/SD card. **Erases the
 card.** Writing needs root, so flashpod re-runs itself under sudo (prompting for
 your password) — you launch it as a regular user.
 
-**Just run `flashpod flash` with no arguments.** That's the normal way: it lists
+**Just run `flashpod firmware write` with no arguments.** That's the normal way: it lists
 the removable disks, walks you through picking the right one, writes the
 firmware, and then offers to initialize the database and load your music — the
 whole card set up in one sitting. The forms below are only for when you want to
 name the device yourself or preview the plan.
 
 ```
-$ flashpod flash                       # ← the usual way: pick a disk interactively
-$ flashpod flash /dev/sdb              # name the device yourself
-$ flashpod flash /dev/sdb --dry-run    # print the plan, write nothing (no root)
-$ flashpod flash --self-test           # validate layout logic, no hardware
+$ flashpod firmware write                       # ← the usual way: pick a disk interactively
+$ flashpod firmware write /dev/sdb              # name the device yourself
+$ flashpod firmware write /dev/sdb --dry-run    # print the plan, write nothing (no root)
+$ flashpod firmware write --self-test           # validate layout logic, no hardware
 ```
 
+**4th generation and later are read-only for now.** flashpod has never
+had a card it wrote boot on a 4G or an iPod photo, so `firmware write`
+refuses their firmware (by its load address, whichever way it was chosen).
+`inspect` and `firmware extract` still read those cards.
+
 **Firmware:** with no `--firmware`, flashpod first asks **which iPod you're
-flashing for** (or takes `--model 1G|2G|3G|4G|photo`), then lists only the
+flashing for** (or takes `--model 1G|2G|3G`), then lists only the
 firmware that fits it, from the bundled catalog
 (`flashpod/firmware/firmware.json`), with version, build date, and description
 (the default entry is preselected; non-interactive runs use it outright). The
@@ -495,7 +515,7 @@ What you gain over 1.5:
 - **Big libraries.** 1.5 shows zero songs once the iTunesDB passes about
   3.8 MB (around 5,300 tracks), because of a memory leak; 1.6 fixes the leak,
   and a track's record takes 160 bytes instead of 448. It has run on
-  31,958 songs. `flashpod add` sees the fix on the card and lets the
+  31,958 songs. `flashpod music add` sees the fix on the card and lets the
   library grow to the 32,000-track playlist cap instead of 1.5's limit.
 - **Faster menus.** Artists, an artist and Songs open in about 2 seconds
   instead of 4-6, and the other lists are built with less repeated work.
@@ -508,7 +528,7 @@ What you gain over 1.5:
 - **Disk mode on big cards**, but not after a normal flash: FireWire disk
   mode can see, read and write a card past 128 GiB only once the iPod's
   flash ROM has been reprogrammed with 1.6's updater (openpod's tooling).
-  A flashpod flash leaves the ROM alone, so disk mode stays at 128 GiB as
+  A flashpod firmware write leaves the ROM alone, so disk mode stays at 128 GiB as
   on 1.5.
 
 Hardware-tested on 2026-10-16 on a 1st-generation iPod, with a 250 GB card of
@@ -541,7 +561,7 @@ does the same in the library, and `inspect` reports whether a card is armed.
 These early images have no low disk-size ceiling — 1.0 and 1.0.4 were tested on
 a 128 GB card in full (the broken-folder icon on such a card means the data
 partition wasn't initialized, since 1.0 doesn't auto-create `iPod_Control`; run
-`flashpod init`). The only size limit is the 128 GiB LBA28 cap that binds all of
+`flashpod music init`). The only size limit is the 128 GiB LBA28 cap that binds all of
 this firmware; see `--lba48`. A manifest entry *may* carry a `max_data_gb`
 ceiling if some firmware ever needs one, and `--max-data-gb` sets it by hand.
 
@@ -561,7 +581,7 @@ Options:
 | Flag | Meaning |
 |------|---------|
 | `--firmware <file>` | use a local image — raw `Firmware-*`, `.bin.gz`, or `.ipsw` (bring-your-own; no download). Default: pick from the catalog and download it |
-| `--model <id>`      | iPod model to flash for (`1G`, `2G`, `3G`, `4G`, `photo`); decides which firmware is offered. Default: ask |
+| `--model <id>`      | iPod model to flash for (`1G`, `2G`, `3G`); decides which firmware is offered. Default: ask. 4th generation and later aren't written yet (see below) |
 | `--yes`             | skip the typed `ERASE sdX` confirmation |
 | `--arm` / `--no-arm` | arm the card for a disk-mode update, or don't (and don't ask). Without either, an interactive flash asks, defaulting to no; see below |
 | `--no-format`       | keep the data partition and its music: rewrite only the firmware and partition table. Refused unless the card's data partition already starts and ends where the new table puts it |
@@ -595,18 +615,18 @@ The file's size is the card's size, so give it one first:
 
 ```
 $ truncate -s 1G ipod.img
-$ flashpod flash ipod.img --firmware iPod_1.1.5.ipsw --yes
-$ flashpod init --raw ipod.img
-$ flashpod add  --raw ipod.img ~/Music/*.mp3
-$ flashpod ls   --raw ipod.img
+$ flashpod firmware write ipod.img --firmware iPod_1.1.5.ipsw --yes
+$ flashpod music init --raw ipod.img
+$ flashpod music add  --raw ipod.img ~/Music/*.mp3
+$ flashpod music ls   --raw ipod.img
 ```
 
 An interactive `flash` of an image offers init and music afterwards, as it does
 for a card. The image is what an iPod emulator boots — openpod's
 `tools/ipod_emu_ui.py` reads one with `OPENPOD_DISK=ipod.img` — and it can be
-written to a real card with `flashpod burn`, below.
+written to a real card with `flashpod card burn`, below.
 
-### `flashpod burn IMAGE [/dev/sdX]`
+### `flashpod card burn IMAGE [/dev/sdX]`
 
 Writes a card image file onto a real SD/CF card in a reader, byte for byte,
 then reads the card back to check it. Like `flash`, it erases the card, needs
@@ -622,6 +642,92 @@ partition reaches past 128 GiB (only LBA48 firmware can address that).
 `--dry-run` runs every check and writes nothing; `--no-verify` skips the
 read-back. Linux only for now.
 
+### A Mac card: `flashpod firmware write --format hfs`
+
+`--format hfs` makes a Mac-formatted card instead of a FAT32 one: an Apple
+Partition Map, the firmware, and an HFS+ volume inside the HFS wrapper early
+iPods boot from (the layout of a real Mac-formatted iPod). macOS mounts it as a
+normal disk. flashpod does not write HFS+ files itself, so the music goes on
+through that mount: `flashpod music init --mount /Volumes/iPod` once, then
+`flashpod music add --mount /Volumes/iPod ...`. `flashpod inspect` reports the
+map, the firmware and the HFS+ volume. A small wrapped card has booted and
+played on a 1st-gen iPod; large Mac cards have not yet been tried on hardware.
+
+### `flashpod card new IMAGE SIZE`
+
+Makes a blank card image to flash: a sparse file, so it takes no disk
+space until written. SIZE is a byte count, or a number with `K`, `M`, `G`
+or `T` (powers of 1000, the way cards are sold) or `KiB`, `MiB`, `GiB`,
+`TiB`. It refuses an existing file and anything smaller than a card can
+be. Then: `flashpod firmware write IMAGE`.
+
+### `flashpod inspect TARGET`
+
+Everything about a card, an iPod's disk or an image, without changing it:
+the partitions, the firmware build and the fixes it carries, the data
+filesystem, the iTunesDB (tracks, artists, albums, and how close it is to
+the size the firmware can load), music files the database doesn't list,
+and whether the card is ready for an iPod. `--json` prints the same
+report as JSON. An image needs no root; a disk does.
+
+### `flashpod firmware extract TARGET -o FILE [--image osos|aupd|rsrc]`
+
+Copies the firmware off a card, an iPod's disk or an image: the whole
+32 MiB firmware partition, or with `--image` one image from it. It writes
+FILE and a FILE.json note beside it (what was copied, its sha256, where
+it came from, and the installed build as `inspect` names it). Works on
+FAT32 and Mac (HFS+) cards. It never overwrites a file and never writes
+to the card.
+
+When either command finds a firmware build flashpod's catalog doesn't
+know, it prints a link to a new GitHub issue on this repo, already filled
+in with the build's sha256 and what flashpod read. flashpod sends nothing
+itself: open the link, add where the file came from, and submit it if you
+want the build added. `inspect --json` doesn't carry the link.
+
+### `flashpod firmware patches [--offline]`
+
+Lists the patch library: each base firmware, the patches written against
+it (with their status), and the named builds such as flashpod 1.6. The
+library is [ipod-patches](https://github.com/davidbarnhart/ipod-patches).
+flashpod fetches its index, downloads only the files that changed, and
+checks every file's sha256 against the index before keeping it, in
+`~/.cache/flashpod/patches`. Offline, or when the download fails a
+check, it uses the last copy it downloaded, then the copy built into
+flashpod, and says which one it used and why. `--offline` skips the
+download.
+
+### `flashpod music export [--to DIR]`
+
+Copies every song off the iPod into `DIR/Artist/Album/NN Title.ext`, with
+the tags the files already carry. DIR defaults to `./<the iPod's name>`.
+Names are made safe for Linux, macOS and Windows; missing tags become
+`Unknown Artist` / `Unknown Album`, and a missing title keeps the file's
+name on the iPod. Run it again after an interruption: files already there
+at the same size are skipped, and a different file with the same name is
+kept, the song going to `NN Title (2).ext`.
+
+At the end it lists any files on the iPod that the database doesn't know
+(an interrupted add, or documents parked there years ago) and offers to
+copy them to `DIR/Other Files/` at their place on the iPod;
+`--other-files` copies them without asking, `--no-other-files` skips them.
+It never writes to the iPod.
+
+### `flashpod music playlist`
+
+```
+flashpod music playlist ls [NAME]        the playlists, or one playlist's tracks
+flashpod music playlist new NAME [id ...]  make a playlist
+flashpod music playlist add NAME id ...    add tracks to it
+flashpod music playlist rm NAME id ...     take tracks out (they stay on the iPod)
+flashpod music playlist delete NAME        delete it (its tracks stay)
+```
+
+Track ids are the ones `flashpod music ls all` prints. Names are matched
+without regard to case. Playlists now survive `music add` and `music rm`
+(a removed song leaves every playlist); flashpod 0.x dropped every
+playlist but the iPod's own whenever it changed the database.
+
 ## Using flashpod as a library
 
 `flashpod.card` is the engine the CLI itself runs (every `add`, `rm`,
@@ -634,7 +740,7 @@ refuses anything but a regular file.
 from flashpod import card
 
 card.create_blank("a.img", 8 * 10**9)          # sparse
-card.flash("a.img", "iPod_1.1.5.bin.gz")        # same bytes as `flashpod flash a.img --yes`
+card.flash("a.img", "iPod_1.1.5.bin.gz")        # same bytes as `flashpod firmware write a.img --yes`
 card.init("a.img", "My iPod")
 plan = card.plan_add("a.img", ["/music/Album"]) # what would happen; writes nothing
 report = card.add("a.img", ["/music/Album"], plan=plan,
@@ -661,7 +767,7 @@ to devices.
 
 - Close Rhythmbox before syncing/ejecting — its libgpod plugin grabs the
   iPod mount and blocks unmount.
-- A batch `flashpod add` writes the database **once**, at the end — not per
+- A batch `flashpod music add` writes the database **once**, at the end — not per
   track. If a batch is interrupted, you may be left with orphaned music files
   but an unchanged database; just re-run the same `add` (files already present
   are skipped).
@@ -671,6 +777,6 @@ to devices.
 ## License
 
 flashpod is released under the [MIT License](LICENSE). The firmware `.ipsw`
-images that `flashpod flash` downloads are Apple's copyright, not covered by
+images that `flashpod firmware write` downloads are Apple's copyright, not covered by
 that license and not part of this source tree — they are hosted separately for
 convenience, and you may supply your own instead.

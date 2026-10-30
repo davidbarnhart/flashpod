@@ -1,0 +1,52 @@
+{
+ "format": 3,
+ "id": "startup-clear",
+ "author": "openpod",
+ "title": "Clear the firmware's variables eight words at a time",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x125248",
+   "vaddr": "0x28125248",
+   "patched": "953709ea",
+   "check": {
+    "offset": "0x125230",
+    "bytes": 48,
+    "sha256": "414abaf3210bca855662e9834b66203937beac2c8b168b3223a046c67e3b58a7"
+   },
+   "why": "the start-up zero helper stores eight words to an instruction"
+  }
+ ],
+ "append": [
+  {
+   "image": "osos",
+   "offset": "0x3730a4",
+   "vaddr": "0x283730a4",
+   "bytes": 72,
+   "sha256": "95859a9f596abaaaa7a72f676b915f0e21dae6ccbda548e7de46b3b7ed1c2953",
+   "file": "append.hex"
+  }
+ ],
+ "copies": [
+  {
+   "image": "osos",
+   "offset": "0x3730b8",
+   "from": {
+    "image": "osos",
+    "offset": "0x2ff130",
+    "bytes": 16,
+    "sha256": "2989297a7df7030d99dfcc046e5dd7436da4033262c6f027fce8173c898b4aa5"
+   }
+  }
+ ],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "startup-clear.md",
+  "builder_name": "fastzero"
+ },
+ "license": "MIT"
+}

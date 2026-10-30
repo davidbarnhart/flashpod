@@ -1,7 +1,7 @@
 //! `flashpod flash` onto a disk image: ipod_flash.flash with the image
 //! platform (platform/image.py), message for message.
 
-use crate::devices::{self, capacity_warning};
+use crate::devices::capacity_warning;
 use crate::term::{color, input_line, C_DIM, C_GRN, C_RED, C_YEL};
 use flashpod_core::block::{BlockDevice, FileDevice};
 use flashpod_core::fat32fmt::{self, FormatError};
@@ -20,6 +20,9 @@ pub struct Opts {
     pub arm: bool,
     pub lba48: bool,
     pub max_data_gb: Option<f64>,
+    /// --format hfs (#104): an Apple Partition Map and a wrapped HFS+ data
+    /// volume (a Mac card), not an MBR and FAT32.
+    pub hfs: bool,
 }
 
 /// An exit with a message on stderr (Python's `sys.exit(msg)`): rc 1.
@@ -94,11 +97,12 @@ fn device_label(dev: &str) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn confirm(dev: &str, total: u64, assume_yes: bool, lba48: bool, max_data_sectors: Option<u64>, do_format: bool, armed: Option<&str>, mounted: &[(String, String)]) -> Result<(), Exit> {
+#[allow(clippy::too_many_arguments)]
+fn confirm(dev: &str, total: u64, assume_yes: bool, lba48: bool, max_data_sectors: Option<u64>, do_format: bool, armed: Option<&str>, mounted: &[(String, String)], hfs: bool) -> Result<(), Exit> {
     let (_, data_start, data_blocks) = layout::build_mbr_layout(total, lba48, max_data_sectors).map_err(Exit)?;
     if do_format {
         eprintln!("{}", color(&format!("\n  PLAN \u{2014} this will ERASE {}", dev), C_RED));
-        eprintln!("    layout      : MBR + FAT32");
+        eprintln!("    layout      : {}", if hfs { "Apple Partition Map + HFS+ (a Mac card)" } else { "MBR + FAT32" });
     } else {
         eprintln!("{}", color(&format!("\n  PLAN \u{2014} this will REWRITE the firmware and partition table on {}; the data partition and its music are kept", dev), C_YEL));
         eprintln!("    layout      : MBR (data partition kept, not formatted)");
@@ -106,10 +110,11 @@ fn confirm(dev: &str, total: u64, assume_yes: bool, lba48: bool, max_data_sector
     eprintln!("    device size : {} ({} sectors)", fmt_size(total * SECTOR), total);
     eprintln!("    firmware     : sectors {}..{}   ({})", FW_START, FW_START + FW_BLOCKS - 1, fmt_size(FW_BLOCKS * SECTOR));
     eprintln!(
-        "    {} : sectors {}..{}  type 0x0B  ({})",
-        if do_format { "data (FAT32)" } else { "data (kept) " },
+        "    {} : sectors {}..{}  type {}  ({})",
+        if !do_format { "data (kept) " } else if hfs { "data (HFS+) " } else { "data (FAT32)" },
         data_start,
         data_start + data_blocks - 1,
+        if hfs { "Apple_HFS" } else { "0x0B" },
         fmt_size(data_blocks * SECTOR)
     );
     if lba48 {
@@ -149,7 +154,7 @@ fn confirm(dev: &str, total: u64, assume_yes: bool, lba48: bool, max_data_sector
 /// The before-eject hook (cli.offer_init_after_flash). An image gets the
 /// still-open file and the data partition's start, before the partition
 /// table is written; a device gets neither, after the table is re-read.
-pub type Hook<'a> = &'a mut dyn FnMut(&str, Option<(&mut FileDevice, u64)>);
+pub type Hook<'a> = &'a mut dyn FnMut(&str, Option<(&mut dyn BlockDevice, u64)>);
 
 /// platform.image.is_image: an existing regular file.
 pub fn is_image(path: &str) -> bool {
@@ -159,8 +164,12 @@ pub fn is_image(path: &str) -> bool {
 /// ipod_flash.flash, with platform.current() decided once from the device
 /// argument: an image file, or a Linux block device.
 pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
+    if o.hfs && o.no_format {
+        return Err(Exit(color("--no-format keeps a FAT32 card's music; it does not work with --format hfs yet.", C_RED)));
+    }
     let image = o.device.as_deref().map(is_image).unwrap_or(false);
     let mut fw = load_firmware(&o.firmware).map_err(|e| Exit(color(&format!("firmware error ({}): {}", o.firmware, e), C_RED)))?;
+    firmware::check_writable(&fw).map_err(|e| Exit(color(&format!("firmware error ({}): {}", o.firmware, e), C_RED)))?;
     let base = o.firmware.rsplit('/').next().unwrap_or(&o.firmware);
     eprintln!("{}", color(&format!("firmware OK: {} ({} bytes, structure validated)", base, fw.len()), C_GRN));
     let mut armed: Option<&'static str> = None;
@@ -172,12 +181,12 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
         Some(gb) if gb != 0.0 => Some((gb * 1_000_000_000.0 / SECTOR as f64).floor() as u64),
         _ => None,
     };
-    if !image && !crate::host::is_admin() && !o.dry_run {
+    if !image && !crate::platform::current().is_admin() && !o.dry_run {
         return Err(Exit(color("Run as root (sudo) to write to a block device.", C_RED)));
     }
     let dev = match &o.device {
         Some(d) => d.clone(),
-        None => devices::choose_device()?,
+        None => crate::platform::current().choose_device()?,
     };
     let dev = dev.as_str();
     let total = if image {
@@ -188,8 +197,8 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
         }
         size / SECTOR
     } else {
-        devices::validate_target(dev)?;
-        devices::device_sectors(dev)
+        crate::platform::current().validate_target(dev)?;
+        crate::platform::current().device_sectors(dev)
     };
     if total == 0 {
         return Err(Exit(color(&format!("could not determine size of {} \u{2014} is a card inserted? An empty slot in a multi-slot reader still appears as a disk, but reports size 0.", dev), C_RED)));
@@ -201,30 +210,48 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
     if !do_format {
         check_kept_data(dev, total, o.dry_run, o.lba48, max_data_sectors)?;
     }
-    let mounted = if image { Vec::new() } else { crate::detect::device_mountpoints(dev) };
-    confirm(dev, total, o.yes || o.dry_run, o.lba48, max_data_sectors, do_format, armed, &mounted)?;
+    let mounted = if image { Vec::new() } else { crate::platform::current().device_mountpoints(dev) };
+    confirm(dev, total, o.yes || o.dry_run, o.lba48, max_data_sectors, do_format, armed, &mounted, o.hfs)?;
     if !image {
-        devices::unmount_all(dev, o.dry_run);
+        crate::platform::current().unmount_all(dev, o.dry_run);
     }
-    let (header, data_start, data_blocks) = layout::build_mbr_layout(total, o.lba48, max_data_sectors).map_err(Exit)?;
+    let (header, data_start, data_blocks) = if o.hfs {
+        layout::build_apm_layout(total, o.lba48, max_data_sectors).map_err(Exit)?
+    } else {
+        let (mbr, s, n) = layout::build_mbr_layout(total, o.lba48, max_data_sectors).map_err(Exit)?;
+        (mbr.to_vec(), s, n)
+    };
     let io = |e: std::io::Error| Exit(e.to_string());
     // write_layout: everything but the MBR, which is committed last
-    let mut raw: Option<FileDevice> = None;
+    let plat = crate::platform::current();
+    let mut raw: Option<Box<dyn BlockDevice>> = None;
     if o.dry_run {
         if do_format {
-            eprintln!("{}", color(&format!("  [dry-run] would wipe signatures, write {}-byte MBR header, {}-byte firmware @ sector {}, pure-Python FAT32 on data", header.len(), fw.len(), FW_START), C_DIM));
+            if o.hfs {
+                eprintln!("{}", color(&format!("  [dry-run] would wipe signatures, write a {}-byte Apple Partition Map, {}-byte firmware @ sector {}, a wrapped HFS+ volume on data", header.len(), fw.len(), FW_START), C_DIM));
+            } else {
+                eprintln!("{}", color(&format!("  [dry-run] would wipe signatures, write {}-byte MBR header, {}-byte firmware @ sector {}, pure-Python FAT32 on data", header.len(), fw.len(), FW_START), C_DIM));
+            }
         } else {
             eprintln!("{}", color(&format!("  [dry-run] would zero sectors 0..{} and the last 34, write {}-byte firmware @ sector {} and a {}-byte MBR header; the data partition (sectors {}..{}) is left as it is", data_start - 1, fw.len(), FW_START, header.len(), data_start, data_start + data_blocks - 1), C_DIM));
         }
     } else {
-        if !image {
-            devices::wipe_signatures(dev);
-        }
-        let mut f = FileDevice::open(std::path::Path::new(dev), true).map_err(|e| Exit(os_error_text(&e, dev)))?;
-        layout::write_layout_body(&mut f, &fw, total, data_start).map_err(io)?;
-        if do_format {
+        let mut f: Box<dyn BlockDevice> = if image {
+            Box::new(FileDevice::open(std::path::Path::new(dev), true).map_err(|e| Exit(os_error_text(&e, dev)))?)
+        } else {
+            plat.wipe_signatures(dev);
+            plat.invalidate_cached_partitions(dev);
+            plat.open_raw(dev, true).map_err(|e| Exit(os_error_text(&e, dev)))?
+        };
+        layout::write_layout_body(f.as_mut(), &fw, total, data_start).map_err(io)?;
+        if do_format && o.hfs {
+            match flashpod_core::hfsplus::format_wrapped(f.as_mut(), data_start, data_blocks, "iPod", hfs_now()) {
+                Ok(g) => eprintln!("{}", color(&format!("  formatted data partition (HFS+ in an HFS wrapper, {} blocks of {}, volume 'iPod')", g.total_blocks, fmt_size(g.block_size)), C_GRN)),
+                Err(e) => return Err(Exit(color(&format!("could not write HFS+ to {}: {}", dev, e), C_RED))),
+            }
+        } else if do_format {
             let spc = layout::fat_sectors_per_cluster(data_blocks);
-            match fat32fmt::format_fat32(&mut f, data_start, data_blocks, spc, "IPOD") {
+            match fat32fmt::format_fat32(f.as_mut(), data_start, data_blocks, spc, "IPOD") {
                 Ok(g) => {
                     let cb = spc * SECTOR;
                     let size = if cb >= 1024 { format!("{} KiB", cb / 1024) } else { format!("{} bytes", cb) };
@@ -244,7 +271,7 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
     }
     verify_firmware(dev, &fw, o.dry_run, image)?;
     let hook = if o.dry_run { None } else { hook };
-    let commit = |raw: Option<FileDevice>| -> Result<(), Exit> {
+    let commit = |raw: Option<Box<dyn BlockDevice>>| -> Result<(), Exit> {
         if let Some(mut f) = raw {
             f.write_at(0, &header).map_err(io)?;
             f.flush().map_err(io)?;
@@ -252,18 +279,21 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
         Ok(())
     };
     match hook {
-        // ImagePlatform.init_before_mbr: the hook first, through the open
-        // file, then the partition table (re-reading it is a no-op)
-        Some(h) if image => {
+        // Platform.init_before_mbr (images, Windows): the hook first,
+        // through the open handle, then the partition table
+        Some(h) if image || plat.init_before_mbr() => {
             if let Some(f) = raw.as_mut() {
-                h(dev, Some((f, data_start)));
+                h(dev, Some((f.as_mut(), data_start)));
             }
             commit(raw)?;
+            if !image {
+                plat.reread_partition_table(dev);
+            }
         }
         h => {
             commit(raw)?;
             if !image {
-                devices::reread_partition_table(dev);
+                crate::platform::current().reread_partition_table(dev);
             }
             if let Some(h) = h {
                 h(dev, None);
@@ -274,11 +304,29 @@ pub fn flash(o: &Opts, hook: Option<Hook>) -> Result<i32, Exit> {
         if o.dry_run {
             eprintln!("{}", color(&format!("  flushing + ejecting {}", dev), C_DIM));
         } else {
-            crate::detect::eject(dev);
+            crate::platform::current().eject(dev);
         }
     }
     eprintln!("{}", color(&format!("\nDone. {} is ready \u{2014} insert it into the iPod.", dev), C_GRN));
     Ok(0)
+}
+
+/// A card image as a file, a device through the platform's raw open.
+fn open_read(dev: &str) -> std::io::Result<Box<dyn BlockDevice>> {
+    if is_image(dev) {
+        Ok(Box::new(FileDevice::open(std::path::Path::new(dev), false)?))
+    } else {
+        crate::platform::current().open_raw(dev, false)
+    }
+}
+
+/// The HFS+ volume's dates: now (FLASHPOD_NOW pins it, for the tests), in
+/// seconds since 1904.
+fn hfs_now() -> u32 {
+    let unix = std::env::var("FLASHPOD_NOW").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or_else(|| {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    });
+    (unix + flashpod_core::hfsplus::MAC_EPOCH) as u32
 }
 
 /// ipod_flash.verify_firmware: read the firmware region back through a
@@ -290,10 +338,10 @@ fn verify_firmware(dev: &str, fw: &[u8], dry: bool, image: bool) -> Result<(), E
     }
     eprintln!("{}", color(&format!("  verifying firmware on the card byte-for-byte ({} bytes @ sector {}) ...", fw.len(), FW_START), C_DIM));
     if !image {
-        devices::flush_buffers(dev);
+        crate::platform::current().flush_buffers(dev);
     }
-    let mut f = FileDevice::open(std::path::Path::new(dev), false).map_err(|e| Exit(os_error_text(&e, dev)))?;
-    if let Err(e) = layout::verify_region(&mut f, fw) {
+    let mut f = open_read(dev).map_err(|e| Exit(os_error_text(&e, dev)))?;
+    if let Err(e) = layout::verify_region(f.as_mut(), fw) {
         let d = &e.details;
         let n = |k: &str| d.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
         if d.get("reason").and_then(|v| v.as_str()) == Some("short_read") {
@@ -308,7 +356,7 @@ fn verify_firmware(dev: &str, fw: &[u8], dry: bool, image: bool) -> Result<(), E
 /// ipod_flash.check_kept_data. A dry run that can't read the card says so
 /// and carries on.
 fn check_kept_data(dev: &str, total: u64, dry: bool, lba48: bool, max_data_sectors: Option<u64>) -> Result<(), Exit> {
-    let mut f = match FileDevice::open(std::path::Path::new(dev), false) {
+    let mut f = match open_read(dev) {
         Ok(f) => f,
         Err(e) if dry => {
             // e.strerror: the message alone, no errno or path
@@ -319,7 +367,7 @@ fn check_kept_data(dev: &str, total: u64, dry: bool, lba48: bool, max_data_secto
         }
         Err(e) => return Err(Exit(color(&format!("could not read {} to check its data partition: {}", dev, os_error_text(&e, dev)), C_RED))),
     };
-    let problems = layout::kept_data_problems(&mut f, total, lba48, max_data_sectors);
+    let problems = layout::kept_data_problems(f.as_mut(), total, lba48, max_data_sectors);
     if !problems.is_empty() {
         return Err(Exit(color(&format!("--no-format keeps the data partition, but on {}:\n  {}\nFlashing would point the iPod at the wrong sectors. Flash without --no-format (erases the card) instead.", dev, problems.join("\n  ")), C_RED)));
     }

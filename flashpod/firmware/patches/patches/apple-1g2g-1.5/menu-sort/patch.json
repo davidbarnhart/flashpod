@@ -1,0 +1,41 @@
+{
+ "format": 3,
+ "id": "menu-sort",
+ "author": "openpod",
+ "title": "Open Artists, Albums and Songs without the pause",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x6a8e8",
+   "vaddr": "0x2806a8e8",
+   "patched": "b8220cea",
+   "check": {
+    "offset": "0x6a8d0",
+    "bytes": 48,
+    "sha256": "9ff546aedc257eb7526b84253182e1bddd96687a2912f938219ac1f4a9936087"
+   },
+   "why": "list_sort: the heapsort loop gives way to a merge sort that checks order first"
+  }
+ ],
+ "append": [
+  {
+   "image": "osos",
+   "offset": "0x3733d0",
+   "vaddr": "0x283733d0",
+   "bytes": 4320,
+   "sha256": "829ba5920fb796871b7c8f67b978f29d8342db4bff5191144bc6dc2852bbbfdd",
+   "file": "append.hex"
+  }
+ ],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "menu-sort.md",
+  "builder_name": "fastsort_keys"
+ },
+ "license": "MIT"
+}

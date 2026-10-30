@@ -1,0 +1,65 @@
+{
+ "format": 3,
+ "id": "name-lookup",
+ "author": "openpod",
+ "title": "Look up artist, album and genre names without searching the whole table",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x338d4",
+   "vaddr": "0x280338d4",
+   "patched": "db030dea",
+   "check": {
+    "offset": "0x338c0",
+    "bytes": 48,
+    "sha256": "73ff67a9ba9ee213d60b9328729da1c31208f296cdcd8204078536a56fbf87ee"
+   },
+   "why": "string_table_add: before the walk over every entry, try the recent ones"
+  },
+  {
+   "image": "osos",
+   "offset": "0x33908",
+   "vaddr": "0x28033908",
+   "patched": "ff030dea",
+   "check": {
+    "offset": "0x338f0",
+    "bytes": 48,
+    "sha256": "b010d9adfb8a6cca3d97f8467a578f269ecd0ec1cae3f87090917f2230535f5d"
+   },
+   "why": "string_table_add: an entry the walk found is remembered"
+  },
+  {
+   "image": "osos",
+   "offset": "0x33b08",
+   "vaddr": "0x28033b08",
+   "patched": "85030dea",
+   "check": {
+    "offset": "0x33af0",
+    "bytes": 48,
+    "sha256": "b5adff46c2822f7d13f21202843209770c404207887b744d4313eef417f5dab1"
+   },
+   "why": "string_table_add: so is one just added"
+  }
+ ],
+ "append": [
+  {
+   "image": "osos",
+   "offset": "0x374848",
+   "vaddr": "0x28374848",
+   "bytes": 17856,
+   "sha256": "27b90d79a655392186d4d6ea35c18a9509a650ada15611053741e600c97c3412",
+   "file": "append.hex"
+  }
+ ],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "name-lookup.md",
+  "builder_name": "stfast3"
+ },
+ "license": "MIT"
+}

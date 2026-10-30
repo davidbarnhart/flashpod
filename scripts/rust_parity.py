@@ -45,6 +45,7 @@ sys.path.insert(0, HERE)
 import synth_fixtures as synth  # noqa: E402
 from flashpod import card, entropy  # noqa: E402
 
+WASM_RAN = [False]
 SEED, NOW = 20261020, 1760000000          # the fixed id seed and clock
 
 
@@ -766,6 +767,7 @@ def library_ops(par, tmp, images, fw_cache):
     wasm = build_wasm(w)
     print("  wasm build: %s" % ("%d bytes" % wasm[1] if wasm else
                                 "SKIPPED (no node)"))
+    WASM_RAN[0] = bool(wasm)
     native_case = case
 
     def case(what, start, py_fn, rust_args, **kw):        # noqa: F811
@@ -1062,6 +1064,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--firmware-cache", default=os.path.expanduser(
         "~/.cache/flashpod/firmware"))
+    ap.add_argument("--require-wasm", action="store_true",
+                    help="fail when node is missing and the wasm cases can't run")
     ap.add_argument("--damaged", type=int, default=3000,
                     help="damaged audio files to compare (M4)")
     ap.add_argument("--python-tags", action="store_true",
@@ -1166,7 +1170,13 @@ def finish(par, tmp, opts):
         for f in par.fails:
             print("  " + f)
         return 1
-    print("PARITY: %d values identical, nothing differs" % par.checked)
+    if not WASM_RAN[0]:
+        # 2026-10-29: a shell without node on PATH silently dropped the 17
+        # wasm cases (115 values) and the count fell from 30455 to 30340
+        print("PARITY: %d values identical, nothing differs -- BUT THE WASM CASES DID NOT RUN "
+              "(no node on PATH): the API was compared natively only" % par.checked)
+        return 1 if opts.require_wasm else 0
+    print("PARITY: %d values identical, nothing differs (wasm included)" % par.checked)
     return 0
 
 

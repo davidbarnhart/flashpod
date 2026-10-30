@@ -1,0 +1,37 @@
+{
+ "$schema": "http://json-schema.org/draft-07/schema#",
+ "title": "ipod-patches index.json",
+ "type": "object",
+ "required": [
+  "format",
+  "files"
+ ],
+ "properties": {
+  "format": {
+   "const": 3
+  },
+  "files": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": [
+     "path",
+     "bytes",
+     "sha256"
+    ],
+    "properties": {
+     "path": {
+      "type": "string"
+     },
+     "bytes": {
+      "type": "integer"
+     },
+     "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+     }
+    }
+   }
+  }
+ }
+}

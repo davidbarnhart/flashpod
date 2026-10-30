@@ -1,0 +1,52 @@
+{
+ "format": 3,
+ "id": "time-stamp",
+ "author": "openpod",
+ "title": "Work out the time once a second, not once a track",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x74788",
+   "vaddr": "0x28074788",
+   "patched": "57fa0bea",
+   "check": {
+    "offset": "0x74770",
+    "bytes": 48,
+    "sha256": "3db6c53b84bf40eb26ff5d013fe3bcc907667f23f167759b6afecf0cdb1696fe"
+   },
+   "why": "the current time is worked out once a second, not once a track"
+  }
+ ],
+ "append": [
+  {
+   "image": "osos",
+   "offset": "0x3730ec",
+   "vaddr": "0x283730ec",
+   "bytes": 224,
+   "sha256": "0b81d3ce97744691339c795db44a5ae6a05b21cbcef98ac1b8bf239536faa47c",
+   "file": "append.hex"
+  }
+ ],
+ "copies": [
+  {
+   "image": "osos",
+   "offset": "0x3730f8",
+   "from": {
+    "image": "osos",
+    "offset": "0x4a170",
+    "bytes": 16,
+    "sha256": "24bc1c1349d2c486414f5303b4e64e9311517940d200c62d4eb581d2563eb8dc"
+   }
+  }
+ ],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "time-stamp.md",
+  "builder_name": "nowcache"
+ },
+ "license": "MIT"
+}

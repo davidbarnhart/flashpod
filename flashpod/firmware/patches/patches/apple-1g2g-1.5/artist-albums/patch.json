@@ -1,0 +1,53 @@
+{
+ "format": 3,
+ "id": "artist-albums",
+ "author": "openpod",
+ "title": "Read an artist's albums out of the Artists list",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x35828",
+   "vaddr": "0x28035828",
+   "patched": "760d0dea",
+   "check": {
+    "offset": "0x35810",
+    "bytes": 48,
+    "sha256": "9e4504e2f64f6856e43688709b52fa0d7e59d5a55dd7beb41980efd1d906fd90"
+   },
+   "why": "an artist's albums are read from the Artists list when an artist is chosen"
+  },
+  {
+   "image": "osos",
+   "offset": "0x35a0c",
+   "vaddr": "0x28035a0c",
+   "patched": "030d0dea",
+   "check": {
+    "offset": "0x359f0",
+    "bytes": 48,
+    "sha256": "c299007f1b324f34637ee69e3f240a53ccfbf3afc2ef42c06031b5af140091c7"
+   },
+   "why": "an artist's tracks and play queue are read from the Artists list when an artist is chosen"
+  }
+ ],
+ "append": [
+  {
+   "image": "osos",
+   "offset": "0x378e08",
+   "vaddr": "0x28378e08",
+   "bytes": 64,
+   "sha256": "6b936d2f21f9db6f99f3aaa2c9684e3556f9aebc0452273dc40cb1b9b187883d",
+   "file": "append.hex"
+  }
+ ],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "artist-albums.md",
+  "builder_name": "artorder"
+ },
+ "license": "MIT"
+}

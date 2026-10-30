@@ -1,0 +1,32 @@
+{
+ "format": 3,
+ "id": "library-leak",
+ "author": "openpod",
+ "title": "Stop losing memory while the song list is read",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x34dd4",
+   "vaddr": "0x28034dd4",
+   "patched": "082094e5001095e5000094e5bdffffeb000094e50010a0e3083cffeb0400a0e1a7ffffeb0000a0e10000a0e10000a0e10000a0e10000a0e10000a0e1",
+   "check": {
+    "offset": "0x34dd0",
+    "bytes": 64,
+    "sha256": "6a4c9f01c88c385d60a88431bcf0e719e73253dc6482e40c8ba5465cc318e641"
+   },
+   "why": "handle_grow: copy old->new through the fields directly (the four dead lock-stub instructions give the room), heap_free(old->data), then the original free of the old record; six no-ops pad to 0x28034e10"
+  }
+ ],
+ "append": [],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "library-leak.md",
+  "builder_name": "library_handle_leak"
+ },
+ "license": "MIT"
+}

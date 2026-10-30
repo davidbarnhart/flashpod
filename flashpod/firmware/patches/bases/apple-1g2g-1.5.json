@@ -1,0 +1,30 @@
+{
+ "format": 3,
+ "id": "apple-1g2g-1.5",
+ "title": "Apple iPod Software 1.5 (internal 1.1.5) for the 1st and 2nd generation iPod",
+ "maker": "apple",
+ "version": "1.5",
+ "models": [
+  "1G",
+  "2G"
+ ],
+ "file": "Firmware-1.1.5 (inside iPod_1.1.5.ipsw)",
+ "bytes": 5068800,
+ "sha256": "af3950c2253dfd0a9f743440f01634ddb8ce018115c05d9ca0e675912202a3df",
+ "images": {
+  "osos": {
+   "bytes": 3234472,
+   "sha256": "98251add80f99732142532814c4ad5b95ee08ab844dd988458a6fa254e1c7c97",
+   "addr": "0x28000000",
+   "max_bytes": "0x380000",
+   "max_bytes_why": "the firmware's loader writes from 0x28380000 (openpod tools/grow_osos.py FIRST_LOAD_DEST; measured in the emulator)"
+  },
+  "aupd": {
+   "bytes": 1816533,
+   "sha256": "b32e141d98ad7c0cb94a1829764a491fdbd8980c86982610c2663700ab85b130",
+   "addr": "0x28000000",
+   "max_bytes": "0x1bb7d5",
+   "max_bytes_why": "not grown by any patch yet"
+  }
+ }
+}

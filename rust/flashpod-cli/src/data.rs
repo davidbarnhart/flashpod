@@ -95,37 +95,125 @@ pub fn say_mount_load_error(mount: &str, e: &Error) {
         if !std::path::Path::new(mount).is_dir() {
             eprintln!("flashpod: {} does not exist \u{2014} is the iPod mounted?", mount);
         } else {
-            eprintln!("flashpod: no iTunesDB on {} (run `flashpod init` first?)", mount);
+            eprintln!("flashpod: no iTunesDB on {} (run `flashpod music init` first?)", mount);
         }
     } else {
         eprintln!("flashpod: failed to read iTunesDB: {}", e.message);
     }
 }
 
-/// The --mount branch of cli.main for a directory: the command over
-/// target.MountTarget.
-pub fn run_mount(mount: &str, cmd: Cmd) -> i32 {
-    let mut t = MountTarget::new(mount);
-    let cx = Ctx { node: mount.to_string(), mount: true };
-    let mut ent = entropy();
+/// What a data command runs on (#93): an OS mount, a card image file, or a
+/// raw device node. #98 drops Device for music.
+pub enum TargetSpec<'a> {
+    Mount(&'a str),
+    Image(&'a str),
+    Device(&'a str),
+}
+
+/// A data command on a target: each kind opens its own way (and words its
+/// own open errors); the command itself runs once, in dispatch.
+pub fn run(spec: TargetSpec, cmd: Cmd) -> i32 {
+    match spec {
+        TargetSpec::Mount(m) => run_mount(m, cmd),
+        TargetSpec::Image(n) => run_raw_image(n, cmd),
+        TargetSpec::Device(n) => run_raw_device(n, cmd),
+    }
+}
+
+/// The command over an open target: init (said "at" a mount, "on" a node),
+/// rebuild, rm, add.
+fn dispatch(t: &mut dyn Target, cx: &Ctx, cmd: Cmd, ent: &mut flashpod_core::entropy::Entropy) -> i32 {
     match cmd {
-        Cmd::Init(name) => match t.init_structure(name, &mut ent) {
+        Cmd::Init(name) => match t.init_structure(name, ent) {
             Ok(()) => {
-                println!("Initialized iPod directory structure at {}", mount);
+                println!("Initialized iPod directory structure {} {}", if cx.mount { "at" } else { "on" }, cx.node);
                 0
             }
             Err(e) => cx.fail(&e),
         },
-        Cmd::Rebuild(name) => {
-            if !t.music_dir_exists() {
-                eprintln!("flashpod: no iPod_Control/Music on {} \u{2014} is this an iPod?", mount);
+        Cmd::Rebuild(name) => rebuild(t, cx, name.unwrap_or("iPod"), ent),
+        Cmd::Rm(what) => rm(t, cx, what, ent),
+        Cmd::Add(paths) => add(t, cx, paths, ent, false),
+        Cmd::Playlist(action, name, ids) => playlist(t, cx, action, name, ids, ent),
+    }
+}
+
+/// music playlist: ls [NAME], new NAME [IDS], add NAME IDS, rm NAME IDS
+/// (the tracks stay on the iPod), delete NAME. One load, one save.
+fn playlist(t: &mut dyn Target, cx: &Ctx, action: &str, name: Option<&str>, ids: &[String],
+            ent: &mut flashpod_core::entropy::Entropy) -> i32 {
+    use flashpod_core::playlist as pl;
+    let mut ids_n = Vec::new();
+    for s in ids {
+        match s.parse::<u32>() {
+            Ok(n) => ids_n.push(n),
+            Err(_) => {
+                eprintln!("flashpod music playlist: {:?} is not a track id (ids from `flashpod music ls all`)", s);
                 return 1;
             }
-            rebuild(&mut t, &cx, name.unwrap_or("iPod"), &mut ent)
         }
-        Cmd::Rm(what) => rm(&mut t, &cx, what, &mut ent),
-        Cmd::Add(paths) => add(&mut t, &cx, paths, &mut ent, false),
     }
+    let mut lib = match flashpod_core::ops::load(t, ent) {
+        Ok(l) => l,
+        Err(e) => return cx.fail(&e),
+    };
+    let name = name.unwrap_or("");
+    if action == "ls" {
+        if name.is_empty() {
+            if lib.playlists.is_empty() {
+                println!("No playlists on {} (make one: flashpod music playlist new NAME [ids]).", cx.node);
+            }
+            for p in &lib.playlists {
+                println!("{}  ({} track{})", p.name, p.ids.len(), if p.ids.len() == 1 { "" } else { "s" });
+            }
+            return 0;
+        }
+        let want = name.trim().to_lowercase();
+        let Some(p) = lib.playlists.iter().find(|p| p.name.trim().to_lowercase() == want) else {
+            eprintln!("flashpod music playlist: no playlist named {:?}", name);
+            return 1;
+        };
+        println!("{}  ({} track{})", p.name, p.ids.len(), if p.ids.len() == 1 { "" } else { "s" });
+        for id in &p.ids {
+            match lib.tracks.iter().find(|t| t.id == *id) {
+                Some(t) => println!("  {:>6}  {} - {}", id, t.artist.as_deref().unwrap_or("?"), t.title.as_deref().unwrap_or("?")),
+                None => println!("  {:>6}  (no such track)", id),
+            }
+        }
+        return 0;
+    }
+    let said = match action {
+        "new" => pl::create(&mut lib, name, &ids_n).map(|_| format!("Made playlist {:?} with {} track(s).", name.trim(), ids_n.len())),
+        "add" => pl::add(&mut lib, name, &ids_n).map(|n| format!("Added {} track(s) to {:?}.", n, name)),
+        "rm" => pl::take(&mut lib, name, &ids_n).map(|n| format!("Took {} track(s) out of {:?} (they stay on the iPod).", n, name)),
+        _ => pl::delete(&mut lib, name).map(|p| format!("Deleted playlist {:?} (its {} track(s) stay on the iPod).", p.name, p.ids.len())),
+    };
+    match said {
+        Ok(msg) => match t.save_library(&lib, ent) {
+            Ok(()) => {
+                println!("{}", msg);
+                0
+            }
+            Err(e) => cx.fail(&e),
+        },
+        Err(e) => {
+            eprintln!("flashpod music playlist: {}", e.message);
+            1
+        }
+    }
+}
+
+/// The --mount branch of cli.main for a directory: the command over
+/// target.MountTarget.
+fn run_mount(mount: &str, cmd: Cmd) -> i32 {
+    let mut t = MountTarget::new(mount);
+    let cx = Ctx { node: mount.to_string(), mount: true };
+    let mut ent = entropy();
+    if matches!(cmd, Cmd::Rebuild(_)) && !t.music_dir_exists() {
+        eprintln!("flashpod: no iPod_Control/Music on {} \u{2014} is this an iPod?", mount);
+        return 1;
+    }
+    dispatch(&mut t, &cx, cmd, &mut ent)
 }
 
 pub enum Cmd<'a> {
@@ -133,11 +221,13 @@ pub enum Cmd<'a> {
     Rebuild(Option<&'a str>),
     Rm(&'a [String]),
     Add(&'a [String]),
+    /// music playlist ACTION [NAME] [IDS] (#106).
+    Playlist(&'a str, Option<&'a str>, &'a [String]),
 }
 
 /// run_raw for an image: card.open_target(node, write=True) (the flock),
 /// then the command. offer_eject skips image files.
-pub fn run_raw_image(node: &str, cmd: Cmd) -> i32 {
+fn run_raw_image(node: &str, cmd: Cmd) -> i32 {
     let dev = FileDevice::open_image(node, true).and_then(|d| d.try_lock(true, node).map(|_| d));
     let mut dev = match dev {
         Ok(d) => d,
@@ -171,12 +261,7 @@ pub fn run_raw_image(node: &str, cmd: Cmd) -> i32 {
         }
     };
     let cx = Ctx { node: node.to_string(), mount: false };
-    match cmd {
-        Cmd::Init(_) => unreachable!(),
-        Cmd::Rebuild(name) => rebuild(&mut fs, &cx, name.unwrap_or("iPod"), &mut ent),
-        Cmd::Rm(what) => rm(&mut fs, &cx, what, &mut ent),
-        Cmd::Add(paths) => add(&mut fs, &cx, paths, &mut ent, false),
-    }
+    dispatch(&mut fs, &cx, cmd, &mut ent)
 }
 
 /// _raw_rebuild's window: one "recovering" line updated in place.
@@ -224,32 +309,32 @@ fn rm(fs: &mut dyn Target, cx: &Ctx, what: &[String], ent: &mut flashpod_core::e
                 return 1;
             }
             ErrorKind::CorruptLibrary => {
-                eprintln!("flashpod: the iTunesDB on {} is corrupt ({}) \u{2014} run `flashpod rebuild` to rebuild it from the files on the card.", node, e.message);
+                eprintln!("flashpod: the iTunesDB on {} is corrupt ({}) \u{2014} run `flashpod music rebuild` to rebuild it from the files on the card.", node, e.message);
                 return 1;
             }
             ErrorKind::NotInitialized => {
-                eprintln!("flashpod: no iTunesDB on {} (run `flashpod init` first?)", node);
+                eprintln!("flashpod: no iTunesDB on {} (run `flashpod music init` first?)", node);
                 return 1;
             }
             ErrorKind::NoSuchTrack => {
                 let why = e.details.get("reason").and_then(|v| v.as_str()).unwrap_or("");
                 return match why {
                     "name_required" => {
-                        eprintln!("flashpod rm {}: name required", what[0]);
+                        eprintln!("flashpod music rm {}: name required", what[0]);
                         2
                     }
                     "no_match" => {
-                        eprintln!("flashpod rm: no tracks match that name (see `flashpod ls`)");
+                        eprintln!("flashpod music rm: no tracks match that name (see `flashpod music ls`)");
                         1
                     }
                     "bad_ids" => {
-                        eprintln!("flashpod rm: expected track ids, or `artist <name>` / `album <name>`");
+                        eprintln!("flashpod music rm: expected track ids, or `artist <name>` / `album <name>`");
                         2
                     }
                     _ => {
                         let missing: Vec<String> = e.details.get("missing").and_then(|v| v.as_array())
                             .map(|a| a.iter().map(|i| i.to_string()).collect()).unwrap_or_default();
-                        eprintln!("flashpod rm: no track with id {} (see `flashpod ls all`)", missing.join(", "));
+                        eprintln!("flashpod music rm: no track with id {} (see `flashpod music ls all`)", missing.join(", "));
                         1
                     }
                 };
@@ -358,12 +443,12 @@ fn add(fs: &mut dyn Target, cx: &Ctx, paths: &[String], ent: &mut flashpod_core:
             return 1;
         }
         Err(e) if e.kind == ErrorKind::NotInitialized => {
-            eprintln!("flashpod: no iTunesDB on {} (run `flashpod init` first?)", node);
+            eprintln!("flashpod: no iTunesDB on {} (run `flashpod music init` first?)", node);
             return 1;
         }
         Err(e) if e.kind == ErrorKind::CorruptLibrary => {
             if !term::stdin_isatty() {
-                eprintln!("flashpod: the iTunesDB is corrupt and can't be read ({}). Run `flashpod rebuild` to rebuild it from the files on the card.", e.message);
+                eprintln!("flashpod: the iTunesDB is corrupt and can't be read ({}). Run `flashpod music rebuild` to rebuild it from the files on the card.", e.message);
                 return 1;
             }
             println!("Arrr! Blow me down \u{2014} yer iPod's song-ledger be scuttled, naught but bilgewater where the music log oughta be. We'll not be stowin' fresh booty aboard till she's careened an' a new log writ proper.");
@@ -399,29 +484,29 @@ fn add(fs: &mut dyn Target, cx: &Ctx, paths: &[String], ent: &mut flashpod_core:
 
     if !plan.items.is_empty() {
         if let Some(err) = plan.json["free_error"].as_str() {
-            ui.win.note(&format!("flashpod add: couldn't check free space ({}); proceeding anyway", err));
+            ui.win.note(&format!("flashpod music add: couldn't check free space ({}); proceeding anyway", err));
         }
         if let Some(budget) = plan.json["budget"].as_i64() {
             let batch: i64 = plan.items.iter().map(|(_, t)| t.size as i64).sum();
             if batch <= budget {
-                println!("flashpod add: this batch is {}. You've got {} more than you need, Dude. That's gnarly!",
+                println!("flashpod music add: this batch is {}. You've got {} more than you need, Dude. That's gnarly!",
                          fmt_size(batch), fmt_size(budget - batch));
             } else if !term::stdin_isatty() {
-                eprintln!("flashpod add: batch is {} but only {} free; trim the selection or free space (can't prompt here).",
+                eprintln!("flashpod music add: batch is {} but only {} free; trim the selection or free space (can't prompt here).",
                           fmt_size(batch), fmt_size(budget));
                 return 1;
             } else {
                 let kept = match winnow::winnow(&plan.items, budget) {
                     Some(k) => k,
                     None => {
-                        println!("flashpod add: nothing added.");
+                        println!("flashpod music add: nothing added.");
                         return 0;
                     }
                 };
                 dropped = plan.items.len() - kept.len();
                 plan.items = kept.iter().map(|&i| plan.items[i].clone()).collect();
                 if plan.items.is_empty() {
-                    println!("flashpod add: nothing selected; nothing added.");
+                    println!("flashpod music add: nothing selected; nothing added.");
                     return 0;
                 }
             }
@@ -437,25 +522,25 @@ fn add(fs: &mut dyn Target, cx: &Ctx, paths: &[String], ent: &mut flashpod_core:
         let have = plan.lib.tracks.len();
         let (past, extra) = if c.kind == Some("tracks") {
             if c.fit == keep {
-                println!("flashpod add: the iPod's database will be {} bytes \u{2014} more than stock firmware loads, but this card's firmware has the large-library fix ({} of {} tracks).",
+                println!("flashpod music add: the iPod's database will be {} bytes \u{2014} more than stock firmware loads, but this card's firmware has the large-library fix ({} of {} tracks).",
                          commas(c.projected.unwrap_or(0)), commas((have + keep) as i64), commas(c.limit));
                 (false, "")
             } else {
-                eprintln!("flashpod add: that is past the {} tracks the firmware lists; the rest would be on the card but never shown.", commas(c.limit));
+                eprintln!("flashpod music add: that is past the {} tracks the firmware lists; the rest would be on the card but never shown.", commas(c.limit));
                 if c.fit == 0 {
-                    eprintln!("  The library already holds {}; remove tracks (`flashpod rm`) or set FLASHPOD_DB_LIMIT=0 to override.", commas(have as i64));
+                    eprintln!("  The library already holds {}; remove tracks (`flashpod music rm`) or set FLASHPOD_DB_LIMIT=0 to override.", commas(have as i64));
                     return 1;
                 }
                 (true, "cap")
             }
         } else if c.projected.unwrap_or(0) > c.limit {
-            eprintln!("flashpod add: this batch would grow the iPod's database to {} bytes \u{2014} past the ~{}-byte ceiling early iPod firmware can load (the iPod would then show ZERO songs).",
+            eprintln!("flashpod music add: this batch would grow the iPod's database to {} bytes \u{2014} past the ~{}-byte ceiling early iPod firmware can load (the iPod would then show ZERO songs).",
                       commas(c.projected.unwrap_or(0)), commas(c.limit));
             if c.firmware.is_none() && !opts.db_limit_set {
                 eprintln!("  (Couldn't read the card's firmware to check for the large-library fix that flashpod 1.6 has; assuming stock.)");
             }
             if c.fit == 0 {
-                eprintln!("  The library alone already exceeds the ceiling; remove tracks (`flashpod rm`) or set FLASHPOD_DB_LIMIT=0 to override.");
+                eprintln!("  The library alone already exceeds the ceiling; remove tracks (`flashpod music rm`) or set FLASHPOD_DB_LIMIT=0 to override.");
                 return 1;
             }
             (true, "ceiling")
@@ -476,7 +561,7 @@ fn add(fs: &mut dyn Target, cx: &Ctx, paths: &[String], ent: &mut flashpod_core:
                 db_dropped = keep - c.fit;
                 keep = c.fit;
             } else if !term::ask_yes(all, false) {
-                println!("flashpod add: nothing added.");
+                println!("flashpod music add: nothing added.");
                 return 0;
             }
         }
@@ -585,14 +670,14 @@ pub fn prompt_for_paths(existing: Option<i64>, db_bytes: Option<i64>) -> Option<
             Some(t) => t.trim().to_string(),
             None => {
                 println!();
-                eprintln!("flashpod add: cancelled");
+                eprintln!("flashpod music add: cancelled");
                 return None;
             }
         };
         if !typed.is_empty() {
             let path = expanduser(&typed);
             if !std::path::Path::new(&path).exists() {
-                eprintln!("flashpod add: no such file or directory: {}", path);
+                eprintln!("flashpod music add: no such file or directory: {}", path);
                 return None;
             }
             return Some(vec![path]);
@@ -611,11 +696,11 @@ pub fn prompt_for_paths(existing: Option<i64>, db_bytes: Option<i64>) -> Option<
         };
         let picked = match picked {
             None => {
-                eprintln!("flashpod add: cancelled");
+                eprintln!("flashpod music add: cancelled");
                 return None;
             }
             Some(p) if p.is_empty() => {
-                eprintln!("flashpod add: nothing selected");
+                eprintln!("flashpod music add: nothing selected");
                 return None;
             }
             Some(p) => p,
@@ -632,7 +717,7 @@ pub fn prompt_for_paths(existing: Option<i64>, db_bytes: Option<i64>) -> Option<
 /// cli.prompt_for_path (no tab completion).
 fn prompt_for_path() -> Option<String> {
     if !term::stdin_isatty() {
-        eprintln!("flashpod add: no paths given and stdin is not a terminal");
+        eprintln!("flashpod music add: no paths given and stdin is not a terminal");
         return None;
     }
     let path = match term::input_line("File or directory to add (TAB to complete): ") {
@@ -643,11 +728,11 @@ fn prompt_for_path() -> Option<String> {
         }
     };
     if path.is_empty() {
-        eprintln!("flashpod add: nothing entered");
+        eprintln!("flashpod music add: nothing entered");
         return None;
     }
     if !std::path::Path::new(&path).exists() {
-        eprintln!("flashpod add: no such file or directory: {}", path);
+        eprintln!("flashpod music add: no such file or directory: {}", path);
         return None;
     }
     Some(path)
@@ -656,7 +741,7 @@ fn prompt_for_path() -> Option<String> {
 /// _offer_init_after_flash_win, which images take (platform.image): init
 /// and then add through the flash's still-open handle, the partition table
 /// not yet written.
-pub fn offer_init_after_flash_image(dev: &str, file: &mut FileDevice, data_start: u64) {
+pub fn offer_init_after_flash_image(dev: &str, file: &mut dyn flashpod_core::block::BlockDevice, data_start: u64) {
     let max_xfer = std::env::var("FLASHPOD_RAW_MAX_XFER").ok().and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(flashpod_core::fat::IMAGE_MAX_XFER).max(1);
     let sec = flashpod_core::fat::Sectors { dev: file, part_start: data_start, max_xfer };
@@ -667,8 +752,8 @@ pub fn offer_init_after_flash_image(dev: &str, file: &mut FileDevice, data_start
             return;
         }
     };
-    if !term::ask_yes(&format!("\nThe card still needs the iPod database before it can take music (\"flashpod init\").\nRun init on {} now? [Y/n] ", dev), true) {
-        eprintln!("Skipped. Later: run `flashpod init --raw {}`.", dev);
+    if !term::ask_yes(&format!("\nThe card still needs the iPod database before it can take music (\"flashpod music init\").\nRun init on {} now? [Y/n] ", dev), true) {
+        eprintln!("Skipped. Later: run `flashpod music init --raw {}`.", dev);
         return;
     }
     let mut ent = entropy();
@@ -685,7 +770,7 @@ pub fn offer_init_after_flash_image(dev: &str, file: &mut FileDevice, data_start
 
 /// run_raw for a device node (root already): open_raw_target, the command,
 /// then the eject offer.
-pub fn run_raw_device(node: &str, cmd: Cmd) -> i32 {
+fn run_raw_device(node: &str, cmd: Cmd) -> i32 {
     if !crate::host::ensure_firewire_disk_safe(node) {
         eprintln!("flashpod: couldn't pin safe FireWire I/O settings for {}; the kernel may probe it unsafely after writes.", node);
     }
@@ -711,18 +796,7 @@ pub fn run_raw_device(node: &str, cmd: Cmd) -> i32 {
         };
         let cx = Ctx { node: node.to_string(), mount: false };
         let mut ent = entropy();
-        match cmd {
-            Cmd::Init(name) => match fs.init_structure(name, &mut ent) {
-                Ok(()) => {
-                    println!("Initialized iPod directory structure on {}", node);
-                    0
-                }
-                Err(e) => cx.fail(&e),
-            },
-            Cmd::Rebuild(name) => rebuild(&mut fs, &cx, name.unwrap_or("iPod"), &mut ent),
-            Cmd::Rm(what) => rm(&mut fs, &cx, what, &mut ent),
-            Cmd::Add(paths) => add(&mut fs, &cx, paths, &mut ent, false),
-        }
+        dispatch(&mut fs, &cx, cmd, &mut ent)
     };
     drop(dev);
     crate::detect::offer_eject(Some(node), rc);
@@ -731,7 +805,6 @@ pub fn run_raw_device(node: &str, cmd: Cmd) -> i32 {
 
 /// tempfile.mkdtemp(prefix): a fresh 0700 directory under $TMPDIR.
 fn mkdtemp(prefix: &str) -> std::io::Result<String> {
-    use std::os::unix::fs::DirBuilderExt;
     let tmp = std::env::temp_dir();
     let mut seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
         ^ (std::process::id() as u128) << 64;
@@ -743,7 +816,7 @@ fn mkdtemp(prefix: &str) -> std::io::Result<String> {
             name.push(chars[((seed >> 64) % chars.len() as u128) as usize] as char);
         }
         let path = tmp.join(&name);
-        match std::fs::DirBuilder::new().mode(0o700).create(&path) {
+        match crate::sys::mkdir_private(&path) {
             Ok(()) => return Ok(path.to_string_lossy().into_owned()),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
@@ -754,7 +827,7 @@ fn mkdtemp(prefix: &str) -> std::io::Result<String> {
 /// _offer_init_after_flash_unix: mount the fresh data partition at a temp
 /// dir (root here), init, offer add, unmount; the eject follows.
 pub fn offer_init_after_flash_unix(dev: &str) {
-    let part = crate::devices::partition_node(dev, 2);
+    let part = crate::platform::current().partition_node(dev, 2);
     // the node appears once udev has re-probed the table just committed
     let mut found = false;
     for _ in 0..50 {
@@ -765,15 +838,15 @@ pub fn offer_init_after_flash_unix(dev: &str) {
         window::sleep(0.1);
     }
     if !found {
-        eprintln!("init skipped: {} never appeared after the partition table was re-read.\n  Mount the card and run `flashpod init` instead.", part);
+        eprintln!("init skipped: {} never appeared after the partition table was re-read.\n  Mount the card and run `flashpod music init` instead.", part);
         return;
     }
-    if !term::ask_yes(&format!("\nThe card still needs the iPod database before it can take music (\"flashpod init\").\nRun init on {} now? [Y/n] ", part), true) {
-        eprintln!("Skipped. Later: mount the card and run `flashpod init`.");
+    if !term::ask_yes(&format!("\nThe card still needs the iPod database before it can take music (\"flashpod music init\").\nRun init on {} now? [Y/n] ", part), true) {
+        eprintln!("Skipped. Later: mount the card and run `flashpod music init`.");
         return;
     }
     let base = |p: &str| p.rsplit('/').next().unwrap_or(p).to_string();
-    let existing: Vec<String> = crate::detect::device_mountpoints(&part)
+    let existing: Vec<String> = crate::platform::current().device_mountpoints(&part)
         .into_iter()
         .filter(|(p, _)| base(p) == base(&part))
         .map(|(_, mp)| mp)
@@ -790,11 +863,11 @@ pub fn offer_init_after_flash_unix(dev: &str) {
         },
     };
     let mounted = if ours {
-        let cmd: Vec<String> = vec!["mount".into(), part.clone(), mnt.clone()];
+        let cmd: Vec<String> = crate::platform::current().fat_mount_cmd(&part, &mnt);
         let rc = crate::detect::run_quiet_mount(&cmd);
         if rc != 0 {
             let argv: Vec<String> = cmd.iter().map(|a| crate::argparse::py_repr(a)).collect();
-            eprintln!("init skipped: mounting {} failed (Command '[{}]' returned non-zero exit status {}.); mount the card and run `flashpod init` instead.", part, argv.join(", "), rc);
+            eprintln!("init skipped: mounting {} failed (Command '[{}]' returned non-zero exit status {}.); mount the card and run `flashpod music init` instead.", part, argv.join(", "), rc);
             false
         } else {
             true

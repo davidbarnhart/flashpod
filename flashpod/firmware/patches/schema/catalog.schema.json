@@ -1,0 +1,110 @@
+{
+ "$schema": "http://json-schema.org/draft-07/schema#",
+ "title": "ipod-patches firmware catalog (catalog/firmware.json)",
+ "type": "object",
+ "required": [
+  "format",
+  "firmwares"
+ ],
+ "properties": {
+  "format": {
+   "const": 3
+  },
+  "firmwares": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": [
+     "id",
+     "maker",
+     "version",
+     "models",
+     "bytes",
+     "sha256"
+    ],
+    "properties": {
+     "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]*$"
+     },
+     "maker": {
+      "type": "string"
+     },
+     "version": {
+      "type": "string"
+     },
+     "models": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "bytes": {
+      "type": "integer"
+     },
+     "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+     },
+     "base": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]*$"
+     },
+     "build": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]*$"
+     },
+     "urls": {
+      "type": "array",
+      "description": "Where to download it, in order: primary first, then fallbacks. sha256/bytes are of the downloaded file itself.",
+      "items": {
+       "type": "object",
+       "required": [
+        "url",
+        "role",
+        "container",
+        "sha256"
+       ],
+       "additionalProperties": false,
+       "properties": {
+        "url": {
+         "type": "string",
+         "pattern": "^https://"
+        },
+        "role": {
+         "enum": [
+          "primary",
+          "fallback"
+         ]
+        },
+        "container": {
+         "enum": [
+          "ipsw",
+          "bin",
+          "bin.gz"
+         ]
+        },
+        "bytes": {
+         "type": "integer"
+        },
+        "sha256": {
+         "type": "string",
+         "pattern": "^[0-9a-f]{64}$"
+        },
+        "note": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "tested_on_hardware": {
+      "type": "boolean"
+     },
+     "title": {
+      "type": "string"
+     }
+    }
+   }
+  }
+ }
+}

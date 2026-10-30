@@ -1,0 +1,65 @@
+{
+ "format": 3,
+ "id": "flac-refill",
+ "author": "openpod",
+ "title": "Top up a long track in memory before it runs out",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0xb2c88",
+   "vaddr": "0x280b2c88",
+   "patched": "871b0b3a",
+   "check": {
+    "offset": "0xb2c70",
+    "bytes": 48,
+    "sha256": "d266704f673df26641cf3018e7299014ff33491c1bd3638bea53640138902c99"
+   },
+   "why": "a read that ends within 2097152 bytes of the last byte cached marks the window for a slide"
+  },
+  {
+   "image": "osos",
+   "offset": "0x78464",
+   "vaddr": "0x28078464",
+   "patched": "9c050ceb",
+   "check": {
+    "offset": "0x78450",
+    "bytes": 48,
+    "sha256": "a192aeeca018631c95ee91f1d6dde55f8a425c3849f14745cee28b9969c12cf1"
+   },
+   "why": "the slide releases the stream's two locks before it waits for the drive"
+  },
+  {
+   "image": "osos",
+   "offset": "0x78474",
+   "vaddr": "0x28078474",
+   "patched": "9f050cea",
+   "check": {
+    "offset": "0x78460",
+    "bytes": 48,
+    "sha256": "a4984178fe811a37796c42889917ce2aabdd9389f2fd4a453abea292de079381"
+   },
+   "why": "... and steps over the two releases that were there"
+  }
+ ],
+ "append": [
+  {
+   "image": "osos",
+   "offset": "0x379aac",
+   "vaddr": "0x28379aac",
+   "bytes": 84,
+   "sha256": "1068e69b1f7916fda1c15c214eab71a4684ddf03fb083d940a9315239a4dd84c",
+   "file": "append.hex"
+  }
+ ],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "flac-refill.md",
+  "builder_name": "refill2"
+ },
+ "license": "MIT"
+}

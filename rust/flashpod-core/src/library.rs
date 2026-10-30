@@ -10,7 +10,7 @@ use crate::text::casefold;
 use serde_json::json;
 use std::collections::HashSet;
 
-pub const ADD_HEADROOM: i64 = 2 << 20;
+pub(crate) const ADD_HEADROOM: i64 = 2 << 20;
 pub const AUDIO_EXTS: [&str; 8] = [".mp3", ".m4a", ".m4b", ".aac", ".wav", ".aif", ".aiff", ".flac"];
 
 /// What tracks._track_from_audio takes from a file: the tags (as
@@ -61,10 +61,6 @@ pub trait Hooks {
     fn failed(&mut self, _nr: u64, _total: u64, _path: &str, _size: u64, _error: &str) {}
 }
 
-/// No progress, never cancelled.
-pub struct NoHooks;
-impl Hooks for NoHooks {}
-
 pub trait TagSource {
     fn read(&mut self, path: &str) -> TagResult;
     /// A file on the card (a rebuild), read through `file`; by default
@@ -94,7 +90,7 @@ fn py_isdigit(s: &str) -> bool {
 }
 
 /// tracks._track_from_audio.
-pub fn track_from_audio(a: &AudioInfo, fallback_title: &str, size: u64, ext: &str, ent: &mut Entropy) -> Track {
+pub(crate) fn track_from_audio(a: &AudioInfo, fallback_title: &str, size: u64, ext: &str, ent: &mut Entropy) -> Track {
     let mut t = Track::new(ent);
     t.title = Some(a.title.clone().unwrap_or_else(|| fallback_title.to_string()));
     t.artist = a.artist.clone();
@@ -160,7 +156,7 @@ fn py_strip(s: &str) -> &str {
 }
 
 /// tracks.track_key.
-pub fn track_key(t: &Track) -> (u32, u32, String) {
+pub(crate) fn track_key(t: &Track) -> (u32, u32, String) {
     (t.size, t.tracklen, casefold(py_strip(t.title.as_deref().unwrap_or(""))))
 }
 
@@ -170,14 +166,14 @@ fn is_rebuilt_title(title: &str) -> bool {
     b.len() == 8 && title.starts_with("fp") && title[2..].chars().all(|c| c.is_ascii_digit())
 }
 
-pub struct Batch {
+pub(crate) struct Batch {
     pub pending: Vec<(String, Track)>,
     pub failed: Vec<String>,
     pub skipped: Vec<String>,
 }
 
 /// library.read_batch.
-pub fn read_batch(lib: &Library, files: &[String], src: &mut dyn TagSource, ent: &mut Entropy,
+pub(crate) fn read_batch(lib: &Library, files: &[String], src: &mut dyn TagSource, ent: &mut Entropy,
                   report: &mut dyn FnMut(String), hooks: &mut dyn Hooks) -> Batch {
     let mut seen: HashSet<(u32, u32, String)> = lib.tracks.iter().map(track_key).collect();
     let rebuilt: HashSet<(u32, u32)> = lib
@@ -243,7 +239,7 @@ fn fit_count(lib: &Library, new: &[&Track], limit: i64, ent: &mut Entropy) -> us
     lo
 }
 
-pub const IPOD_PATCHED_TRACK_LIMIT: i64 = 32_000;
+pub(crate) const IPOD_PATCHED_TRACK_LIMIT: i64 = 32_000;
 pub const LIBRARY_FIX_NAME: &str = "library-leak";
 
 #[derive(Debug, Clone)]
@@ -280,7 +276,7 @@ pub fn ceiling(lib: &Library, new: &[&Track], opts: Options, fixed: &mut dyn FnM
 }
 
 /// library.select_for_removal: indices into lib.tracks, in Python's order.
-pub fn select_for_removal(lib: &Library, what: &[String]) -> Result<Vec<usize>, Error> {
+pub(crate) fn select_for_removal(lib: &Library, what: &[String]) -> Result<Vec<usize>, Error> {
     let nst = |msg: String| Error::new(ErrorKind::NoSuchTrack, msg);
     if let Some(f) = what.first().filter(|f| *f == "artist" || *f == "album") {
         if what.len() < 2 {
@@ -384,7 +380,7 @@ pub fn expand(paths: &[String], report: &mut dyn FnMut(String)) -> Vec<String> {
 
 /// card._fingerprint: sha256 of the Python repr of
 /// (len(tracks), sorted(keys of the library), [keys of the new tracks]).
-pub fn fingerprint(lib: &Library, new: &[&Track]) -> String {
+pub(crate) fn fingerprint(lib: &Library, new: &[&Track]) -> String {
     let key_repr = |k: &(u32, u32, String)| format!("({}, {}, {})", k.0, k.1, crate::text::py_repr(&k.2));
     let mut have: Vec<(u32, u32, String)> = lib.tracks.iter().map(track_key).collect();
     have.sort();

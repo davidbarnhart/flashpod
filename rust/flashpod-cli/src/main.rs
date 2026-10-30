@@ -9,12 +9,13 @@ use flashpod_core::inspect;
 use flashpod_core::itunesdb::Track;
 use flashpod_core::ops;
 use flashpod_core::text::casefold;
-use argparse::{Arg, Cli, Nargs, Ns, Val};
+use argparse::{Arg, Cli, Nargs, Ns, Parser, Val};
 
 mod argparse;
 mod burn;
 mod catalog;
 mod data;
+mod export;
 mod detect;
 mod devices;
 mod flash;
@@ -22,6 +23,9 @@ mod host;
 mod rawdev;
 mod mount;
 mod pathpicker;
+mod patches;
+mod platform;
+mod sys;
 mod term;
 mod window;
 mod winnow;
@@ -90,7 +94,7 @@ fn cmd_ls(name: &str, tracks: &[Track], field: &str) -> i32 {
     let key = |t: &Track| (casefold(&orunknown(&t.artist)), casefold(&orunknown(&t.album)), t.track_nr, casefold(&orunknown(&t.title)));
     let mut sorted: Vec<&Track> = tracks.iter().collect();
     sorted.sort_by_key(|t| key(t));
-    let lib = flashpod_core::itunesdb::Library { name: name.to_string(), tracks: tracks.to_vec(), dbid: 0 };
+    let lib = flashpod_core::itunesdb::Library { name: name.to_string(), tracks: tracks.to_vec(), dbid: 0, playlists: Vec::new() };
     let (nt, na, nb) = inspect::counts(&lib);
     println!("iPod \"{}\": {} tracks, {} artists, {} albums", name, nt, na, nb);
     let mut prev_artist: Option<String> = None;
@@ -215,7 +219,7 @@ fn diagnose_missing_db(fs: &mut flashpod_core::fat::Fat32, device: &str) {
         if !root.iter().any(|n| casefold(n) == "ipod_control") {
             eprintln!("flashpod: {} has no iPod_Control directory \u{2014} it looks freshly flashed/formatted, not yet set up.", device);
             eprintln!("  root contains: {}", if root.is_empty() { "(empty)".to_string() } else { root.join(", ") });
-            eprintln!("  Initialize it (on Linux: `flashpod init`), then add music.");
+            eprintln!("  Initialize it (on Linux: `flashpod music init`), then add music.");
             return;
         }
     }
@@ -228,7 +232,7 @@ fn diagnose_missing_db(fs: &mut flashpod_core::fat::Fat32, device: &str) {
             Some(l) => eprintln!("  {}/ contains: {}", path, if l.is_empty() { "(empty)".to_string() } else { l.join(", ") }),
         }
     }
-    eprintln!("flashpod: no iTunesDB on {} (iPod_Control is present but iPod_Control/iTunes/iTunesDB is missing). If this iPod should have music, that's unexpected \u{2014} otherwise run `flashpod init`.", device);
+    eprintln!("flashpod: no iTunesDB on {} (iPod_Control is present but iPod_Control/iTunes/iTunesDB is missing). If this iPod should have music, that's unexpected \u{2014} otherwise run `flashpod music init`.", device);
 }
 
 /// The `flash` branch of cli.main: the firmware is picked (and fetched)
@@ -275,11 +279,11 @@ fn cmd_flash(ns: &mut Ns) -> i32 {
         ns.insert("arm".into(), Val::Bool(armed));
         ns.insert("no_arm".into(), Val::Bool(!armed));
     }
-    if !image && !b(ns, "dry_run") && !host::is_admin() {
+    if !image && !b(ns, "dry_run") && !crate::platform::current().is_admin() {
         let args = detect::cmd_args(ns);
         if term::stdin_isatty() {
             eprintln!("flashpod flash: writing to a disk needs root \u{2014} elevating via sudo...");
-            host::sudo_reexec(&args);
+            crate::platform::current().elevate(&args);
         }
         eprintln!("flashpod flash: Run as root (sudo) to write to a block device.\n  sudo {}",
                   host::self_cmd().into_iter().chain(args).collect::<Vec<_>>().join(" "));
@@ -294,11 +298,12 @@ fn cmd_flash(ns: &mut Ns) -> i32 {
         arm: b(ns, "arm"),
         lba48: b(ns, "lba48"),
         max_data_gb,
+        hfs: s(ns, "format").as_deref() == Some("hfs"),
     };
     // offer init on the fresh card only when it will work: interactive, a
     // real write, a FAT32 data partition
-    let offer = term::stdin_isatty() && !o.dry_run && !o.no_format;
-    let mut hook = |dev: &str, open: Option<(&mut FileDevice, u64)>| match open {
+    let offer = term::stdin_isatty() && !o.dry_run && !o.no_format && !o.hfs;
+    let mut hook = |dev: &str, open: Option<(&mut dyn flashpod_core::block::BlockDevice, u64)>| match open {
         Some((f, data_start)) => data::offer_init_after_flash_image(dev, f, data_start),
         None => data::offer_init_after_flash_unix(dev),
     };
@@ -313,13 +318,13 @@ fn cmd_flash(ns: &mut Ns) -> i32 {
 
 /// The `burn` branch of cli.main: root via sudo unless it's a dry run.
 fn cmd_burn(ns: &Ns) -> i32 {
-    if !b(ns, "dry_run") && !host::is_admin() {
+    if !b(ns, "dry_run") && !crate::platform::current().is_admin() {
         let args = detect::cmd_args(ns);
         if term::stdin_isatty() {
-            eprintln!("flashpod burn: writing to a disk needs root \u{2014} elevating via sudo...");
-            host::sudo_reexec(&args);
+            eprintln!("flashpod card burn: writing to a disk needs root \u{2014} elevating via sudo...");
+            crate::platform::current().elevate(&args);
         }
-        eprintln!("flashpod burn: needs root.\n  sudo {}", host::self_cmd().into_iter().chain(args).collect::<Vec<_>>().join(" "));
+        eprintln!("flashpod card burn: needs root.\n  sudo {}", host::self_cmd().into_iter().chain(args).collect::<Vec<_>>().join(" "));
         return 1;
     }
     let image = s(ns, "image").unwrap_or_default();
@@ -334,29 +339,10 @@ fn cmd_burn(ns: &Ns) -> i32 {
 }
 
 /// cli.__doc__, the top-level help's description.
-const DOC: &str = "flashpod - manage music on the iPod.
-
-Subcommands:
-  flashpod ls (or: list)          artist/album tree with track counts
-  flashpod ls all                 same tree, with every track listed (ids shown)
-  flashpod ls artist|album        flat per-artist or per-album track counts
-  flashpod add [path1 path2 ...]  add audio files; directories are scanned
-                                  recursively (tags read via mutagen);
-                                  with no paths, opens a directory picker
-  flashpod rm id [id ...]         remove tracks by id (see `flashpod ls`)
-  flashpod rm artist|album <name> remove all tracks by an artist / in an album
-  flashpod init [name]            create iPod_Control structure + empty DB
-  flashpod flash [/dev/sdX]       write iPod firmware + partition layout to a
-                                  CF/SD card (1G/2G iPod; needs sudo)
-  flashpod burn IMAGE [/dev/sdX]  write a card image file onto a removable
-                                  SD/CF card (needs sudo)
-
-The mountpoint is auto-detected from mounted filesystems (FAT-family
-mounts under /media, ranked by iPod_Control presence), and a detected
-mount is always confirmed first: Y/n for a single candidate, a numbered
-chooser for several. Non-interactive runs must pass --mount.
-The iTunesDB is read/written natively (itunesdb.py) \u{2014} no libgpod.
-";
+/// The top-level description: the 1.0 command layout (#97), shared with
+/// scripts/layout1_parser.py, the argparse reference test_cli_args checks
+/// the Rust parser against.
+const DOC: &str = include_str!("doc1.txt");
 
 /// cli.main's ArgumentParser, argument for argument.
 fn build_cli() -> Cli {
@@ -376,28 +362,93 @@ fn build_cli() -> Cli {
         Arg::flag(&["--unsafe-queue"]).no_default().hidden(),
     ];
 
-    cli.add_parser("ls", &["list"], "list library", &common())
-        .add(Arg::pos("field", Nargs::Optional).choices(&["all", "artist", "artists", "album", "albums"])
-            .help("'all' adds tracks to the tree; 'artist'/'album' print flat counts"));
-    cli.add_parser("add", &[], "add audio files", &common())
-        .add(Arg::pos("files", Nargs::Star).metavar("path")
-            .help("audio files or directories (scanned recursively); prompts if omitted"));
-    cli.add_parser("rm", &["remove", "delete", "erase"], "remove tracks", &common())
-        .add(Arg::pos("what", Nargs::Plus).metavar("id|artist|album")
-            .help("track ids, or `artist <name>` / `album <name>` to remove every matching track"));
-    cli.add_parser("init", &[], "create directory structure + empty DB", &common())
-        .add(Arg::pos("name", Nargs::Optional).help("iPod name (default: iPod)"));
-    cli.add_parser("rebuild", &[], "rebuild the iTunesDB from the music files already on the iPod", &common())
-        .add(Arg::pos("name", Nargs::Optional).help("iPod name (default: iPod)"));
+    // 1.0 layout (#97): commands grouped by what they act on. `flash` stays
+    // as a top-level alias of `firmware write`.
+    let inspect = cli.add_parser_at(0, "inspect", &[], "report everything about a card, iPod or image", &[]);
+    cli.parser(inspect).add(Arg::pos("target", Nargs::One).help("card image file, or a card or iPod disk (needs root)"));
+    cli.parser(inspect).add(Arg::flag(&["--json"]).help("print the report as JSON"));
 
-    let burn = cli.add_parser("burn", &[], "write a card image file to an SD/CF card (erases it)", &[]);
+    let fw = cli.add_parser_at(0, "firmware", &[], "inspect, extract, patch and write firmware", &[]);
+    cli.add_subparsers_at(fw, "firmware_command");
+    cli.add_parser_at(fw, "list", &[], "the firmware flashpod can write", &[]);
+    let ex = cli.add_parser_at(fw, "extract", &[], "copy the firmware partition (or one image) off a card", &[]);
+    let exp = cli.parser(ex);
+    exp.add(Arg::pos("target", Nargs::One).help("card image file, or a card or iPod disk (needs root)"));
+    exp.add(Arg::opt(&["-o", "--output"]).required().help("file to write; a FILE.json note is written beside it"));
+    exp.add(Arg::opt(&["--image"]).choices(&["osos", "aupd", "rsrc"]).help("one image from the firmware directory, not the whole partition"));
+    let w = cli.add_parser_at(fw, "write", &[], "write iPod firmware to a CF/SD card (erases it)", &[]);
+    flash_args(cli.parser(w));
+    let pp = cli.add_parser_at(fw, "patches", &[], "list the patch library", &[]);
+    cli.parser(pp).add(Arg::flag(&["--offline"]).help("don't refresh the library; use the copy on this computer"));
+    for (name, help) in [("patch", "build a patched firmware"),
+                         ("arm", "arm a disk-mode (boot ROM) update"), ("recover", "the boot ROM recovery routine")] {
+        let i = cli.add_parser_at(fw, name, &[], help, &[]);
+        cli.parser(i).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
+    }
+
+    let card = cli.add_parser_at(0, "card", &[], "card image files", &[]);
+    cli.add_subparsers_at(card, "card_command");
+    let new = cli.add_parser_at(card, "new", &[], "make a blank card image", &[]);
+    cli.parser(new).add(Arg::pos("image", Nargs::One).help("the image file to make (must not exist)"));
+    cli.parser(new).add(Arg::pos("size", Nargs::One).help("its size: bytes, or with K/M/G/T (decimal, as cards are sold) or KiB/MiB/GiB/TiB"));
+    let burn = cli.add_parser_at(card, "burn", &[], "write a card image file to an SD/CF card (erases it)", &[]);
+    burn_args(cli.parser(burn));
+
+    let music = cli.add_parser_at(0, "music", &[], "the music library on an iPod, card or image", &[]);
+    cli.add_subparsers_at(music, "music_command");
+    let i = cli.add_parser_at(music, "ls", &["list"], "list library", &common());
+    cli.parser(i).add(Arg::pos("field", Nargs::Optional).choices(&["all", "artist", "artists", "album", "albums"])
+        .help("'all' adds tracks to the tree; 'artist'/'album' print flat counts"));
+    let i = cli.add_parser_at(music, "add", &[], "add audio files", &common());
+    cli.parser(i).add(Arg::pos("files", Nargs::Star).metavar("path")
+        .help("audio files or directories (scanned recursively); prompts if omitted"));
+    let i = cli.add_parser_at(music, "rm", &["remove", "delete", "erase"], "remove tracks", &common());
+    cli.parser(i).add(Arg::pos("what", Nargs::Plus).metavar("id|artist|album")
+        .help("track ids, or `artist <name>` / `album <name>` to remove every matching track"));
+    let i = cli.add_parser_at(music, "init", &[], "create directory structure + empty DB", &common());
+    cli.parser(i).add(Arg::pos("name", Nargs::Optional).help("iPod name (default: iPod)"));
+    let i = cli.add_parser_at(music, "rebuild", &[], "rebuild the iTunesDB from the music files already on the iPod", &common());
+    cli.parser(i).add(Arg::pos("name", Nargs::Optional).help("iPod name (default: iPod)"));
+    let i = cli.add_parser_at(music, "export", &[], "copy music off with tags and readable names", &common());
+    let p = cli.parser(i);
+    p.add(Arg::opt(&["--to"]).metavar("DIR").help("where to put it (default: ./<the iPod's name>)"));
+    p.add_mutex(vec![
+        Arg::flag(&["--other-files"]).help("also export the files the database doesn't list, without asking"),
+        Arg::flag(&["--no-other-files"]).help("don't export them, and don't ask"),
+    ]);
+    let pl = cli.add_parser_at(music, "playlist", &[], "make and edit playlists", &common());
+    cli.add_subparsers_at(pl, "playlist_command");
+    let i = cli.add_parser_at(pl, "ls", &[], "the playlists, or one playlist's tracks", &common());
+    cli.parser(i).add(Arg::pos("name", Nargs::Optional).help("a playlist to list the tracks of"));
+    let i = cli.add_parser_at(pl, "new", &[], "make a playlist", &common());
+    cli.parser(i).add(Arg::pos("name", Nargs::One).help("its name"));
+    cli.parser(i).add(Arg::pos("ids", Nargs::Star).metavar("id").help("tracks to put in it, in order"));
+    for (name, help) in [("add", "add tracks to a playlist"), ("rm", "take tracks out of a playlist (they stay on the iPod)")] {
+        let i = cli.add_parser_at(pl, name, &[], help, &common());
+        cli.parser(i).add(Arg::pos("name", Nargs::One).help("the playlist"));
+        cli.parser(i).add(Arg::pos("ids", Nargs::Plus).metavar("id").help("track ids (from `flashpod music ls all`)"));
+    }
+    let i = cli.add_parser_at(pl, "delete", &[], "delete a playlist (its tracks stay on the iPod)", &common());
+    cli.parser(i).add(Arg::pos("name", Nargs::One).help("the playlist"));
+
+    let em = cli.add_parser_at(0, "emulate", &[], "boot a firmware or card image in emupod", &[]);
+    cli.parser(em).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
+    let fl = cli.add_parser_at(0, "flash", &[], "write iPod firmware to a CF/SD card (alias of `firmware write`)", &[]);
+    flash_args(cli.parser(fl));
+    cli
+}
+
+/// burn's arguments (card burn).
+fn burn_args(burn: &mut Parser) {
     burn.add(Arg::pos("image", Nargs::One).help("the card image file"));
     burn.add(Arg::pos("device", Nargs::Optional).help("target disk, e.g. /dev/sdc (else a chooser of removable disks)"));
     burn.add(Arg::flag(&["--yes"]).help("skip the typed ERASE confirmation"));
     burn.add(Arg::flag(&["--dry-run"]).help("check everything and show the plan; write nothing"));
     burn.add(Arg::flag(&["--no-verify"]).help("don't read the card back afterwards"));
+}
 
-    let fl = cli.add_parser("flash", &[], "write iPod firmware to a CF/SD card (erases it)", &[]);
+/// flash's arguments (firmware write, and its alias flash).
+fn flash_args(fl: &mut Parser) {
     fl.add(Arg::pos("device", Nargs::Optional).help("target disk, e.g. /dev/sdb (else interactive chooser)"));
     fl.add(Arg::opt(&["--firmware"]).help(
         "firmware image: raw Firmware-*, .bin.gz or .ipsw (default: choose from firmware/firmware.json)"));
@@ -420,7 +471,35 @@ fn build_cli() -> Cli {
         "cap the data partition to N decimal GB, overriding the firmware's manifest limit (use to probe an \
          early firmware's real disk-size ceiling)"));
     fl.add(Arg::flag(&["--self-test"]).help("validate layout logic and exit (no hardware)"));
-    cli
+    fl.add(Arg::opt(&["--format"]).choices(&["fat32", "hfs"]).help(
+        "the data partition's filesystem: fat32 (default; Windows-style card, any OS) or hfs (a Mac card: Apple \
+         Partition Map + HFS+; add music through the OS's mount)"));
+}
+
+/// 0.x command names and their 1.0 spelling.
+const RENAMED: [(&str, &str); 10] = [
+    ("ls", "music ls"), ("list", "music ls"), ("add", "music add"), ("rm", "music rm"), ("remove", "music rm"),
+    ("delete", "music rm"), ("erase", "music rm"), ("init", "music init"), ("rebuild", "music rebuild"),
+    ("burn", "card burn"),
+];
+
+/// A 0.x command name in place of the command: say its new name. The
+/// top-level options before it are skipped (--mount and --raw take a value).
+fn renamed_command(args: &[String]) -> Option<&'static str> {
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "--mount" || a == "--raw" {
+            i += 2;
+            continue;
+        }
+        if a.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        return RENAMED.iter().find(|(old, _)| *old == a).map(|(_, new)| *new);
+    }
+    None
 }
 
 fn s(ns: &Ns, k: &str) -> Option<String> {
@@ -444,24 +523,349 @@ fn list(ns: &Ns, k: &str) -> Vec<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(new) = renamed_command(&args) {
+        eprintln!("flashpod: that command is now `flashpod {}` (flashpod 1.0 groups commands: run `flashpod --help`).", new);
+        std::process::exit(2);
+    }
     let mut ns = match build_cli().parse_args(&args) {
         Ok(ns) => ns,
         Err(code) => std::process::exit(code),
     };
-    let command = s(&ns, "command").unwrap_or_default();
+    // the 1.0 names run the handlers the 0.x names did: `command` becomes
+    // that handler's name, `group` remembers the spelling (for sudo)
+    let group = s(&ns, "command").unwrap_or_default();
+    let sub = match group.as_str() {
+        "music" => s(&ns, "music_command"),
+        "firmware" => s(&ns, "firmware_command"),
+        "card" => s(&ns, "card_command"),
+        _ => None,
+    };
+    let handler = match (group.as_str(), sub.as_deref()) {
+        ("music", Some(m)) => m.to_string(),
+        ("firmware", Some("write")) | ("flash", None) => "flash".to_string(),
+        ("card", Some("burn")) => "burn".to_string(),
+        (g, Some(m)) => format!("{} {}", g, m),
+        (g, None) => g.to_string(),
+    };
+    ns.insert("command".into(), Val::Str(handler.clone()));
+    ns.insert("group".into(), Val::Str(group.clone()));
+    let command = handler;
     let code = match command.as_str() {
         "flash" => cmd_flash(&mut ns),
+        "firmware extract" => cmd_extract(&ns),
+        "firmware patches" => patches::cmd_patches(&ns),
+        "inspect" => cmd_inspect(&ns),
+        "card new" => cmd_card_new(&ns),
         "burn" => cmd_burn(&ns),
-        _ => data_command(&ns, &command),
+        "ls" | "list" | "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild" | "export" | "playlist" => data_command(&ns, &command),
+        other => {
+            eprintln!("flashpod {}: not built yet (flashpod 1.0, epic #88).", other);
+            2
+        }
     };
     std::process::exit(code);
 }
 
-fn data_cmd<'a>(cmd: &str, name: &'a Option<String>, files: &'a [String], what: &'a [String]) -> data::Cmd<'a> {
+/// A size: bytes, or a number with K/M/G/T (powers of 1000) or
+/// KiB/MiB/GiB/TiB (powers of 1024); case-insensitive, a trailing "B" allowed.
+fn parse_size(text: &str) -> Option<u64> {
+    let t = text.trim().to_ascii_lowercase();
+    let split = t.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(t.len());
+    let (num, unit) = t.split_at(split);
+    let n: f64 = num.parse().ok()?;
+    let mult: f64 = match unit.trim() {
+        "" | "b" => 1.0,
+        "k" | "kb" => 1e3,
+        "m" | "mb" => 1e6,
+        "g" | "gb" => 1e9,
+        "t" | "tb" => 1e12,
+        "kib" => 1024.0,
+        "mib" => 1024.0 * 1024.0,
+        "gib" => 1024.0 * 1024.0 * 1024.0,
+        "tib" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    let v = n * mult;
+    if v.is_finite() && v >= 0.0 { Some(v as u64) } else { None }
+}
+
+/// card new IMAGE SIZE (#97): a sparse blank card image, the library's
+/// card.create_blank (whole sectors, at least a card's minimum, never over
+/// an existing file).
+fn cmd_card_new(ns: &Ns) -> i32 {
+    let image = s(ns, "image").unwrap_or_default();
+    let text = s(ns, "size").unwrap_or_default();
+    let Some(bytes) = parse_size(&text) else {
+        eprintln!("flashpod card new: {:?} is not a size (try 2G, 512M, 4GiB or a byte count).", text);
+        return 2;
+    };
+    let size = match flashpod_core::card::blank_size(bytes) {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("flashpod card new: {}", e.message);
+            return 1;
+        }
+    };
+    let made = std::fs::OpenOptions::new().write(true).create_new(true).open(&image).and_then(|f| f.set_len(size));
+    match made {
+        Ok(()) => {
+            println!("Made {} ({} bytes, sparse). Next: flashpod firmware write {}", image, size, image);
+            0
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            eprintln!("flashpod card new: {} already exists.", image);
+            1
+        }
+        Err(e) => {
+            eprintln!("flashpod card new: can't make {}: {}", image, e);
+            1
+        }
+    }
+}
+
+/// inspect TARGET [--json] (#97): the library's card report (layout,
+/// firmware build and fixes, filesystem, iTunesDB, problems) for a card
+/// image (no root) or a disk (root, the platform's raw open). Read-only.
+fn cmd_inspect(ns: &Ns) -> i32 {
+    let target = s(ns, "target").unwrap_or_default();
+    let opened: std::io::Result<Box<dyn flashpod_core::block::BlockDevice>> = if flash::is_image(&target) {
+        FileDevice::open(std::path::Path::new(&target), false).map(|d| Box::new(d) as Box<dyn flashpod_core::block::BlockDevice>)
+    } else if !std::path::Path::new(&target).exists() {
+        eprintln!("flashpod inspect: no such file or disk: {}", target);
+        return 1;
+    } else {
+        crate::platform::current().open_raw(&target, false)
+    };
+    let mut dev = match opened {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("flashpod inspect: reading {} needs root (sudo).", target);
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("flashpod inspect: can't open {}: {}", target, e);
+            return 1;
+        }
+    };
+    let info = match flashpod_core::inspect::inspect(dev.as_mut(), &target, data::options()) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("flashpod inspect: {}: {}", target, e.message);
+            return 1;
+        }
+    };
+    let v = serde_json::to_value(&info).unwrap_or_default();
+    if b(ns, "json") {
+        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+        return 0;
+    }
+    print!("{}", inspect_text(&v));
+    print!("{}", contribute_offer(&v["firmware"]));
+    0
+}
+
+/// #107: the offer after inspect / firmware extract finds a firmware build
+/// the catalog doesn't know -- a prefilled GitHub issue link to open, or
+/// not. Nothing is sent from here.
+fn contribute_offer(installed: &serde_json::Value) -> String {
+    match flashpod_core::firmware::contribute_url(installed) {
+        Some(url) => format!("\nflashpod doesn't know this firmware build. To add it to the catalog, open this link \
+                              (a GitHub issue, prefilled; flashpod sends nothing) and say where the file came from:\n  {}\n", url),
+        None => String::new(),
+    }
+}
+
+/// The report for a person: one section per part of the card.
+fn inspect_text(v: &serde_json::Value) -> String {
+    let st = |x: &serde_json::Value| x.as_str().map(String::from).unwrap_or_else(|| x.to_string());
+    let mut o = String::new();
+    o += &format!("{}  ({})\n", st(&v["path"]), fmt_bytes(v["size_bytes"].as_u64().unwrap_or(0)));
+    match v["partition_table"].as_str() {
+        None => o += "  partitions: none (a blank card: flash it first)\n",
+        Some(t) => {
+            o += &format!("  partitions ({}):\n", t);
+            for p in v["partitions"].as_array().into_iter().flatten() {
+                let (start, n) = (p["start"].as_u64().unwrap_or(0), p["sectors"].as_u64().unwrap_or(0));
+                let what = match p["type"].as_u64() {
+                    Some(0) => "firmware",
+                    Some(0x0b) | Some(0x0c) => "FAT32 data",
+                    Some(0xaf) => "HFS data",
+                    Some(0xfe) => "partition map",
+                    _ => "other",
+                };
+                o += &format!("    {}: {} (type 0x{:02x}), sectors {}..{} ({})\n", p["index"], what, p["type"].as_u64().unwrap_or(0),
+                              start, (start + n).saturating_sub(1), fmt_bytes(n * 512));
+            }
+        }
+    }
+    let fw = &v["firmware"];
+    if fw["present"] == serde_json::json!(true) {
+        o += &format!("  firmware: {}", st(&fw["build"]));
+        if let Some(fixes) = fw["fixes"].as_array().filter(|f| !f.is_empty()) {
+            o += &format!(", fixes: {}", fixes.iter().map(st).collect::<Vec<_>>().join(", "));
+        }
+        o += "\n";
+    } else if !fw.is_null() {
+        o += &format!("  firmware: none ({})\n", st(&fw["reason"]));
+    }
+    let fs = &v["filesystem"];
+    if fs.is_object() {
+        let n = |k: &str| fs[k].as_u64().unwrap_or(0);
+        if fs["type"].as_str() == Some("HFS+") {
+            o += &format!("  data: HFS+{}, {}, {} free, {} blocks\n",
+                          if fs["wrapped"] == serde_json::json!(true) { " in an HFS wrapper" } else { "" },
+                          fmt_bytes(n("total_bytes")), fmt_bytes(n("free_bytes")), fmt_bytes(n("block_bytes")));
+        } else {
+            o += &format!("  data: {} {:?}, {}, {} free, {} clusters\n", st(&fs["type"]), fs["label"].as_str().unwrap_or(""),
+                          fmt_bytes(n("total_bytes")), fmt_bytes(n("free_bytes")), fmt_bytes(n("cluster_bytes")));
+        }
+    }
+    let db = &v["itunesdb"];
+    match db["state"].as_str() {
+        Some("ok") => {
+            let n = |k: &str| db[k].as_u64().unwrap_or(0);
+            let c = &db["ceiling"];
+            let limit = match c["kind"].as_str() {
+                Some("tracks") => format!("{} of the {}-track limit (patched firmware)", n("tracks"), c["limit"]),
+                _ => format!("{} of the {} byte limit", n("db_bytes"), c["limit"]),
+            };
+            o += &format!("  iTunesDB {:?}: {} tracks, {} artists, {} albums; {}\n", db["name"].as_str().unwrap_or(""),
+                          n("tracks"), n("artists"), n("albums"), limit);
+        }
+        Some(state) => o += &format!("  iTunesDB: {}{}\n", state,
+                                    db["error"].as_str().or(db["reason"].as_str()).map(|e| format!(" ({})", e)).unwrap_or_default()),
+        None if !db.is_null() => o += &format!("  iTunesDB: {}\n", st(db)),
+        None => {}
+    }
+    o += &format!("  music files: {}", v["music_files"]);
+    for (k, label) in [("orphans", "not in the database"), ("missing", "listed but missing")] {
+        let n = v[k].as_array().map(|a| a.len()).unwrap_or(0);
+        if n > 0 {
+            o += &format!(", {} {}", n, label);
+        }
+    }
+    o += "\n";
+    for p in v["problems"].as_array().into_iter().flatten() {
+        o += &format!("  problem: {}\n", st(p));
+    }
+    if v["partition_table"].as_str() == Some("apm") {
+        o += &format!("  {}\n", if v["ipod_compatible"] == serde_json::json!(true) {
+            "a Mac card: firmware and HFS+ volume in place; mount it to add music (flashpod music init/add --mount)"
+        } else {
+            "a Mac card, with problems (above)"
+        });
+    } else {
+        o += &format!("  {}\n", if v["ready"] == serde_json::json!(true) { "ready for an iPod" } else { "not ready for an iPod" });
+    }
+    o
+}
+
+fn fmt_bytes(n: u64) -> String {
+    flash::fmt_size(n)
+}
+
+/// firmware extract TARGET -o FILE [--image osos|aupd|rsrc] (#99): the
+/// firmware partition, or one image, off a card image (no root) or a disk
+/// (root, through the platform's raw open), to FILE, with FILE.json
+/// beside it. Never overwrites; reads only.
+fn cmd_extract(ns: &Ns) -> i32 {
+    let target = s(ns, "target").unwrap_or_default();
+    let out = s(ns, "output").unwrap_or_default();
+    let note_path = format!("{}.json", out);
+    for p in [&out, &note_path] {
+        if std::path::Path::new(p).exists() {
+            eprintln!("flashpod firmware extract: {} already exists; pick another name.", p);
+            return 1;
+        }
+    }
+    let opened: std::io::Result<Box<dyn flashpod_core::block::BlockDevice>> = if flash::is_image(&target) {
+        FileDevice::open(std::path::Path::new(&target), false).map(|d| Box::new(d) as Box<dyn flashpod_core::block::BlockDevice>)
+    } else if !std::path::Path::new(&target).exists() {
+        eprintln!("flashpod firmware extract: no such file or disk: {}", target);
+        return 1;
+    } else {
+        crate::platform::current().open_raw(&target, false)
+    };
+    let mut dev = match opened {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("flashpod firmware extract: reading {} needs root (sudo).", target);
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("flashpod firmware extract: can't open {}: {}", target, e);
+            return 1;
+        }
+    };
+    let image = s(ns, "image").filter(|i| !i.is_empty());
+    let r = match flashpod_core::extract::extract_firmware(dev.as_mut(), image.as_deref()) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("flashpod firmware extract: {}: {}", target, e.message);
+            return 1;
+        }
+    };
+    let mut note = r.note.clone();
+    note["source"] = serde_json::json!(target);
+    let written = std::fs::write(&out, &r.bytes)
+        .and_then(|_| std::fs::write(&note_path, serde_json::to_string_pretty(&note).unwrap_or_default() + "\n"));
+    if let Err(e) = written {
+        eprintln!("flashpod firmware extract: can't write {}: {}", out, e);
+        return 1;
+    }
+    let build = note["installed"]["build"].as_str().unwrap_or("unknown build");
+    println!("Extracted {} ({} bytes, sha256 {}) from {} to {}; note in {}.",
+             image.as_deref().unwrap_or("the firmware partition"), r.bytes.len(), r.sha256, target, out, note_path);
+    println!("Installed firmware: {}", build);
+    print!("{}", contribute_offer(&note["installed"]));
+    0
+}
+
+/// The command's file-like list: add's paths, or playlist's track ids.
+fn data_files(ns: &Ns) -> Vec<String> {
+    let ids = list(ns, "ids");
+    if ids.is_empty() { list(ns, "files") } else { ids }
+}
+
+/// music export's --to and --other-files / --no-other-files.
+fn export_opts(ns: &Ns) -> (Option<String>, Option<bool>) {
+    let others = if b(ns, "other_files") { Some(true) } else if b(ns, "no_other_files") { Some(false) } else { None };
+    (s(ns, "to").filter(|t| !t.is_empty()), others)
+}
+
+/// music export over --raw: a card image, or a device (root already).
+fn export_raw(ns: &Ns, node: &str, image: bool) -> i32 {
+    let (dest, others) = export_opts(ns);
+    let opened: Result<Box<dyn flashpod_core::block::BlockDevice>, String> = if image {
+        FileDevice::open_image(node, false).map(|d| Box::new(d) as Box<dyn flashpod_core::block::BlockDevice>).map_err(|e| e.message)
+    } else {
+        let xfer = rawdev::effective_xfer();
+        rawdev::RawDevice::open(node, false, xfer).map(|d| Box::new(d) as Box<dyn flashpod_core::block::BlockDevice>)
+            .map_err(|e| rawdev::py_os(&e).to_string())
+    };
+    let mut dev = match opened {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("flashpod music export: couldn't open {}: {}", node, e);
+            return 1;
+        }
+    };
+    let fs = match ops::open_fat(dev.as_mut()) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("flashpod music export: couldn't read a FAT filesystem on {}: {}", node, e.message);
+            return 1;
+        }
+    };
+    export::export(&mut export::FatSource(fs), node, dest.as_deref(), others)
+}
+
+fn data_cmd<'a>(cmd: &str, name: &'a Option<String>, files: &'a [String], what: &'a [String], action: &'a str) -> data::Cmd<'a> {
     match cmd {
         "init" => data::Cmd::Init(name.as_deref().unwrap_or("iPod")),
         "rebuild" => data::Cmd::Rebuild(name.as_deref()),
         "add" => data::Cmd::Add(files),
+        "playlist" => data::Cmd::Playlist(action, name.as_deref(), files),
         _ => data::Cmd::Rm(what),
     }
 }
@@ -470,13 +874,16 @@ fn data_cmd<'a>(cmd: &str, name: &'a Option<String>, files: &'a [String], what: 
 /// elevating with sudo first when we lack root. `image`: platform.use_image
 /// took --raw for a card image (decided once, from the argument).
 fn run_raw(ns: &Ns, command: &str, node: &str, image: bool) -> i32 {
-    if !image && !host::is_admin() {
+    if !image && !crate::platform::current().is_admin() {
         eprintln!("flashpod: {} over the raw device {} needs root \u{2014} elevating via sudo...", command, node);
         let mut extra = vec!["--raw".to_string(), node.to_string()];
         extra.extend(detect::cmd_args(ns));
-        host::sudo_reexec(&extra);
+        crate::platform::current().elevate(&extra);
         eprintln!("flashpod: couldn't get root for raw access to {}.", node);
         return 1;
+    }
+    if command == "export" {
+        return export_raw(ns, node, image);
     }
     if matches!(command, "ls" | "list") {
         return match load_library_raw(node) {
@@ -484,13 +891,10 @@ fn run_raw(ns: &Ns, command: &str, node: &str, image: bool) -> i32 {
             None => 1,
         };
     }
-    let (name, files, what) = (s(ns, "name").filter(|n| !n.is_empty()), list(ns, "files"), list(ns, "what"));
-    let c = data_cmd(command, &name, &files, &what);
-    if image {
-        data::run_raw_image(node, c)
-    } else {
-        data::run_raw_device(node, c)
-    }
+    let (name, files, what) = (s(ns, "name").filter(|n| !n.is_empty()), data_files(ns), list(ns, "what"));
+    let action = s(ns, "playlist_command").unwrap_or_default();
+    let c = data_cmd(command, &name, &files, &what, &action);
+    data::run(if image { data::TargetSpec::Image(node) } else { data::TargetSpec::Device(node) }, c)
 }
 
 /// cli.main from the --raw dispatch on: find the target (scan, mount
@@ -501,7 +905,7 @@ fn data_command(ns: &Ns, command: &str) -> i32 {
         return run_raw(ns, command, &raw, image);
     }
     let mut mount = s(ns, "mount").filter(|m| !m.is_empty());
-    let data = matches!(command, "ls" | "list" | "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild");
+    let data = matches!(command, "ls" | "list" | "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild" | "export" | "playlist");
     if data && mount.is_none() && host::firewire_sbp2_needed() {
         host::load_firewire_sbp2();
     }
@@ -513,7 +917,7 @@ fn data_command(ns: &Ns, command: &str) -> i32 {
             Some(detect::Source::Raw(node)) => return run_raw(ns, command, &node, false),
         }
     }
-    if matches!(command, "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild") && mount.is_none() {
+    if matches!(command, "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild" | "playlist") && mount.is_none() {
         match detect::resolve_raw_target(ns) {
             None => return 1,
             Some(detect::Source::Raw(node)) => return run_raw(ns, command, &node, false),
@@ -533,8 +937,7 @@ fn data_command(ns: &Ns, command: &str) -> i32 {
         }
     }
     let mut mount = mount;
-    let readable = std::ffi::CString::new(mount.as_bytes())
-        .map(|c| unsafe { libc::access(c.as_ptr(), libc::R_OK | libc::X_OK) } == 0).unwrap_or(false);
+    let readable = crate::sys::can_enter(&mount);
     if !readable && detect::device_for_mount(&mount).is_some() {
         match detect::remount_as_user(&mount) {
             Some(m) => mount = m,
@@ -552,6 +955,10 @@ fn data_command(ns: &Ns, command: &str) -> i32 {
                   mount, bad.join(", "), UDEV_RULE, d = disk);
         return 1;
     }
+    if command == "export" {
+        let (dest, others) = export_opts(ns);
+        return export::export(&mut export::MountSource(mount.clone()), &mount, dest.as_deref(), others);
+    }
     if matches!(command, "ls" | "list") {
         let mut t = mount::MountTarget::new(&mount);
         return match ops::load(&mut t, &mut entropy()) {
@@ -562,8 +969,9 @@ fn data_command(ns: &Ns, command: &str) -> i32 {
             }
         };
     }
-    let (name, files, what) = (s(ns, "name").filter(|n| !n.is_empty()), list(ns, "files"), list(ns, "what"));
-    let rc = data::run_mount(&mount, data_cmd(command, &name, &files, &what));
+    let (name, files, what) = (s(ns, "name").filter(|n| !n.is_empty()), data_files(ns), list(ns, "what"));
+    let action = s(ns, "playlist_command").unwrap_or_default();
+    let rc = data::run(data::TargetSpec::Mount(&mount), data_cmd(command, &name, &files, &what, &action));
     if matches!(command, "add" | "rm" | "remove" | "delete" | "erase") {
         detect::offer_eject(detect::device_for_mount(&mount).as_deref(), rc);
     }

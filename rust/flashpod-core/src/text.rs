@@ -6,13 +6,13 @@ pub fn casefold(s: &str) -> String {
 }
 
 /// `bytes.decode("latin-1")`.
-pub fn latin1(b: &[u8]) -> String {
+pub(crate) fn latin1(b: &[u8]) -> String {
     b.iter().map(|&c| c as char).collect()
 }
 
 /// `bytes.decode("utf-16-le", "replace")`: lone surrogates and a trailing
 /// odd byte each become U+FFFD.
-pub fn utf16le_replace(b: &[u8]) -> String {
+pub(crate) fn utf16le_replace(b: &[u8]) -> String {
     let units: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
     let mut s = String::from_utf16_lossy(&units);
     if b.len() % 2 == 1 {
@@ -22,7 +22,7 @@ pub fn utf16le_replace(b: &[u8]) -> String {
 }
 
 /// `str.rstrip()` (Python's whitespace set, which isn't Rust's).
-pub fn py_rstrip(s: &str) -> &str {
+pub(crate) fn py_rstrip(s: &str) -> &str {
     s.trim_end_matches(|c: char| {
         matches!(c, '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | '\u{1c}'..='\u{1f}' | ' ' | '\u{85}' | '\u{a0}')
             || (c as u32 > 0xff && c.is_whitespace())
@@ -30,21 +30,21 @@ pub fn py_rstrip(s: &str) -> &str {
 }
 
 /// `struct.unpack_from("<I", b, off)`, with struct.error's message.
-pub fn u32_at(b: &[u8], off: usize) -> Result<u32, String> {
+pub(crate) fn u32_at(b: &[u8], off: usize) -> Result<u32, String> {
     if off + 4 > b.len() {
         return Err(unpack_err(4, off, b.len()));
     }
     Ok(u32::from_le_bytes(b[off..off + 4].try_into().unwrap()))
 }
 
-pub fn u64_at(b: &[u8], off: usize) -> Result<u64, String> {
+pub(crate) fn u64_at(b: &[u8], off: usize) -> Result<u64, String> {
     if off + 8 > b.len() {
         return Err(unpack_err(8, off, b.len()));
     }
     Ok(u64::from_le_bytes(b[off..off + 8].try_into().unwrap()))
 }
 
-pub fn u16_at(b: &[u8], off: usize) -> Result<u16, String> {
+pub(crate) fn u16_at(b: &[u8], off: usize) -> Result<u16, String> {
     if off + 2 > b.len() {
         return Err(unpack_err(2, off, b.len()));
     }
@@ -59,7 +59,7 @@ fn unpack_err(size: usize, off: usize, len: usize) -> String {
 }
 
 /// Python's `buf[a:b]`, clamped.
-pub fn slice(b: &[u8], a: usize, end: usize) -> &[u8] {
+pub(crate) fn slice(b: &[u8], a: usize, end: usize) -> &[u8] {
     let a = a.min(b.len());
     let end = end.min(b.len()).max(a);
     &b[a..end]

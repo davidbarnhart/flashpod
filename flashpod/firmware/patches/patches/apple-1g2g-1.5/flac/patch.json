@@ -1,0 +1,192 @@
+{
+ "format": 3,
+ "id": "flac",
+ "author": "openpod",
+ "title": "Play FLAC files",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x3e6cc",
+   "vaddr": "0x2803e6cc",
+   "patched": "687106ea",
+   "check": {
+    "offset": "0x3e6b0",
+    "bytes": 48,
+    "sha256": "8f9ace16619d796f57855d9e9d84a29796e0ea06470a0a640c2222a8d513c981"
+   },
+   "why": "flac (from the built image)"
+  },
+  {
+   "image": "osos",
+   "offset": "0x3f7b8",
+   "vaddr": "0x2803f7b8",
+   "patched": "316d06ea",
+   "check": {
+    "offset": "0x3f7a0",
+    "bytes": 48,
+    "sha256": "00eb709b838a8abe709644e18c07c3f168c9f0cead5b74265150d970b6518825"
+   },
+   "why": "flac (from the built image)"
+  },
+  {
+   "image": "osos",
+   "offset": "0xb5cb8",
+   "vaddr": "0x280b5cb8",
+   "patched": "e4ab1d00",
+   "check": {
+    "offset": "0xb5ca0",
+    "bytes": 48,
+    "sha256": "c1ed5ecd21b49926f24b34e02614ab97971f6d265d25d3afa2661999fa59a923"
+   },
+   "why": "flac (from the built image)"
+  },
+  {
+   "image": "osos",
+   "offset": "0xb5d08",
+   "vaddr": "0x280b5d08",
+   "patched": "059404ea",
+   "check": {
+    "offset": "0xb5cf0",
+    "bytes": 48,
+    "sha256": "2ddf609a216f3385a8c3137b362ed78b5c4668724af6781d0f364c015bf54b56"
+   },
+   "why": "flac (from the built image)"
+  },
+  {
+   "image": "osos",
+   "offset": "0x1dabe4",
+   "vaddr": "0x281dabe4",
+   "patched": "f8711400",
+   "check": {
+    "offset": "0x1dabd0",
+    "bytes": 48,
+    "sha256": "3338ee31b8a906ae2dee1506a1b7bb9c6f336c2384dd993e99dade31fa7855f4"
+   },
+   "why": "flac (from the built image)"
+  },
+  {
+   "image": "osos",
+   "offset": "0x1dabec",
+   "vaddr": "0x281dabec",
+   "patched": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000064ac1d0008000000",
+   "check": {
+    "offset": "0x1dabe0",
+    "bytes": 128,
+    "sha256": "8561683a627fc1640c450b6530944e42620e70bff0e7d3a061f540f02a0e04de"
+   },
+   "why": "flac (from the built image)"
+  },
+  {
+   "image": "osos",
+   "offset": "0x1dac58",
+   "vaddr": "0x281dac58",
+   "patched": "ff000000",
+   "check": {
+    "offset": "0x1dac40",
+    "bytes": 48,
+    "sha256": "17b0761f87b081d5cf10757ccc89f12be355c70e2e29df288b65b30710dcbcd1"
+   },
+   "why": "flac (from the built image)"
+  },
+  {
+   "image": "osos",
+   "offset": "0x1dac64",
+   "vaddr": "0x281dac64",
+   "patched": "666c6100",
+   "check": {
+    "offset": "0x1dac50",
+    "bytes": 48,
+    "sha256": "17b0761f87b081d5cf10757ccc89f12be355c70e2e29df288b65b30710dcbcd1"
+   },
+   "why": "flac (from the built image)"
+  },
+  {
+   "image": "osos",
+   "offset": "0x1dac74",
+   "vaddr": "0x281dac74",
+   "patched": "00009fe50ef0a0e1666c6100",
+   "check": {
+    "offset": "0x1dac60",
+    "bytes": 48,
+    "sha256": "17b0761f87b081d5cf10757ccc89f12be355c70e2e29df288b65b30710dcbcd1"
+   },
+   "why": "flac (from the built image)"
+  },
+  {
+   "image": "osos",
+   "offset": "0x1dac84",
+   "vaddr": "0x281dac84",
+   "patched": "28c09fe50c0055e10600001a0400a0e1261305eb0010a0e10400a0e19d8ef9eb0050a0e18792f9ea688cc6e5c192f9ea666c6100",
+   "check": {
+    "offset": "0x1dac80",
+    "bytes": 64,
+    "sha256": "f5a5fd42d16a20302798ef6ed309979b43003d2320d9f0e8ea9831a92759fb4b"
+   },
+   "why": "flac (from the built image)"
+  },
+  {
+   "image": "osos",
+   "offset": "0x1dad24",
+   "vaddr": "0x281dad24",
+   "patched": "2b0ba0e3440080e3040084e5000000000000000000000000000000000000a0e3140084e5180084e50f6cfbea",
+   "check": {
+    "offset": "0x1dad20",
+    "bytes": 48,
+    "sha256": "17b0761f87b081d5cf10757ccc89f12be355c70e2e29df288b65b30710dcbcd1"
+   },
+   "why": "flac (from the built image)"
+  }
+ ],
+ "append": [
+  {
+   "image": "osos",
+   "offset": "0x315aa8",
+   "vaddr": "0x28315aa8",
+   "bytes": 363916,
+   "sha256": "b163c6a94aa51f52e8d091859284ca00d4f667ec6f016b68ee3793931aa21990",
+   "file": "append.hex"
+  }
+ ],
+ "copies": [
+  {
+   "image": "osos",
+   "offset": "0x1dabec",
+   "from": {
+    "image": "osos",
+    "offset": "0x147190",
+    "bytes": 96,
+    "sha256": "d81d3c7d8473dbee95d843c1d28ba7eb0d26d79e40163066ff911a9886310581"
+   }
+  },
+  {
+   "image": "osos",
+   "offset": "0x1dad30",
+   "from": {
+    "image": "osos",
+    "offset": "0xd29ac",
+    "bytes": 16,
+    "sha256": "498e8a7c8d06f07bdeb4a372efc92128508ece6976e918a952ac7c8bc2e93358"
+   }
+  },
+  {
+   "image": "osos",
+   "offset": "0x317878",
+   "from": {
+    "image": "osos",
+    "offset": "0xec2e8",
+    "bytes": 16,
+    "sha256": "b7025273052dca0e8dbe3fd45ad74fe41c48c45e5dce58a152fefe3210107a9a"
+   }
+  }
+ ],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "flac.md",
+  "builder_name": "flac"
+ },
+ "license": "MIT"
+}

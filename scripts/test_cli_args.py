@@ -16,12 +16,14 @@ import fcntl
 import os
 import pty
 import select
+import shlex
 import struct
 import subprocess
 import sys
 import termios
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import layout1  # noqa: E402
 import result_line  # noqa: E402
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -90,12 +92,39 @@ def run_pty(cmd, env, cols=80):
     return p.wait(), out, b""
 
 
-def compare(rust):
-    py = [sys.executable, "-m", "flashpod"]
+# 1.0 layout (#97): the new groups, their help and their usage errors
+CASES_1_0 = [
+    "music", "music -h", "music bogus", "music ls bogus", "music ls -h", "music list -h",
+    "music rm", "music add --foo", "music export -h", "music playlist -h",
+    "firmware", "firmware -h", "firmware bogus", "firmware write -h", "firmware write a b",
+    "firmware write --arm --no-arm x", "firmware extract -h", "firmware list -h", "firmware list x",
+    "firmware patch -h", "card", "card -h", "card burn", "card burn -h", "card new -h",
+    "inspect -h", "emulate -h", "flash -h", "ls", "--mount x rm 5", "burn a",
+    "firmware extract", "firmware extract x", "firmware extract x -o", "firmware extract x -o f --image bogus",
+    "firmware extract -o f", "firmware extract a b -o f",
+    "music export --to", "music export --other-files --no-other-files", "music export x",
+    "music playlist", "music playlist -h", "music playlist new", "music playlist add x",
+    "music playlist rm -h", "music playlist delete", "music playlist ls a b", "music playlist bogus",
+    "inspect", "inspect a b", "inspect --json", "card new", "card new x", "card new x 1G y",
+    "firmware write --format", "firmware write --format ntfs x", "flash --format hfs --format",
+]
+
+
+def compare(rust, layout_1=False):
+    """Every case at every width in both builds. With layout_1 the Rust
+    binary runs the 1.0 spelling of each case (and CASES_1_0 besides), and
+    the reference is scripts/layout1_parser.py: the same 1.0 tree declared
+    with Python's own argparse."""
+    if layout_1:
+        py = [sys.executable, os.path.join(HERE, "scripts", "layout1_parser.py")]
+        cases = [shlex.join(layout1.argv_1_0(split(c))) for c in CASES] + CASES_1_0
+    else:
+        py = [sys.executable, "-m", "flashpod"]
+        cases = CASES
     bad = []
     n = 0
     log = []
-    for line in CASES:
+    for line in cases:
         argv = split(line)
         for cols in WIDTHS:
             env = env_for(cols)
@@ -113,18 +142,20 @@ def compare(rust):
             log.append((line, "pty %d cols" % cols, a, b))
             if a != b:
                 bad.append((line, "pty %d cols" % cols, a, b))
-    return n, bad, log
+    return n, bad, len(cases), log
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rust", required=True)
+    ap.add_argument("--layout-1", action="store_true",
+                    help="the Rust side runs the 1.0 command names; report which lines differ")
     ap.add_argument("--show", action="store_true",
                     help="print the first difference in full")
     opts = ap.parse_args()
     rust = os.path.abspath(opts.rust)
-    n, bad, log = compare(rust)
-    asked = len(CASES) * (len(WIDTHS) + 2)
+    n, bad, ncases, log = compare(rust, opts.layout_1)
+    asked = ncases * (len(WIDTHS) + 2)
 
     def result():
         # rc, stdout and stderr per run
@@ -132,7 +163,8 @@ def main():
                                 log, binary=rust)
     if not bad:
         print("IDENTICAL: %d runs (%d argument lines x %d pipe widths + 2 "
-              "pty widths)" % (n, len(CASES), len(WIDTHS)))
+              "pty widths)%s" % (n, ncases, len(WIDTHS),
+                                 ", 1.0 layout against scripts/layout1_parser.py" if opts.layout_1 else ""))
         return result()
     print("DIFFERENT: %d of %d runs" % (len(bad), n))
     for line, how, a, b in bad[:20]:

@@ -12,7 +12,7 @@ use crate::library::{self, AudioInfo, Hooks, Options, TagSource, ADD_HEADROOM};
 use crate::text::py_repr;
 use serde_json::{json, Value};
 
-pub const DB: &str = "iPod_Control/iTunes/iTunesDB";
+pub(crate) const DB: &str = "iPod_Control/iTunes/iTunesDB";
 
 /// What the data commands need from a card: target.RawTarget's operations
 /// (implemented here for the FAT on an image or device) and
@@ -101,7 +101,7 @@ pub fn load(t: &mut dyn Target, ent: &mut Entropy) -> Result<Library, Error> {
         .ok_or_else(|| Error::new(ErrorKind::NotInitialized, "no iTunesDB on the card (init it first)"))
 }
 
-pub fn save_library(fs: &mut Fat32, lib: &Library, ent: &mut Entropy) -> Result<(), Error> {
+pub(crate) fn save_library(fs: &mut Fat32, lib: &Library, ent: &mut Entropy) -> Result<(), Error> {
     let data = itunesdb::serialize(lib, ent);
     fs.write_file(DB, &data).map_err(os_err)?;
     fs.sync().map_err(os_err)
@@ -180,6 +180,8 @@ pub fn remove_fs(fs: &mut dyn Target, what: &[String], ent: &mut Entropy) -> Res
         k += 1;
         keep
     });
+    let gone: Vec<u32> = victims.iter().map(|t| t.id).collect();
+    crate::playlist::forget_tracks(&mut lib, &gone);
     fs.save_library(&lib, ent)?;
     Ok(victims)
 }
@@ -227,7 +229,7 @@ pub struct Plan {
 
 /// The library-fix probe, memoized, over the FAT's block device (the disk's
 /// sector 0 is -part_start, as RawTarget.firmware_read reads it).
-pub fn probe(fs: &mut Fat32, memo: &mut Option<Option<bool>>) -> Option<bool> {
+pub(crate) fn probe(fs: &mut Fat32, memo: &mut Option<Option<bool>>) -> Option<bool> {
     if let Some(v) = memo {
         return *v;
     }

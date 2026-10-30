@@ -1,0 +1,44 @@
+{
+ "format": 3,
+ "id": "version",
+ "author": "openpod",
+ "title": "Say 1.6, not 1.5",
+ "base": "apple-1g2g-1.5",
+ "requires": [],
+ "conflicts": [],
+ "status": "released",
+ "edits": [
+  {
+   "image": "osos",
+   "offset": "0x7d38",
+   "vaddr": "0x28007d38",
+   "patched": "6010a0e3",
+   "check": {
+    "offset": "0x7d20",
+    "bytes": 48,
+    "sha256": "ae13e6f0244c280558e1fd46561e7fb275fb80f0bb92c64178fcb5c3f7d1980e"
+   },
+   "why": "Settings > About shows version 1.6"
+  },
+  {
+   "image": "osos",
+   "offset": "0x3174c",
+   "vaddr": "0x2803174c",
+   "patched": "00806001",
+   "check": {
+    "offset": "0x31730",
+    "bytes": 48,
+    "sha256": "f43c571520b891952e7690865498f4c5cb6ed3942a1c4f147957fda91951cafa"
+   },
+   "why": "the buildID written to SysInfo is 1.6"
+  }
+ ],
+ "append": [],
+ "copies": [],
+ "source": {
+  "from": "openpod@37b622a",
+  "path": "version.md",
+  "builder_name": "version16"
+ },
+ "license": "MIT"
+}

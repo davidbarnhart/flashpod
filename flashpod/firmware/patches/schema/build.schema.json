@@ -1,0 +1,83 @@
+{
+ "$schema": "http://json-schema.org/draft-07/schema#",
+ "title": "ipod-patches format 3 build (builds/<id>.json)",
+ "type": "object",
+ "required": [
+  "format",
+  "id",
+  "title",
+  "base",
+  "patches",
+  "result"
+ ],
+ "properties": {
+  "format": {
+   "const": 3
+  },
+  "id": {
+   "type": "string",
+   "pattern": "^[a-z0-9][a-z0-9.-]*$"
+  },
+  "title": {
+   "type": "string"
+  },
+  "base": {
+   "type": "string",
+   "pattern": "^[a-z0-9][a-z0-9.-]*$"
+  },
+  "patches": {
+   "type": "array",
+   "items": {
+    "type": "string",
+    "pattern": "^[a-z0-9][a-z0-9.-]*$"
+   },
+   "minItems": 1
+  },
+  "result": {
+   "type": "object",
+   "required": [
+    "bytes",
+    "sha256"
+   ],
+   "properties": {
+    "bytes": {
+     "type": "integer"
+    },
+    "sha256": {
+     "type": "string",
+     "pattern": "^[0-9a-f]{64}$"
+    },
+    "osos_sha256": {
+     "type": "string",
+     "pattern": "^[0-9a-f]{64}$"
+    }
+   }
+  },
+  "tested": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": [
+     "where",
+     "date",
+     "what"
+    ],
+    "properties": {
+     "where": {
+      "enum": [
+       "hardware",
+       "emulator"
+      ]
+     },
+     "date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+     },
+     "what": {
+      "type": "string"
+     }
+    }
+   }
+  }
+ }
+}

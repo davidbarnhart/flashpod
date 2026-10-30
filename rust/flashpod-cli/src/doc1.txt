@@ -1,0 +1,25 @@
+flashpod - inspect, patch, rehearse and flash early-iPod firmware, and manage the music on it.
+
+Commands:
+  flashpod inspect TARGET            everything about a card, iPod or image
+  flashpod firmware list             the firmware flashpod can write
+  flashpod firmware extract TARGET   copy the firmware partition (or one image) off
+  flashpod firmware write [/dev/sdX] write firmware + partition layout to a CF/SD
+                                     card (needs sudo); `flashpod flash` is the same
+  flashpod card new IMAGE SIZE       make a blank card image
+  flashpod card burn IMAGE [/dev/sdX]
+                                     write a card image onto a removable card
+  flashpod music ls [all|artist|album]
+                                     the library: artist/album tree, or flat counts
+  flashpod music add [path ...]      add audio files; directories are scanned
+                                     recursively; with no paths, a directory picker
+  flashpod music rm id|artist|album ...
+                                     remove tracks (ids from `flashpod music ls all`)
+  flashpod music init [name]         create iPod_Control + an empty database
+  flashpod music rebuild [name]      rebuild the database from the music on the iPod
+  flashpod music export, playlist    copy music off; make and edit playlists
+  flashpod emulate FIRMWARE|IMAGE    boot it in emupod
+
+The music commands work on the mounted iPod (auto-detected and confirmed
+first; --mount names it) or on a card image (--raw IMAGE). flashpod 1.0
+renamed the 0.x commands: ls is now `music ls`, burn is `card burn`, and so on.

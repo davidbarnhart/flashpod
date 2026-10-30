@@ -6,17 +6,17 @@ use crate::text::{slice, u32_at, u64_at, utf16le_replace};
 use serde::Serialize;
 use std::collections::HashMap;
 
-pub const MHOD_TITLE: u32 = 1;
-pub const MHOD_LOCATION: u32 = 2;
-pub const MHOD_ALBUM: u32 = 3;
-pub const MHOD_ARTIST: u32 = 4;
-pub const MHOD_GENRE: u32 = 5;
-pub const MHOD_FILETYPE: u32 = 6;
-pub const MHOD_COMPOSER: u32 = 12;
-pub const MHOD_PLAYLIST_POS: u32 = 100;
-pub const MAC_EPOCH_OFFSET: i64 = 2_082_844_800;
-pub const MARKER_MP3: [u8; 4] = *b"\x00MP3";
-pub const MARKER_FLAC: [u8; 4] = *b"\x00FLA";
+pub(crate) const MHOD_TITLE: u32 = 1;
+pub(crate) const MHOD_LOCATION: u32 = 2;
+pub(crate) const MHOD_ALBUM: u32 = 3;
+pub(crate) const MHOD_ARTIST: u32 = 4;
+pub(crate) const MHOD_GENRE: u32 = 5;
+pub(crate) const MHOD_FILETYPE: u32 = 6;
+pub(crate) const MHOD_COMPOSER: u32 = 12;
+pub(crate) const MHOD_PLAYLIST_POS: u32 = 100;
+pub(crate) const MAC_EPOCH_OFFSET: i64 = 2_082_844_800;
+pub(crate) const MARKER_MP3: [u8; 4] = *b"\x00MP3";
+pub(crate) const MARKER_FLAC: [u8; 4] = *b"\x00FLA";
 const STR_MHODS: [u32; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 12];
 
 #[derive(Debug, Clone, Default)]
@@ -45,12 +45,22 @@ pub struct Library {
     pub name: String,
     pub tracks: Vec<Track>,
     pub dbid: u64,
+    /// The user playlists, in order (the master playlist is `tracks`). Read
+    /// as their title and item track ids: a smart playlist from iTunes keeps
+    /// its current items but not its rules.
+    pub playlists: Vec<Playlist>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Playlist {
+    pub name: String,
+    pub ids: Vec<u32>,
 }
 
 impl Library {
     /// itunesdb.Library(name): one id draw.
     pub fn new(name: &str, ent: &mut Entropy) -> Self {
-        Library { name: name.to_string(), tracks: Vec::new(), dbid: ent.rng.getrandbits(64) }
+        Library { name: name.to_string(), tracks: Vec::new(), dbid: ent.rng.getrandbits(64), playlists: Vec::new() }
     }
 
     pub fn next_track_id(&self) -> u32 {
@@ -184,7 +194,7 @@ fn parse_mhit(buf: &[u8], off: usize, ent: &mut Entropy) -> Result<(Track, usize
 }
 
 /// itunesdb.parse_bytes. Err is the ValueError / struct.error message.
-pub fn parse_bytes(buf: &[u8]) -> Result<Library, String> {
+pub(crate) fn parse_bytes(buf: &[u8]) -> Result<Library, String> {
     parse_bytes_with(buf, &mut Entropy::new(0, 0))
 }
 
@@ -269,12 +279,33 @@ fn parse_playlists(buf: &[u8], mut off: usize, lib: &mut Library) -> Result<(), 
         let p_hlen = u32_at(buf, off + 4)? as usize;
         let p_tlen = u32_at(buf, off + 8)? as usize;
         let nmhod = u32_at(buf, off + 12)?;
+        let nitems = u32_at(buf, off + 16)?;
         let is_master = u32_at(buf, off + 20)? != 0;
         let mut m = parse_mhods(buf, off + p_hlen, nmhod)?;
         if is_master {
             if let Some(name) = take_str(&mut m, MHOD_TITLE) {
                 lib.name = name;
             }
+        } else {
+            // the mhips follow the playlist's mhods; each: hlen, tlen,
+            // nmhod, 0, position, track id
+            let mut q = off + p_hlen;
+            for _ in 0..nmhod {
+                if slice(buf, q, q + 4) != b"mhod" {
+                    break;
+                }
+                q += u32_at(buf, q + 8)? as usize;
+            }
+            let mut ids = Vec::new();
+            for _ in 0..nitems {
+                if slice(buf, q, q + 4) != b"mhip" {
+                    break;
+                }
+                ids.push(u32_at(buf, q + 24)?);
+                q += u32_at(buf, q + 8)? as usize;
+            }
+            let name = take_str(&mut m, MHOD_TITLE).unwrap_or_default();
+            lib.playlists.push(Playlist { name, ids });
         }
         off += p_tlen;
     }
@@ -394,9 +425,14 @@ pub fn serialize(lib: &Library, ent: &mut Entropy) -> Vec<u8> {
     let mpl = mk_mhyp(&lib.name, &ids, true, ent);
     let mut mhlp = b"mhlp".to_vec();
     mhlp.extend_from_slice(&92u32.to_le_bytes());
-    mhlp.extend_from_slice(&1u32.to_le_bytes());
+    mhlp.extend_from_slice(&(1 + lib.playlists.len() as u32).to_le_bytes());
     mhlp.resize(92, 0);
     mhlp.extend(mpl);
+    // user playlists after the master, as scripts/add_playlists.py
+    // (claude/playlist-tool) writes them for the emulator's playlist paths
+    for p in &lib.playlists {
+        mhlp.extend(mk_mhyp(&p.name, &p.ids, false, ent));
+    }
     let sd2 = mk_mhsd(2, &mhlp);
     const HLEN: usize = 104;
     let mut h = vec![0u8; HLEN];
