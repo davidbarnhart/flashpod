@@ -2,6 +2,21 @@
  "format": 3,
  "firmwares": [
   {
+   "id": "flashpod-1.6",
+   "title": "flashpod 1.6: Apple's 1.5 plus 22 fixes",
+   "maker": "flashpod",
+   "version": "1.6",
+   "models": [
+    "1G",
+    "2G"
+   ],
+   "bytes": 5479893,
+   "sha256": "ec2d2db17f2550929a37449b6992d9d13d729a11928841ed163f2855824b2573",
+   "build": "flashpod-1.6",
+   "urls": [],
+   "tested_on_hardware": true
+  },
+  {
    "id": "apple-1g2g-1.5",
    "title": "Apple iPod Software 1.5 (internal 1.1.5)",
    "maker": "apple",
@@ -21,24 +36,505 @@
      "bytes": 2092355,
      "sha256": "0edbb2d512bc84d333c0749f4d51398890b3a5934476311dd67e2314809e9103",
      "note": "Apple's own download; verified 2026-10-29 (holds the firmware file named by sha256 above)"
+    },
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_1.1.5_2005_02_18.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 2078899,
+     "sha256": "0f5bab05337d65f0a3a1a573d9e241eac5c57649fd0f7b21f5f2fad6bedf92e8"
     }
    ],
    "tested_on_hardware": true
   },
   {
-   "id": "flashpod-1.6",
-   "title": "flashpod 1.6: Apple's 1.5 plus 22 fixes",
-   "maker": "flashpod",
-   "version": "1.6",
+   "id": "apple-1g2g-1.4",
+   "title": "Apple iPod Software 1.4",
+   "maker": "apple",
+   "version": "1.4",
    "models": [
     "1G",
     "2G"
    ],
-   "bytes": 5479893,
-   "sha256": "ec2d2db17f2550929a37449b6992d9d13d729a11928841ed163f2855824b2573",
-   "build": "flashpod-1.6",
-   "urls": [],
+   "bytes": 4870656,
+   "sha256": "088433ba2acde3a5475de5a5ae99cc834fc26919e1d633fc1f2162415613aa84",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_1.1.4_2004_04_23.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 1990869,
+     "sha256": "75c11674c24dc9bbc87f90fa6d7f15c81cf0a3fcc126370cc2ba875671e3c194"
+    }
+   ]
+  },
+  {
+   "id": "apple-1g2g-1.3",
+   "title": "Apple iPod Software 1.3",
+   "maker": "apple",
+   "version": "1.3",
+   "models": [
+    "1G",
+    "2G"
+   ],
+   "bytes": 4863488,
+   "sha256": "009395f31fac0f2e82d67a3476e93c5e855fe45644e54d6a6f7963798a2d6c08",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_1.1.3_2003_04_25.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 1988288,
+     "sha256": "ecf6f63a66fb2a1ac812040b9ebaf452da8234e62eb3a362d030677387958137"
+    }
+   ]
+  },
+  {
+   "id": "apple-1g2g-1.2.6",
+   "title": "Apple iPod Software 1.2.6",
+   "maker": "apple",
+   "version": "1.2.6",
+   "models": [
+    "1G",
+    "2G"
+   ],
+   "bytes": 4703232,
+   "sha256": "95848c5013a8c4221abc095b26e4a59b952df7d5f98ee7afd78f1b0a36e2fa83",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_1.1.2.6_2003_03_13.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 1920510,
+     "sha256": "c30198bd0130a6193622a6980e0a18b5e93062be64603cd2aca4c44c011fdc81"
+    }
+   ]
+  },
+  {
+   "id": "apple-1g2g-1.2.2",
+   "title": "Apple iPod Software 1.2.2",
+   "maker": "apple",
+   "version": "1.2.2",
+   "models": [
+    "1G",
+    "2G"
+   ],
+   "bytes": 4701696,
+   "sha256": "988f1c6895ed92a075c1af4152bdd9959b3bbdc937c3376850efe67749683022",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_1.1.2.2_2002_09_26.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 1918738,
+     "sha256": "e62d3d02222ec3bb53042490c1504edd34bca02c8b6d7fc43d9533956085adcf"
+    }
+   ]
+  },
+  {
+   "id": "apple-1g2g-1.2.1",
+   "title": "Apple iPod Software 1.2.1",
+   "maker": "apple",
+   "version": "1.2.1",
+   "models": [
+    "1G",
+    "2G"
+   ],
+   "bytes": 4701696,
+   "sha256": "720197546ab57b69bdad576babe1bcdfe2839bc61b00c2314643ff814070cdc9",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_1.1.2.1_2002_09_06.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 1918705,
+     "sha256": "a3c1a684b858633fd73b1683717355707bb1b332adf601d3b35e0d14b2c648fd"
+    }
+   ]
+  },
+  {
+   "id": "apple-1g2g-1.2",
+   "title": "Apple iPod Software 1.2",
+   "maker": "apple",
+   "version": "1.2",
+   "models": [
+    "1G",
+    "2G"
+   ],
+   "bytes": 3963392,
+   "sha256": "f60519e304613476313bc37ba10afcecc73112b3e28601dc8d4d94706819ffcf",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_1.1.2_2002_07_24.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 1677802,
+     "sha256": "5f5fafab1ef27082f2f673569019246185e8d3e48c317666dfd0b44ec0ca18ba"
+    }
+   ]
+  },
+  {
+   "id": "apple-1g-1.1",
+   "title": "Apple iPod Software 1.1",
+   "maker": "apple",
+   "version": "1.1",
+   "models": [
+    "1G"
+   ],
+   "bytes": 3687424,
+   "sha256": "f31dd441467803d1839292554b6ab82ae4fe6ee8b8b72359e937c516714e7195",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_1.1.1_2002_03_15.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 1525404,
+     "sha256": "ae7ac136af836263ae19d864832f536f78b1173aead88ab0a19797f5b743ff5f"
+    }
+   ]
+  },
+  {
+   "id": "apple-1g-1.0.4",
+   "title": "Apple iPod Software 1.0.4 (repacked to boot from a card)",
+   "maker": "apple",
+   "version": "1.0.4",
+   "models": [
+    "1G"
+   ],
+   "bytes": 2461184,
+   "sha256": "f83a262f47fc376bf9086df871f454ca0599b56d025e9ea10378dcff6c7ce4d2",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_1.0.4_2001_12_23.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 720679,
+     "sha256": "d898113c4f0af7d3885e6ab14e8054e5d2efc10f050d80a46f892d13a33709cc"
+    }
+   ],
    "tested_on_hardware": true
+  },
+  {
+   "id": "apple-1g-1.0.2",
+   "title": "Apple iPod Software 1.0.2 (repacked to boot from a card)",
+   "maker": "apple",
+   "version": "1.0.2",
+   "models": [
+    "1G"
+   ],
+   "bytes": 2433536,
+   "sha256": "35c7b7d348a1862ea2f79a095e1fa00dafb7e4708f6a0109156b62bf1405f004",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_1.0.2_2001_11_28.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 724226,
+     "sha256": "0219800e4e9d10cb0e18ec83418553a341f581976414c70747c200bdf1afa048"
+    }
+   ],
+   "tested_on_hardware": true
+  },
+  {
+   "id": "apple-1g-1.0",
+   "title": "Apple iPod Software 1.0 (repacked to boot from a card)",
+   "maker": "apple",
+   "version": "1.0",
+   "models": [
+    "1G"
+   ],
+   "bytes": 2422272,
+   "sha256": "3790026652fd82fbfdd38e81e08e287d1de7990c9baa6287504d3e75d9b15c8f",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_1.0.0_2001_11_01.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 720153,
+     "sha256": "bd47f0d8de764e2aa1c64bf0e8d78a685d0b2e43f9abaaededaa7b532028023d"
+    }
+   ],
+   "tested_on_hardware": true
+  },
+  {
+   "id": "apple-3g-2.3",
+   "title": "Apple iPod Software 2.3",
+   "maker": "apple",
+   "version": "2.3",
+   "models": [
+    "3G"
+   ],
+   "bytes": 4563968,
+   "sha256": "73817276159e53cbe3d988a76843c663706a621a19cccc6af4eb957d735f63c3",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_2.2.3.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 2006678,
+     "sha256": "8a9582e2a3f203b339148ac1a7c8cf1bc4d0d7ca8a6364ee5122a1cf515489a1"
+    }
+   ]
+  },
+  {
+   "id": "apple-3g-2.2",
+   "title": "Apple iPod Software 2.2",
+   "maker": "apple",
+   "version": "2.2",
+   "models": [
+    "3G"
+   ],
+   "bytes": 4406784,
+   "sha256": "ec9b3fae30961cf22d29f37d56b8dcd9d6bf0b66fcb08805b92039b51c7b27b4",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_2.2.2_2004_04_23.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 1938226,
+     "sha256": "1671753301681b9c7954cafbb7605b05c151c450592351552778111d604649bd"
+    }
+   ]
+  },
+  {
+   "id": "apple-3g-2.1",
+   "title": "Apple iPod Software 2.1",
+   "maker": "apple",
+   "version": "2.1",
+   "models": [
+    "3G"
+   ],
+   "bytes": 4380160,
+   "sha256": "3182d121d30a1d73f40fe111c7b69344e6d5f77f913b2ffe5726d27c45b01258",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_2.2.1_2003_10_12.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 1921701,
+     "sha256": "a0968ff426b5d60fa90e15613959aba84f82d0bd21c0775eabdc1c90308ef971"
+    }
+   ]
+  },
+  {
+   "id": "apple-3g-2.0.1",
+   "title": "Apple iPod Software 2.0.1",
+   "maker": "apple",
+   "version": "2.0.1",
+   "models": [
+    "3G"
+   ],
+   "bytes": 4209152,
+   "sha256": "2ffb4945f194b2d4d7994a0da34bb2f80076c0678fb7a6d1b95d24d075f7f455",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_2.2.0.1_2003_06_15.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 1847081,
+     "sha256": "63c7cd10118070af6c0cda0212e5a032db5e0337e80c71d1c0a279c8b70867e7"
+    }
+   ]
+  },
+  {
+   "id": "apple-3g-2.0",
+   "title": "Apple iPod Software 2.0",
+   "maker": "apple",
+   "version": "2.0",
+   "models": [
+    "3G"
+   ],
+   "bytes": 4178432,
+   "sha256": "a5d90bc2ddb8757ec96cc548bf16c7d90524376dce366422d99ccdbb3e69f989",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_2.2.0_2003_04_19.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 1829611,
+     "sha256": "aadbd8abbe75698c9385f37703b6103ef7a61667174863c1ea92d09c54d5fd62"
+    }
+   ]
+  },
+  {
+   "id": "apple-4g-3.1.1",
+   "title": "Apple iPod Software 3.1.1",
+   "maker": "apple",
+   "version": "3.1.1",
+   "models": [
+    "4G"
+   ],
+   "bytes": 4607488,
+   "sha256": "5b5ce4e560ce03859a2ec30ca7f36ada01dd68e15ce0ca62b3bf847158378d58",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_4.3.1.1.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 2941060,
+     "sha256": "20c514d3fc1f08bb0cb76101af359b85c92305e0876618dd109ab8036ee12cd3"
+    }
+   ]
+  },
+  {
+   "id": "apple-4g-3.1",
+   "title": "Apple iPod Software 3.1",
+   "maker": "apple",
+   "version": "3.1",
+   "models": [
+    "4G"
+   ],
+   "bytes": 4602368,
+   "sha256": "eb6f443b0c4fc04663648b4732572630b7a903026a02a4589177abf3cecdec8e",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_4.3.1.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 2939293,
+     "sha256": "be06ee7f7787cf9a6bf21fd74c3f6c51b3570a206d797e5bff8653b5845557a8"
+    }
+   ]
+  },
+  {
+   "id": "apple-4g-3.0.2",
+   "title": "Apple iPod Software 3.0.2",
+   "maker": "apple",
+   "version": "3.0.2",
+   "models": [
+    "4G"
+   ],
+   "bytes": 4545536,
+   "sha256": "8c2a42d23dc7fc7dcb9be342708e39be49dc45363ae1cd6ee28beaca59d21ed8",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_4.3.0.2.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 2911934,
+     "sha256": "6d209791a014e8d325882fb0bdd2b4981938dad8abd84e35ae591c3fc1b14375"
+    }
+   ]
+  },
+  {
+   "id": "apple-4g-3.0.1",
+   "title": "Apple iPod Software 3.0.1",
+   "maker": "apple",
+   "version": "3.0.1",
+   "models": [
+    "4G"
+   ],
+   "bytes": 4424704,
+   "sha256": "b0c0380d165f1f47218c74bc4c2af15731306ee8e1e96eeb9397ffab40521e9b",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_4.3.0.1.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 2857124,
+     "sha256": "1cb97fb53edf16bae019d94da96e013c077b2e0c7ff5529239c5ddf8ab1581b4"
+    }
+   ]
+  },
+  {
+   "id": "apple-4g-3.0",
+   "title": "Apple iPod Software 3.0",
+   "maker": "apple",
+   "version": "3.0",
+   "models": [
+    "4G"
+   ],
+   "bytes": 4423680,
+   "sha256": "4fa8efb6b4b97c2184f0717ac970cb814a3851d3277fde2e9d474d38535d9e88",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_4.3.0.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 2856700,
+     "sha256": "5ccad0c05ba71a8eae01b4c286f641a5ba3fc5b6f1919a9d11a497ad3767d315"
+    }
+   ]
+  },
+  {
+   "id": "apple-photo-1.2.1",
+   "title": "Apple iPod photo Software 1.2.1",
+   "maker": "apple",
+   "version": "1.2.1",
+   "models": [
+    "photo"
+   ],
+   "bytes": 6516224,
+   "sha256": "98d3933b125e0fa911d79c21e28dad930c426fdccdd7f4006b398eb083395606",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_5.1.2.1.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 3816493,
+     "sha256": "9482ac59803daea37fe8481ab3dfc938c5e127ac77ba8a81eac85663a020c961"
+    }
+   ]
+  },
+  {
+   "id": "apple-photo-1.2",
+   "title": "Apple iPod photo Software 1.2",
+   "maker": "apple",
+   "version": "1.2",
+   "models": [
+    "photo"
+   ],
+   "bytes": 6512128,
+   "sha256": "1f4015e87b3c9f9f813c036170e75bd732951576a98c98810bd54d9f1036e476",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_5.1.2.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 3813768,
+     "sha256": "dfa1cc54563edccc07fe7f6edaf2059e0143f26578327fa1ec167032d7535319"
+    }
+   ]
+  },
+  {
+   "id": "apple-photo-1.1",
+   "title": "Apple iPod photo Software 1.1",
+   "maker": "apple",
+   "version": "1.1",
+   "models": [
+    "photo"
+   ],
+   "bytes": 6401536,
+   "sha256": "78b8fc49101f828459eb7bffc66241d195f98f442991b911e8909c0525ab5309",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_5.1.1.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 3783941,
+     "sha256": "35af52bb0c185d75c1c08bd385f17f3da8ef7b98ed3cbea3b5261f09cb160733"
+    }
+   ]
+  },
+  {
+   "id": "apple-photo-1.0",
+   "title": "Apple iPod photo Software 1.0",
+   "maker": "apple",
+   "version": "1.0",
+   "models": [
+    "photo"
+   ],
+   "bytes": 6153728,
+   "sha256": "2b806d7bdfc239ea2428e1afc580f71cf59fba9eb3eb5815379101d91eb7f1ba",
+   "urls": [
+    {
+     "url": "https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_5.1.0.bin.gz",
+     "role": "fallback",
+     "container": "bin.gz",
+     "bytes": 3657793,
+     "sha256": "4c7d75f9880b037ddc688d739cb465d68f249a1cf518bbeab333bc7fd91f3a12"
+    }
+   ]
   }
  ]
 }
