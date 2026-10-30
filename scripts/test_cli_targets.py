@@ -26,10 +26,10 @@ import json
 import os
 import re
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -136,10 +136,6 @@ def sudo(*cmd):
     return r.stdout.strip()
 
 
-def attach(img):
-    return sudo("losetup", "--find", "--show", "--partscan", img)
-
-
 def loop_mount_cells(binary, fw, music, work):
     print("a mount (a mounted card image)")
     img = os.path.join(work, "mounted.img")
@@ -147,15 +143,15 @@ def loop_mount_cells(binary, fw, music, work):
         f.truncate(200 << 20)
     rc, _, err = run(binary + ["firmware", "write", img, "--firmware", fw, "--yes", "--no-arm"])
     check(rc == 0, "the image to mount is flashed (rc %d) %s" % (rc, err.strip()[-200:] if rc else ""))
-    node = attach(img)
+    # the data partition's own loop device: partition nodes don't appear on CI's runner
+    with open(img, "rb") as f:
+        f.seek(0x1BE + 16 + 8)
+        start = struct.unpack("<I", f.read(4))[0]
+    node = sudo("losetup", "--find", "--show", "--offset", str(start * 512), img)
     mnt = os.path.join(work, "real-mnt")
     os.makedirs(mnt)
     mounted = False
     try:
-        for _ in range(50):
-            if os.path.exists(node + "p2"):
-                break
-            time.sleep(0.1)
         sudo("mount", "-o", "uid=%d,gid=%d" % (os.getuid(), os.getgid()), node + "p2", mnt)
         mounted = True
         music_steps(binary, "--mount", mnt, "mount (mounted image)", None, music, work)
@@ -170,7 +166,7 @@ def card_cells(binary, fw, music, work, decoy):
     img = os.path.join(work, "card.img")
     with open(img, "wb") as f:
         f.truncate(200 << 20)
-    node = attach(img)
+    node = sudo("losetup", "--find", "--show", img)
     if not stat.S_ISBLK(os.stat(node).st_mode) or not node.startswith("/dev/loop"):
         raise RuntimeError("losetup gave %r" % node)
     root = ["sudo", "-n", "env", "PATH=" + os.environ["PATH"]] + binary
