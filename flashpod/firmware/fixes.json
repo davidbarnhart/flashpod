@@ -310,98 +310,6 @@
    "title": "Use disks larger than 128 GiB"
   },
   {
-   "append": {
-    "at": "0x28379060",
-    "bytes": 2636,
-    "sha256": "ba0394cda93b8470bb8d668e8ab4643392becafde1824d846c633fe2ea8ee77a"
-   },
-   "edits": [
-    {
-     "at": "0x2828d8b0",
-     "image": "osos",
-     "patched": "7cb00e00b7000000"
-    },
-    {
-     "at": "0x28290690",
-     "image": "osos",
-     "patched": "3c830e00af000000"
-    },
-    {
-     "at": "0x282930a4",
-     "image": "osos",
-     "patched": "d8590e00b9000000"
-    },
-    {
-     "at": "0x28295b0c",
-     "image": "osos",
-     "patched": "2c300e00af000000"
-    },
-    {
-     "at": "0x28298f40",
-     "image": "osos",
-     "patched": "a8fc0d00a5000000"
-    },
-    {
-     "at": "0x2829ba54",
-     "image": "osos",
-     "patched": "3cd20d00af000000"
-    },
-    {
-     "at": "0x2829e380",
-     "image": "osos",
-     "patched": "9ca90d00ea000000"
-    },
-    {
-     "at": "0x282a151c",
-     "image": "osos",
-     "patched": "ec780d00c2000000"
-    },
-    {
-     "at": "0x282a458c",
-     "image": "osos",
-     "patched": "64490d00ab000000"
-    },
-    {
-     "at": "0x282a6ff0",
-     "image": "osos",
-     "patched": "ac1f0d00ac000000"
-    },
-    {
-     "at": "0x282a98b4",
-     "image": "osos",
-     "patched": "94f70c00aa000000"
-    },
-    {
-     "at": "0x282ac3c0",
-     "image": "osos",
-     "patched": "34cd0c009f000000"
-    },
-    {
-     "at": "0x282aec7c",
-     "image": "osos",
-     "patched": "f4a40c0093000000"
-    },
-    {
-     "at": "0x282b1714",
-     "image": "osos",
-     "patched": "f07a0c0090000000"
-    },
-    {
-     "at": "0x282b8f04",
-     "image": "osos",
-     "patched": "94f60b00a6000000"
-    }
-   ],
-   "made_for": {
-    "bytes": 3234472,
-    "image": "osos",
-    "sha256": "98251add80f99732142532814c4ad5b95ee08ab844dd988458a6fa254e1c7c97"
-   },
-   "name": "legal-credit",
-   "requires": [],
-   "title": "Add a credit line to Settings > Legal"
-  },
-  {
    "append": null,
    "edits": [
     {
@@ -937,11 +845,11 @@
   }
  ],
  "source": {
-  "fix_files": 26,
-  "fix_files_sha256": "eb2ac9431e42113f7c71372e41a76662d1f2c0b1ec9fd3fa0668f154d34ddb8c",
+  "fix_files": 25,
+  "fix_files_sha256": "cc1f179da246e9fa5dcd2e1de531ea5418aebfe8d08f39b0d741ad6afc945328",
   "folder": "firmware/1/1.6",
-  "openpod_commit": "37b622a1a9e1d04f64f4939f47c7ed3708316fc8",
+  "openpod_commit": "a8aeb42e76dcfd917bdbcddb640283c5b282c88b",
   "openpod_dirty": false,
-  "readme_firmware_sha256": "957248f9a3fe4b1ccbca508ddcf135115aa7d329bf8878fd3e9f2ce644199c81"
+  "readme_firmware_sha256": "ec2d2db17f2550929a37449b6992d9d13d729a11928841ed163f2855824b2573"
  }
 }
