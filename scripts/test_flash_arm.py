@@ -229,8 +229,8 @@ def main():
               "it arms; unarmed as flashpod normally writes it")
         cache = os.path.join(os.path.expanduser("~"), ".cache", "flashpod",
                              "firmware")
-        for name, ok in (("iPod_1.1.5_2005_02_18.bin.gz", True),
-                         ("iPod_1.1.4_2004_04_23.bin.gz", False)):
+        for name, ok in (("iPod_1.1.5_2005_02_18.bin", True),
+                         ("iPod_1.1.4_2004_04_23.bin", False)):
             path = os.path.join(cache, name)
             if not os.path.exists(path):
                 print("  SKIP %s: not cached" % name)

@@ -78,7 +78,7 @@ pyinstaller --clean --noconfirm flashpod.spec
 
 The result is `dist/flashpod` (`dist/flashpod.exe` on Windows). By default this
 is a **light** build: the firmware images are *not* inside it; at flash time
-flashpod downloads the chosen one from the firmware release (or you pass
+flashpod downloads the chosen one from archive.org (or you pass
 `--firmware`).
 
 ### Self-contained ("heavy") builds
@@ -87,10 +87,17 @@ To bake the firmware into the binary so it never needs the network, place the
 image files **the manifest actually references** next to it before building —
 the spec bundles the whole `flashpod/firmware/` directory, and at runtime
 flashpod prefers a bundled copy (verified against its SHA-256) over
-downloading. The manifest references the **`.bin.gz`** assets:
+downloading. The manifest references raw **`.bin`** files on the archive.org
+item `ipod-stock-firmware`, plus flashpod's 1.6 by its own `url`:
 
 ```sh
-gh release download firmware --pattern '*.bin.gz' --dir flashpod/firmware
+python3 - <<'EOF'
+import json, os, urllib.request as u
+d = "flashpod/firmware"
+m = json.load(open(d + "/firmware.json"))
+for e in m["firmwares"]:
+    u.urlretrieve(e.get("url") or m["base_url"] + "/" + e["file"], os.path.join(d, e["file"]))
+EOF
 pyinstaller --clean --noconfirm flashpod.spec           # now a heavy build
 ```
 
@@ -176,15 +183,15 @@ no `--firmware`. See "Self-contained builds" above.
    base = m["base_url"].rstrip("/") + "/"
    for e in m["firmwares"]:
        print("fetching " + e["file"])
-       u.urlretrieve(base + e["file"], os.path.join(os.path.dirname(src), e["file"]))
+       u.urlretrieve(e.get("url") or base + e["file"], os.path.join(os.path.dirname(src), e["file"]))
    EOF
    ```
    …or copy a prepared tree over a network share (SSH works fine into 10.8 —
    `scp` the source archive and images from a modern machine; see the
    legacy-algorithm note in your `~/.ssh/config` if it refuses to connect).
    Either way, every image `firmware.json` references must be in
-   `flashpod/firmware/` for a heavy build (~54 MiB across 25 images since the
-   catalog was completed — which is why the list above is driven from the
+   `flashpod/firmware/` for a heavy build (~110 MiB across 26 images, since the
+   stock images are raw files — which is why the list above is driven from the
    manifest rather than typed out; a hand-kept list went stale the moment the
    catalog grew, and a heavy build missing images fails offline exactly where
    "no-internet" matters — see the stale-bundle trap above).

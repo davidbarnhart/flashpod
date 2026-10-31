@@ -14,6 +14,7 @@ import http.server
 import io
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -43,11 +44,22 @@ class Server:
 
     def __init__(self):
         self.files, self.moved, self.log = {}, {}, []
+        self.flaky = {}   # path -> statuses to answer first; 0 drops the connection
         owner = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 owner.log.append(self.path)
+                if owner.flaky.get(self.path):
+                    status = owner.flaky[self.path].pop(0)
+                    if status == 0:
+                        self.close_connection = True
+                        self.connection.shutdown(socket.SHUT_RDWR)
+                        return
+                    self.send_response(status)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 if self.path in owner.moved:
                     self.send_response(302)
                     self.send_header("Location", owner.moved[self.path])
@@ -310,6 +322,15 @@ def cross_check():
     with open(os.path.join(SNAPSHOT, "catalog", "firmware.json")) as f:
         catalog = json.load(f)["firmwares"]
     urls = {u["sha256"]: e for e in catalog for u in e.get("urls", [])}
+    for e in catalog:
+        hosts = [u["url"].split("/")[2] for u in e.get("urls", [])]
+        if e.get("maker") != "flashpod":
+            check(hosts and hosts[-1] == "archive.org" and set(hosts) <= {"archive.org", "secure-appldnld.apple.com"},
+                  "%s downloads from archive.org: %s" % (e["id"], hosts))
+    check(manifest["base_url"] == "https://archive.org/download/ipod-stock-firmware", "the manifest's base is the item")
+    for m in manifest["firmwares"]:
+        if m.get("maker") != "flashpod":
+            check("url" not in m and m["file"].endswith(".bin"), "%s is a raw file on the item" % m["file"])
     images = [m for m in manifest["firmwares"] if m.get("maker") != "flashpod"]
     check(len(images) >= 25, "%d stock images in the manifest" % len(images))
     for m in images:
@@ -361,6 +382,43 @@ def redirects(binary, work):
     h = Home(binary, work, srv.url)
     rc, out, err = h.write("after")
     check(rc == 0 and "doesn't match" in err, "wrong bytes behind a 302 move on to the next URL (rc %d)" % rc)
+
+
+def retries(binary, work):
+    print("retries")
+    srv = Server()
+    fw, gone, other, last = (synth.firmware_bytes(seed=s) for s in (25, 26, 27, 28))
+    srv.flaky["/dl/busy.bin"] = [503, 0]
+    srv.flaky["/dl/down.bin"] = [503, 503, 503]
+    srv.flaky["/dl/missing.bin"] = [404]
+    publish(srv, [entry("busy", fw, [url_of(srv, "busy.bin", "bin", fw)]),
+                  entry("down", gone, [url_of(srv, "down.bin", "bin", gone), url_of(srv, "next.bin", "bin", gone)]),
+                  entry("missing", other, [url_of(srv, "missing.bin", "bin", other), url_of(srv, "next2.bin", "bin", other)]),
+                  entry("wrong", last, [url_of(srv, "wrong.bin", "bin", last[:-1] + bytes([last[-1] ^ 1]), lie_sha=sha(last)),
+                                        url_of(srv, "next3.bin", "bin", last)])])
+
+    h = Home(binary, work, srv.url)
+    rc, out, err = h.write("busy")
+    check(rc == 0 and srv.downloads().count("/dl/busy.bin") == 3,
+          "a 503 and a dropped connection: the same URL again, works on the third try (rc %d, %s)" % (rc, srv.downloads()))
+
+    del srv.log[:]
+    h = Home(binary, work, srv.url)
+    rc, out, err = h.write("down")
+    check(rc == 0 and srv.downloads() == ["/dl/down.bin"] * 3 + ["/dl/next.bin"],
+          "a URL still failing after 3 tries gives way to the next URL: %s" % srv.downloads())
+
+    del srv.log[:]
+    h = Home(binary, work, srv.url)
+    rc, out, err = h.write("missing")
+    check(rc == 0 and srv.downloads() == ["/dl/missing.bin", "/dl/next2.bin"],
+          "a 404 is not tried again: %s" % srv.downloads())
+
+    del srv.log[:]
+    h = Home(binary, work, srv.url)
+    rc, out, err = h.write("wrong")
+    check(rc == 0 and srv.downloads() == ["/dl/wrong.bin", "/dl/next3.bin"],
+          "wrong bytes are not tried again: %s" % srv.downloads())
 
 
 def builds(binary, work):
@@ -452,6 +510,7 @@ def main():
     offline_list(binary, work)
     downloads(binary, work)
     redirects(binary, work)
+    retries(binary, work)
     builds(binary, work)
     names_and_files(binary, work)
     print("%s: %d failed" % ("FAIL" if FAILS else "PASS", len(FAILS)))

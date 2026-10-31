@@ -13,8 +13,8 @@
   },
   {
    "path": "catalog/firmware.json",
-   "bytes": 14828,
-   "sha256": "1bc57f218b42f0c4a3b3103de9208c1a5f01aad9736c48ecf16f90346cabd17f"
+   "bytes": 14181,
+   "sha256": "d3f01cf5d854632fada5692ded5e42277aa403a6a02c6cfeddfcdeb8f4325aa5"
   },
   {
    "path": "patches/apple-1g2g-1.5/article-memory/README.md",

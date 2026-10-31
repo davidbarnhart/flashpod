@@ -15,7 +15,7 @@ from .layout import FW_BLOCKS, SECTOR
 # ----------------------------------------------------------------------------
 def load_firmware(path):
     """Return install-ready firmware bytes from a raw Firmware-* image, a
-    gzipped one (.bin.gz -- what the manifest ships), or an .ipsw zip:
+    gzipped one (.bin.gz -- how flashpod's own 1.6 ships), or an .ipsw zip:
     unwrap, apply the install-time directory fixups Apple's updater performs,
     and validate. Dispatch is by magic bytes, not extension, so a
     hand-supplied --firmware works whatever it is called."""

@@ -187,12 +187,27 @@ fn cached_path(e: &FirmwareEntry) -> Option<String> {
     None
 }
 
+/// A 5xx or a dropped connection gets the same URL again after each of these
+/// waits, before the catalog's next URL: archive.org's mirrors have busy spells.
+const RETRY_WAIT_SECS: [u64; 2] = [1, 3];
+
 fn download(u: &FirmwareUrl, e: &FirmwareEntry) -> Result<Vec<u8>, String> {
     let dir = catalog::cache_dir();
     std::fs::create_dir_all(&dir).map_err(|err| flashpod_core::tags::os_error(&err, &dir))?;
     let tmp = format!("{}.download.part", cache_file(e).display());
     eprintln!("{}: downloading {}\n  from {}", WHO, e.id, u.url);
-    let got = catalog::download(&u.url, &tmp, Some(u.bytes), Some(u.bytes)).and_then(|()| std::fs::read(&tmp).map_err(|err| err.to_string()));
+    let mut attempt = 0;
+    let got = loop {
+        match catalog::download_once(&u.url, &tmp, Some(u.bytes), Some(u.bytes)) {
+            Ok(()) => break std::fs::read(&tmp).map_err(|err| err.to_string()),
+            Err(f) if f.transient && attempt < RETRY_WAIT_SECS.len() => {
+                eprintln!("{}: {}; trying {} again", WHO, f.why, u.url);
+                std::thread::sleep(std::time::Duration::from_secs(RETRY_WAIT_SECS[attempt]));
+                attempt += 1;
+            }
+            Err(f) => break Err(f.why),
+        }
+    };
     let _ = std::fs::remove_file(&tmp);
     got
 }

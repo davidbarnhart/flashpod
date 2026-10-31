@@ -267,12 +267,29 @@ pub(crate) fn agent() -> Result<ureq::Agent, String> {
 /// worded like the urllib exception Python prints. `limit` stops a download
 /// that runs past the size the catalog gives.
 pub(crate) fn download(url: &str, dst: &str, total: Option<u64>, limit: Option<u64>) -> Result<(), String> {
-    let resp = agent()?.get(url).set("User-Agent", "flashpod").call().map_err(|e| match e {
-        ureq::Error::Status(code, r) => format!("HTTP Error {}: {}", code, r.status_text()),
-        ureq::Error::Transport(t) => format!("<urlopen error {}>", t),
+    download_once(url, dst, total, limit).map_err(|f| f.why)
+}
+
+/// Why a download failed, and whether the same URL may work if asked again.
+pub(crate) struct DownloadFailure {
+    pub why: String,
+    pub transient: bool,
+}
+
+/// `download`, saying whether the failure was a 5xx or the connection: those
+/// can pass, where a 4xx, a file too long or a full disk won't.
+pub(crate) fn download_once(url: &str, dst: &str, total: Option<u64>, limit: Option<u64>) -> Result<(), DownloadFailure> {
+    let lasting = |why: String| DownloadFailure { why, transient: false };
+    let passing = |why: String| DownloadFailure { why, transient: true };
+    let resp = agent().map_err(lasting)?.get(url).set("User-Agent", "flashpod").call().map_err(|e| match e {
+        ureq::Error::Status(code, r) => DownloadFailure {
+            why: format!("HTTP Error {}: {}", code, r.status_text()),
+            transient: code >= 500,
+        },
+        ureq::Error::Transport(t) => passing(format!("<urlopen error {}>", t)),
     })?;
     let total = total.filter(|&t| t != 0).or_else(|| resp.header("Content-Length").and_then(|v| v.parse().ok())).unwrap_or(0);
-    let mut out = std::fs::File::create(dst).map_err(|e| flashpod_core::tags::os_error(&e, dst))?;
+    let mut out = std::fs::File::create(dst).map_err(|e| lasting(flashpod_core::tags::os_error(&e, dst)))?;
     let mut body = resp.into_reader();
     let tty = std::io::stderr().is_terminal();
     let mut buf = vec![0u8; 1 << 16];
@@ -281,7 +298,7 @@ pub(crate) fn download(url: &str, dst: &str, total: Option<u64>, limit: Option<u
         // resp.read(1 << 16): a full chunk unless the body ends first
         let mut n = 0;
         while n < buf.len() {
-            let k = body.read(&mut buf[n..]).map_err(|e| e.to_string())?;
+            let k = body.read(&mut buf[n..]).map_err(|e| passing(e.to_string()))?;
             if k == 0 {
                 break;
             }
@@ -290,10 +307,10 @@ pub(crate) fn download(url: &str, dst: &str, total: Option<u64>, limit: Option<u
         if n == 0 {
             break;
         }
-        out.write_all(&buf[..n]).map_err(|e| flashpod_core::tags::os_error(&e, dst))?;
+        out.write_all(&buf[..n]).map_err(|e| lasting(flashpod_core::tags::os_error(&e, dst)))?;
         done += n as u64;
         if limit.is_some_and(|l| done > l) {
-            return Err(format!("longer than the {} bytes expected", limit.unwrap_or(0)));
+            return Err(lasting(format!("longer than the {} bytes expected", limit.unwrap_or(0))));
         }
         if tty {
             let now = crate::window::monotonic();
