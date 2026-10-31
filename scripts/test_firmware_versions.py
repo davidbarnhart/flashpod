@@ -35,9 +35,9 @@ sys.path.insert(0, ROOT)
 from flashpod import card  # noqa: E402
 
 APPLE = {
-    "bd47f0d8de764e2aa1c64bf0e8d78a685d0b2e43f9abaaededaa7b532028023d": "1.0",
-    "0219800e4e9d10cb0e18ec83418553a341f581976414c70747c200bdf1afa048": "1.0.2",
-    "d898113c4f0af7d3885e6ab14e8054e5d2efc10f050d80a46f892d13a33709cc": "1.0.4",
+    "3790026652fd82fbfdd38e81e08e287d1de7990c9baa6287504d3e75d9b15c8f": "1.0",
+    "35c7b7d348a1862ea2f79a095e1fa00dafb7e4708f6a0109156b62bf1405f004": "1.0.2",
+    "f83a262f47fc376bf9086df871f454ca0599b56d025e9ea10378dcff6c7ce4d2": "1.0.4",
 }
 
 #: Every 1G release in the catalog, oldest first. 1.0.4 (2001) must sort
