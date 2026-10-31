@@ -42,12 +42,18 @@ class Server:
     """Path -> bytes, with a log of every request."""
 
     def __init__(self):
-        self.files, self.log = {}, []
+        self.files, self.moved, self.log = {}, {}, []
         owner = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 owner.log.append(self.path)
+                if self.path in owner.moved:
+                    self.send_response(302)
+                    self.send_header("Location", owner.moved[self.path])
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 data = owner.files.get(self.path)
                 self.send_response(200 if data is not None else 404)
                 self.send_header("Content-Length", str(len(data or b"")))
@@ -312,6 +318,51 @@ def cross_check():
               "%s is in the catalog, same sha256, version and models" % m["file"])
 
 
+def redirects(binary, work):
+    """archive.org answers /download/<item>/<file> with a 302 to a mirror host, so
+    the mirror here is another server, named by an absolute Location."""
+    print("redirects")
+    srv, mirror = Server(), Server()
+    fw, gone = synth.firmware_bytes(seed=21), synth.firmware_bytes(seed=22)
+    bad, fine = synth.firmware_bytes(seed=23), synth.firmware_bytes(seed=24)
+    mirror.files["/m/fw.bin"] = fw
+    srv.moved["/dl/fw.bin"] = mirror.url + "/m/fw.bin"
+    srv.moved["/dl/dead.bin"] = mirror.url + "/m/nothing"
+    srv.files["/dl/ok.bin"] = gone
+    mirror.files["/m/bad.bin"] = bad[:-1] + bytes([bad[-1] ^ 1])
+    srv.moved["/dl/bad.bin"] = mirror.url + "/m/bad.bin"
+    srv.files["/dl/fine.bin"] = fine
+    bin_url = lambda name, data: {"url": srv.url + "/dl/" + name, "role": "fallback", "container": "bin",
+                                  "bytes": len(data), "sha256": sha(data)}
+    publish(srv, [entry("moved", fw, [bin_url("fw.bin", fw)]),
+                  entry("dead", gone, [bin_url("dead.bin", gone), bin_url("ok.bin", gone)]),
+                  entry("wrong", bad, [bin_url("bad.bin", bad)]),
+                  entry("after", fine, [bin_url("bad.bin", bad), bin_url("fine.bin", fine)])])
+
+    h = Home(binary, work, srv.url)
+    rc, out, err = h.write("moved")
+    check(rc == 0, "a 302 to another host is followed (%d) %s" % (rc, err[-200:] if rc else ""))
+    check(mirror.log == ["/m/fw.bin"], "the mirror was asked for the file: %s" % mirror.log)
+    if rc == 0:
+        check(h.extract() == card_after_file(binary, work, srv.url, fw, "moved.bin"),
+              "the mirror's bytes reached the card")
+        check(h.cached() == ["moved-%s.bin" % sha(fw)[:12]], "the redirected download is cached")
+
+    h = Home(binary, work, srv.url)
+    rc, out, err = h.write("dead")
+    check(rc == 0 and "/dl/ok.bin" in srv.downloads(), "a 302 to a 404 moves on to the next URL (rc %d)" % rc)
+
+    h = Home(binary, work, srv.url)
+    before = h.image_sha()
+    rc, out, err = h.write("wrong")
+    check(rc == 1 and h.cached() == [] and h.image_sha() == before,
+          "wrong bytes behind a 302 are refused, nothing cached, card unchanged (rc %d)" % rc)
+
+    h = Home(binary, work, srv.url)
+    rc, out, err = h.write("after")
+    check(rc == 0 and "doesn't match" in err, "wrong bytes behind a 302 move on to the next URL (rc %d)" % rc)
+
+
 def builds(binary, work):
     print("your builds")
     srv = Server()
@@ -400,6 +451,7 @@ def main():
     cross_check()
     offline_list(binary, work)
     downloads(binary, work)
+    redirects(binary, work)
     builds(binary, work)
     names_and_files(binary, work)
     print("%s: %d failed" % ("FAIL" if FAILS else "PASS", len(FAILS)))
