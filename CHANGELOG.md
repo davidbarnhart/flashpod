@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased (1.0)
+
+- `flashpod firmware list` shows the firmware flashpod can write, from the
+  ipod-patches catalog, plus your own builds. `firmware write` takes any of
+  those names: `flashpod firmware write card.img apple-1g2g-1.5` downloads
+  it, checks it by sha256 and caches it.
+
 ## 0.5.2 (2026-10-20)
 
 - `.aac` files can be added. Adding one failed with "required argument is

@@ -39,7 +39,7 @@ CASES = [
     "flash -h", "flash --arm --no-arm x", "flash --no-arm --arm",
     "flash --max-data-gb abc x", "flash --max-data-gb", "flash --firmware",
     "flash --firmware= --yes=y x", "flash --yes --dry-run --raw x",
-    "flash --fi", "flash --no", "flash a b", "flash -yes",
+    "flash --fi", "flash --no", "flash a b c", "flash -yes",
     "--raw x --mount y bogus", "-5", "ls -5",
     "ls 'with space'", "--mount=x --raw=y",
     # a positional matched empty before an option waits for later strings
@@ -96,7 +96,7 @@ def run_pty(cmd, env, cols=80):
 CASES_1_0 = [
     "music", "music -h", "music bogus", "music ls bogus", "music ls -h", "music list -h",
     "music rm", "music add --foo", "music export -h", "music playlist -h",
-    "firmware", "firmware -h", "firmware bogus", "firmware write -h", "firmware write a b",
+    "firmware", "firmware -h", "firmware bogus", "firmware write -h", "firmware write a b c",
     "firmware write --arm --no-arm x", "firmware extract -h", "firmware list -h", "firmware list x",
     "firmware patch -h", "card", "card -h", "card burn", "card burn -h", "card new -h",
     "inspect -h", "emulate -h", "flash -h", "ls", "--mount x rm 5", "burn a",

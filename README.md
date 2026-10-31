@@ -16,7 +16,7 @@ flashpod 1.0 groups its commands by what they act on:
 | Group | Commands |
 | --- | --- |
 | `flashpod inspect TARGET` | everything about a card, iPod or image |
-| `flashpod firmware ...` | `extract`, `write` (also `flashpod flash`), `patches`; not built yet: `list`, `patch`, `arm`, `recover` |
+| `flashpod firmware ...` | `list`, `extract`, `write` (also `flashpod flash`), `patches`; not built yet: `patch`, `arm`, `recover` |
 | `flashpod card ...` | `new`, `burn` |
 | `flashpod music ...` | `ls`, `add`, `rm`, `init`, `rebuild`, `export`, `playlist` |
 | `flashpod emulate` | boot a firmware or card in emupod (not built yet) |
@@ -171,20 +171,20 @@ Firmware for 1st generation (newest first):
   0  1.6 (flashpod)  2026-10-16  2.0M  NOT AN APPLE RELEASE -- flashpod's 1.6:
                                        Apple's 1.5 plus 23 fixes. Plays FLAC;
                                        ...
-  1  1.5 *           2005-02-18  2.0M  Last stock Apple-released firmware for
+  1  1.5 *           2005-02-18  4.8M  Last stock Apple-released firmware for
                                        1G/2G iPods
-  2  1.4             2004-04-23  1.9M  Adds 20+ EQ presets, shuffle by album,
+  2  1.4             2004-04-23  4.6M  Adds 20+ EQ presets, shuffle by album,
                                        ...
   ...
 
   * recommended default
 
 Select firmware [0]: 0
-flashpod firmware write: downloading iPod_1.1.5_2005_02_18.bin.gz
-  from https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_1.1.5_2005_02_18.bin.gz
+flashpod firmware write: downloading iPod_1.1.5_2005_02_18.bin
+  from https://archive.org/download/ipod-stock-firmware/iPod_1.1.5_2005_02_18.bin
   91% (1.8/2.0 MiB)
-flashpod firmware write: verified and cached iPod_1.1.5_2005_02_18.bin.gz
-firmware OK: iPod_1.1.5_2005_02_18.bin.gz (5068800 bytes, structure validated)
+flashpod firmware write: verified and cached iPod_1.1.5_2005_02_18.bin
+firmware OK: iPod_1.1.5_2005_02_18.bin (5068800 bytes, structure validated)
 Attached removable storage:
 
   #  Device         Size  Reader
@@ -481,7 +481,22 @@ $ flashpod firmware write                       # ← the usual way: pick a disk
 $ flashpod firmware write /dev/sdb              # name the device yourself
 $ flashpod firmware write /dev/sdb --dry-run    # print the plan, write nothing (no root)
 $ flashpod firmware write --self-test           # validate layout logic, no hardware
+$ flashpod firmware write /dev/sdb apple-1g2g-1.5   # a firmware by name (see below)
 ```
+
+**`flashpod firmware list`** shows the firmware you can name: the preserved
+Apple releases, flashpod's own releases and your builds, with what each is for,
+its base, its patch count, whether a hardware test is recorded, and its sha256.
+Its catalog comes from [ipod-patches](https://github.com/davidbarnhart/ipod-patches);
+`--offline` uses the copy on this computer and `--json` prints it for a program.
+
+`firmware write` takes one of those names, or a file, as FIRMWARE or with
+`--firmware`. A name is downloaded the first time, trying each of its URLs in
+order, and checked by sha256 twice: the download, then the firmware inside it.
+The copy in your cache is checked again on each use, and needs no network. A
+path (one with a `/`, or ending in `.bin`, `.gz`, `.ipsw` or `.zip`) is always
+a file and never touches the network. If a bare name is both a file here and a
+firmware in the list, flashpod refuses to guess: say `./name` for the file.
 
 **4th generation and later are read-only for now.** flashpod has never
 had a card it wrote boot on a 4G or an iPod photo, so `firmware write`
@@ -493,12 +508,13 @@ flashing for** (or takes `--model 1G|2G|3G`), then lists only the
 firmware that fits it, from the bundled catalog
 (`flashpod/firmware/firmware.json`), with version, build date, and description
 (the default entry is preselected; non-interactive runs use it outright). The
-chosen image is then **downloaded from GitHub**, cached under
+chosen image is then **downloaded from archive.org**, cached under
 `~/.cache/flashpod/`, and **verified against its SHA-256** before use; later
 flashes reuse the cached copy (no network). The images aren't bundled with
 flashpod — they're Apple's copyright (flashpod 1.6 is built from Apple's
-1.5), hosted as
-[release assets](https://github.com/davidbarnhart/flashpod/releases/tag/firmware).
+1.5). The stock images are on
+[archive.org](https://archive.org/details/ipod-stock-firmware); flashpod's 1.6
+is a [release file](https://github.com/davidbarnhart/flashpod/releases/tag/firmware).
 
 The model question isn't cosmetic: firmware is not interchangeable across
 models. 2nd-generation (touch wheel) support first appeared in firmware 1.1.2,
@@ -574,7 +590,7 @@ firmware flashpod doesn't host (or to work fully offline), pass it with
 `--firmware <file>` — that path never touches the network, and accepts a raw
 `Firmware-*` image, a `.bin.gz`, or an Apple `.ipsw` (the format is detected
 from the file's magic bytes, not its name). To add an image to the catalog,
-upload it to the firmware release and add a manifest entry (`file`,
+upload it to the archive.org item and add a manifest entry (`file`,
 `url`/`base_url`, `sha256`, `size`, `generation`, `version`, `description`,
 `maker` for anything not Apple's (the picker and `inspect` show it), and
 `build_date` if known — it can't be recovered from the file later, since git

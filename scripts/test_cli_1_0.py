@@ -330,7 +330,7 @@ def contribute_checks(binary, work):
         f.truncate(1 << 20)
     rc, out, err = run(binary, "inspect", blank)
     check(rc == 0 and "github" not in out, "no firmware: no link")
-    stock = os.path.expanduser("~/.cache/flashpod/firmware/iPod_1.1.3_2003_04_25.bin.gz")
+    stock = os.path.expanduser("~/.cache/flashpod/firmware/iPod_1.1.3_2003_04_25.bin")
     if os.path.exists(stock):
         s_img = os.path.join(work, "u-stock.img")
         with open(s_img, "wb") as f:

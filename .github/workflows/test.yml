@@ -309,6 +309,11 @@ jobs:
           python scripts/test_cli_targets.py --rust rust/target/release/flashpod --loop
           python scripts/test_cli_targets.py --rust rust/target/release/flashpod --mutants
 
+      # #101: firmware by name, against a local stand-in for the download
+      # hosts; every bad download refused, no network when none is needed.
+      - name: Firmware list and firmware by name
+        run: python scripts/test_firmware_list.py --rust rust/target/release/flashpod
+
   # The Rust CLI's Platform layer (rust/flashpod-cli/src/platform) driving a
   # real block device: simulate_card.py attaches a backing file (losetup,
   # hdiutil, a diskpart VHD), runs `flash` with the init and music prompts,

@@ -289,7 +289,7 @@ def writers(par, tmp, images, fw_cache):
             p = os.path.join(w, "fw-%s.bin" % name.replace(" ", "_"))
             open(p, "wb").write(fws[name])
             fws[name] = p
-    real = sorted(glob.glob(os.path.join(fw_cache, "*.bin.gz")))
+    real = sorted(glob.glob(os.path.join(fw_cache, "*.bin.gz")) + glob.glob(os.path.join(fw_cache, "*.bin")))
     picks = [x for x in real if any(k in x for k in (
         "flashpod_1.1.6", "iPod_1.1.5", "iPod_1.0.0", "iPod_2.2.3",
         "iPod_4.3.1.1", "iPod_5.1.2.1"))]
@@ -1001,7 +1001,7 @@ def corpus(tmp, fw_cache):
         shutil.copy(img("music.img"), p)
         no_free_count(p)
         out.append(("no FSInfo free count", p))
-        for path in sorted(glob.glob(os.path.join(fw_cache, "*.bin.gz")))[:30]:
+        for path in sorted(glob.glob(os.path.join(fw_cache, "*.bin.gz")) + glob.glob(os.path.join(fw_cache, "*.bin")))[:30]:
             name = os.path.basename(path)
             p = img("fw-" + name + ".img")
             card.create_blank(p, 96 << 20)

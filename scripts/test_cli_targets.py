@@ -35,8 +35,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import synth_fixtures as synth  # noqa: E402
 
-NOT_BUILT = ["firmware list", "firmware patch", "firmware arm", "firmware recover", "emulate"]
-EXEMPT = {"firmware patches": "reads the patch library; it has no target"}
+NOT_BUILT = ["firmware patch", "firmware arm", "firmware recover", "emulate"]
+EXEMPT = {"firmware patches": "reads the patch library; it has no target",
+          "firmware list": "reads the catalog; it has no target"}
 GROUPS = ["firmware", "card", "music"]
 MUSIC = ["music ls", "music list", "music add", "music rm", "music remove", "music delete",
          "music erase", "music init", "music rebuild", "music export", "music playlist"]

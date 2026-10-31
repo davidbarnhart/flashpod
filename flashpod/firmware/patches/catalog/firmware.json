@@ -2,6 +2,21 @@
  "format": 3,
  "firmwares": [
   {
+   "id": "flashpod-1.6",
+   "title": "flashpod 1.6: Apple's 1.5 plus 22 fixes",
+   "maker": "flashpod",
+   "version": "1.6",
+   "models": [
+    "1G",
+    "2G"
+   ],
+   "bytes": 5479893,
+   "sha256": "ec2d2db17f2550929a37449b6992d9d13d729a11928841ed163f2855824b2573",
+   "build": "flashpod-1.6",
+   "urls": [],
+   "tested_on_hardware": true
+  },
+  {
    "id": "apple-1g2g-1.5",
    "title": "Apple iPod Software 1.5 (internal 1.1.5)",
    "maker": "apple",
@@ -21,24 +36,505 @@
      "bytes": 2092355,
      "sha256": "0edbb2d512bc84d333c0749f4d51398890b3a5934476311dd67e2314809e9103",
      "note": "Apple's own download; verified 2026-10-29 (holds the firmware file named by sha256 above)"
+    },
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_1.1.5_2005_02_18.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 5068800,
+     "sha256": "af3950c2253dfd0a9f743440f01634ddb8ce018115c05d9ca0e675912202a3df"
     }
    ],
    "tested_on_hardware": true
   },
   {
-   "id": "flashpod-1.6",
-   "title": "flashpod 1.6: Apple's 1.5 plus 22 fixes",
-   "maker": "flashpod",
-   "version": "1.6",
+   "id": "apple-1g2g-1.4",
+   "title": "Apple iPod Software 1.4",
+   "maker": "apple",
+   "version": "1.4",
    "models": [
     "1G",
     "2G"
    ],
-   "bytes": 5479893,
-   "sha256": "ec2d2db17f2550929a37449b6992d9d13d729a11928841ed163f2855824b2573",
-   "build": "flashpod-1.6",
-   "urls": [],
+   "bytes": 4870656,
+   "sha256": "088433ba2acde3a5475de5a5ae99cc834fc26919e1d633fc1f2162415613aa84",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_1.1.4_2004_04_23.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 4870656,
+     "sha256": "088433ba2acde3a5475de5a5ae99cc834fc26919e1d633fc1f2162415613aa84"
+    }
+   ]
+  },
+  {
+   "id": "apple-1g2g-1.3",
+   "title": "Apple iPod Software 1.3",
+   "maker": "apple",
+   "version": "1.3",
+   "models": [
+    "1G",
+    "2G"
+   ],
+   "bytes": 4863488,
+   "sha256": "009395f31fac0f2e82d67a3476e93c5e855fe45644e54d6a6f7963798a2d6c08",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_1.1.3_2003_04_25.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 4863488,
+     "sha256": "009395f31fac0f2e82d67a3476e93c5e855fe45644e54d6a6f7963798a2d6c08"
+    }
+   ]
+  },
+  {
+   "id": "apple-1g2g-1.2.6",
+   "title": "Apple iPod Software 1.2.6",
+   "maker": "apple",
+   "version": "1.2.6",
+   "models": [
+    "1G",
+    "2G"
+   ],
+   "bytes": 4703232,
+   "sha256": "95848c5013a8c4221abc095b26e4a59b952df7d5f98ee7afd78f1b0a36e2fa83",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_1.1.2.6_2003_03_13.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 4703232,
+     "sha256": "95848c5013a8c4221abc095b26e4a59b952df7d5f98ee7afd78f1b0a36e2fa83"
+    }
+   ]
+  },
+  {
+   "id": "apple-1g2g-1.2.2",
+   "title": "Apple iPod Software 1.2.2",
+   "maker": "apple",
+   "version": "1.2.2",
+   "models": [
+    "1G",
+    "2G"
+   ],
+   "bytes": 4701696,
+   "sha256": "988f1c6895ed92a075c1af4152bdd9959b3bbdc937c3376850efe67749683022",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_1.1.2.2_2002_09_26.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 4701696,
+     "sha256": "988f1c6895ed92a075c1af4152bdd9959b3bbdc937c3376850efe67749683022"
+    }
+   ]
+  },
+  {
+   "id": "apple-1g2g-1.2.1",
+   "title": "Apple iPod Software 1.2.1",
+   "maker": "apple",
+   "version": "1.2.1",
+   "models": [
+    "1G",
+    "2G"
+   ],
+   "bytes": 4701696,
+   "sha256": "720197546ab57b69bdad576babe1bcdfe2839bc61b00c2314643ff814070cdc9",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_1.1.2.1_2002_09_06.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 4701696,
+     "sha256": "720197546ab57b69bdad576babe1bcdfe2839bc61b00c2314643ff814070cdc9"
+    }
+   ]
+  },
+  {
+   "id": "apple-1g2g-1.2",
+   "title": "Apple iPod Software 1.2",
+   "maker": "apple",
+   "version": "1.2",
+   "models": [
+    "1G",
+    "2G"
+   ],
+   "bytes": 3963392,
+   "sha256": "f60519e304613476313bc37ba10afcecc73112b3e28601dc8d4d94706819ffcf",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_1.1.2_2002_07_24.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 3963392,
+     "sha256": "f60519e304613476313bc37ba10afcecc73112b3e28601dc8d4d94706819ffcf"
+    }
+   ]
+  },
+  {
+   "id": "apple-1g-1.1",
+   "title": "Apple iPod Software 1.1",
+   "maker": "apple",
+   "version": "1.1",
+   "models": [
+    "1G"
+   ],
+   "bytes": 3687424,
+   "sha256": "f31dd441467803d1839292554b6ab82ae4fe6ee8b8b72359e937c516714e7195",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_1.1.1_2002_03_15.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 3687424,
+     "sha256": "f31dd441467803d1839292554b6ab82ae4fe6ee8b8b72359e937c516714e7195"
+    }
+   ]
+  },
+  {
+   "id": "apple-1g-1.0.4",
+   "title": "Apple iPod Software 1.0.4 (repacked to boot from a card)",
+   "maker": "apple",
+   "version": "1.0.4",
+   "models": [
+    "1G"
+   ],
+   "bytes": 2461184,
+   "sha256": "f83a262f47fc376bf9086df871f454ca0599b56d025e9ea10378dcff6c7ce4d2",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_1.0.4_2001_12_23.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 2461184,
+     "sha256": "f83a262f47fc376bf9086df871f454ca0599b56d025e9ea10378dcff6c7ce4d2"
+    }
+   ],
    "tested_on_hardware": true
+  },
+  {
+   "id": "apple-1g-1.0.2",
+   "title": "Apple iPod Software 1.0.2 (repacked to boot from a card)",
+   "maker": "apple",
+   "version": "1.0.2",
+   "models": [
+    "1G"
+   ],
+   "bytes": 2433536,
+   "sha256": "35c7b7d348a1862ea2f79a095e1fa00dafb7e4708f6a0109156b62bf1405f004",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_1.0.2_2001_11_28.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 2433536,
+     "sha256": "35c7b7d348a1862ea2f79a095e1fa00dafb7e4708f6a0109156b62bf1405f004"
+    }
+   ],
+   "tested_on_hardware": true
+  },
+  {
+   "id": "apple-1g-1.0",
+   "title": "Apple iPod Software 1.0 (repacked to boot from a card)",
+   "maker": "apple",
+   "version": "1.0",
+   "models": [
+    "1G"
+   ],
+   "bytes": 2422272,
+   "sha256": "3790026652fd82fbfdd38e81e08e287d1de7990c9baa6287504d3e75d9b15c8f",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_1.0.0_2001_11_01.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 2422272,
+     "sha256": "3790026652fd82fbfdd38e81e08e287d1de7990c9baa6287504d3e75d9b15c8f"
+    }
+   ],
+   "tested_on_hardware": true
+  },
+  {
+   "id": "apple-3g-2.3",
+   "title": "Apple iPod Software 2.3",
+   "maker": "apple",
+   "version": "2.3",
+   "models": [
+    "3G"
+   ],
+   "bytes": 4563968,
+   "sha256": "73817276159e53cbe3d988a76843c663706a621a19cccc6af4eb957d735f63c3",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_2.2.3.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 4563968,
+     "sha256": "73817276159e53cbe3d988a76843c663706a621a19cccc6af4eb957d735f63c3"
+    }
+   ]
+  },
+  {
+   "id": "apple-3g-2.2",
+   "title": "Apple iPod Software 2.2",
+   "maker": "apple",
+   "version": "2.2",
+   "models": [
+    "3G"
+   ],
+   "bytes": 4406784,
+   "sha256": "ec9b3fae30961cf22d29f37d56b8dcd9d6bf0b66fcb08805b92039b51c7b27b4",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_2.2.2_2004_04_23.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 4406784,
+     "sha256": "ec9b3fae30961cf22d29f37d56b8dcd9d6bf0b66fcb08805b92039b51c7b27b4"
+    }
+   ]
+  },
+  {
+   "id": "apple-3g-2.1",
+   "title": "Apple iPod Software 2.1",
+   "maker": "apple",
+   "version": "2.1",
+   "models": [
+    "3G"
+   ],
+   "bytes": 4380160,
+   "sha256": "3182d121d30a1d73f40fe111c7b69344e6d5f77f913b2ffe5726d27c45b01258",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_2.2.1_2003_10_12.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 4380160,
+     "sha256": "3182d121d30a1d73f40fe111c7b69344e6d5f77f913b2ffe5726d27c45b01258"
+    }
+   ]
+  },
+  {
+   "id": "apple-3g-2.0.1",
+   "title": "Apple iPod Software 2.0.1",
+   "maker": "apple",
+   "version": "2.0.1",
+   "models": [
+    "3G"
+   ],
+   "bytes": 4209152,
+   "sha256": "2ffb4945f194b2d4d7994a0da34bb2f80076c0678fb7a6d1b95d24d075f7f455",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_2.2.0.1_2003_06_15.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 4209152,
+     "sha256": "2ffb4945f194b2d4d7994a0da34bb2f80076c0678fb7a6d1b95d24d075f7f455"
+    }
+   ]
+  },
+  {
+   "id": "apple-3g-2.0",
+   "title": "Apple iPod Software 2.0",
+   "maker": "apple",
+   "version": "2.0",
+   "models": [
+    "3G"
+   ],
+   "bytes": 4178432,
+   "sha256": "a5d90bc2ddb8757ec96cc548bf16c7d90524376dce366422d99ccdbb3e69f989",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_2.2.0_2003_04_19.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 4178432,
+     "sha256": "a5d90bc2ddb8757ec96cc548bf16c7d90524376dce366422d99ccdbb3e69f989"
+    }
+   ]
+  },
+  {
+   "id": "apple-4g-3.1.1",
+   "title": "Apple iPod Software 3.1.1",
+   "maker": "apple",
+   "version": "3.1.1",
+   "models": [
+    "4G"
+   ],
+   "bytes": 4607488,
+   "sha256": "5b5ce4e560ce03859a2ec30ca7f36ada01dd68e15ce0ca62b3bf847158378d58",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_4.3.1.1.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 4607488,
+     "sha256": "5b5ce4e560ce03859a2ec30ca7f36ada01dd68e15ce0ca62b3bf847158378d58"
+    }
+   ]
+  },
+  {
+   "id": "apple-4g-3.1",
+   "title": "Apple iPod Software 3.1",
+   "maker": "apple",
+   "version": "3.1",
+   "models": [
+    "4G"
+   ],
+   "bytes": 4602368,
+   "sha256": "eb6f443b0c4fc04663648b4732572630b7a903026a02a4589177abf3cecdec8e",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_4.3.1.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 4602368,
+     "sha256": "eb6f443b0c4fc04663648b4732572630b7a903026a02a4589177abf3cecdec8e"
+    }
+   ]
+  },
+  {
+   "id": "apple-4g-3.0.2",
+   "title": "Apple iPod Software 3.0.2",
+   "maker": "apple",
+   "version": "3.0.2",
+   "models": [
+    "4G"
+   ],
+   "bytes": 4545536,
+   "sha256": "8c2a42d23dc7fc7dcb9be342708e39be49dc45363ae1cd6ee28beaca59d21ed8",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_4.3.0.2.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 4545536,
+     "sha256": "8c2a42d23dc7fc7dcb9be342708e39be49dc45363ae1cd6ee28beaca59d21ed8"
+    }
+   ]
+  },
+  {
+   "id": "apple-4g-3.0.1",
+   "title": "Apple iPod Software 3.0.1",
+   "maker": "apple",
+   "version": "3.0.1",
+   "models": [
+    "4G"
+   ],
+   "bytes": 4424704,
+   "sha256": "b0c0380d165f1f47218c74bc4c2af15731306ee8e1e96eeb9397ffab40521e9b",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_4.3.0.1.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 4424704,
+     "sha256": "b0c0380d165f1f47218c74bc4c2af15731306ee8e1e96eeb9397ffab40521e9b"
+    }
+   ]
+  },
+  {
+   "id": "apple-4g-3.0",
+   "title": "Apple iPod Software 3.0",
+   "maker": "apple",
+   "version": "3.0",
+   "models": [
+    "4G"
+   ],
+   "bytes": 4423680,
+   "sha256": "4fa8efb6b4b97c2184f0717ac970cb814a3851d3277fde2e9d474d38535d9e88",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_4.3.0.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 4423680,
+     "sha256": "4fa8efb6b4b97c2184f0717ac970cb814a3851d3277fde2e9d474d38535d9e88"
+    }
+   ]
+  },
+  {
+   "id": "apple-photo-1.2.1",
+   "title": "Apple iPod photo Software 1.2.1",
+   "maker": "apple",
+   "version": "1.2.1",
+   "models": [
+    "photo"
+   ],
+   "bytes": 6516224,
+   "sha256": "98d3933b125e0fa911d79c21e28dad930c426fdccdd7f4006b398eb083395606",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_5.1.2.1.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 6516224,
+     "sha256": "98d3933b125e0fa911d79c21e28dad930c426fdccdd7f4006b398eb083395606"
+    }
+   ]
+  },
+  {
+   "id": "apple-photo-1.2",
+   "title": "Apple iPod photo Software 1.2",
+   "maker": "apple",
+   "version": "1.2",
+   "models": [
+    "photo"
+   ],
+   "bytes": 6512128,
+   "sha256": "1f4015e87b3c9f9f813c036170e75bd732951576a98c98810bd54d9f1036e476",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_5.1.2.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 6512128,
+     "sha256": "1f4015e87b3c9f9f813c036170e75bd732951576a98c98810bd54d9f1036e476"
+    }
+   ]
+  },
+  {
+   "id": "apple-photo-1.1",
+   "title": "Apple iPod photo Software 1.1",
+   "maker": "apple",
+   "version": "1.1",
+   "models": [
+    "photo"
+   ],
+   "bytes": 6401536,
+   "sha256": "78b8fc49101f828459eb7bffc66241d195f98f442991b911e8909c0525ab5309",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_5.1.1.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 6401536,
+     "sha256": "78b8fc49101f828459eb7bffc66241d195f98f442991b911e8909c0525ab5309"
+    }
+   ]
+  },
+  {
+   "id": "apple-photo-1.0",
+   "title": "Apple iPod photo Software 1.0",
+   "maker": "apple",
+   "version": "1.0",
+   "models": [
+    "photo"
+   ],
+   "bytes": 6153728,
+   "sha256": "2b806d7bdfc239ea2428e1afc580f71cf59fba9eb3eb5815379101d91eb7f1ba",
+   "urls": [
+    {
+     "url": "https://archive.org/download/ipod-stock-firmware/iPod_5.1.0.bin",
+     "role": "fallback",
+     "container": "bin",
+     "bytes": 6153728,
+     "sha256": "2b806d7bdfc239ea2428e1afc580f71cf59fba9eb3eb5815379101d91eb7f1ba"
+    }
+   ]
   }
  ]
 }

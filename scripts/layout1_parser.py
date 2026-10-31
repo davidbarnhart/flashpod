@@ -44,8 +44,10 @@ def renamed_command(args):
 
 def flash_args(p):
     p.add_argument("device", nargs="?", help="target disk, e.g. /dev/sdb (else interactive chooser)")
+    p.add_argument("firmware_name", nargs="?", metavar="FIRMWARE",
+                   help="a name from `flashpod firmware list`, or a firmware file")
     p.add_argument("--firmware", default=None,
-                   help="firmware image: raw Firmware-*, .bin.gz or .ipsw "
+                   help="the same as FIRMWARE. A file is raw Firmware-*, .bin.gz or .ipsw "
                         "(default: choose from firmware/firmware.json)")
     p.add_argument("--model", default=None,
                    help="iPod model to flash for, e.g. 1G, 2G, 3G "
@@ -110,7 +112,9 @@ def build():
     fw = sub.add_parser("firmware", help="inspect, extract, patch and write firmware")
     fsub = fw.add_subparsers(dest="firmware_command")
     fsub.required = True
-    fsub.add_parser("list", help="the firmware flashpod can write")
+    p = fsub.add_parser("list", help="the firmware flashpod can write")
+    p.add_argument("--offline", action="store_true", help="don't refresh the catalog; use the copy on this computer")
+    p.add_argument("--json", action="store_true", help="print the list as JSON")
     p = fsub.add_parser("extract", help="copy the firmware partition (or one image) off a card")
     p.add_argument("target", help="card image file, or a card or iPod disk (needs root)")
     p.add_argument("-o", "--output", required=True, help="file to write; a FILE.json note is written beside it")

@@ -15,7 +15,7 @@ include!(concat!(env!("OUT_DIR"), "/bundled_patches.rs"));
 fn cache_dir() -> PathBuf {
     match std::env::var("XDG_CACHE_HOME") {
         Ok(v) if !v.is_empty() => PathBuf::from(v).join("flashpod/patches"),
-        _ => PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "~".into())).join(".cache/flashpod/patches"),
+        _ => crate::catalog::home().join(".cache/flashpod/patches"),
     }
 }
 
@@ -62,6 +62,15 @@ fn st(v: &Value) -> String {
     v.as_str().map(str::to_string).unwrap_or_default()
 }
 
+/// Where the library came from, for the first line of a listing.
+pub fn source_words(source: Source) -> &'static str {
+    match source {
+        Source::Network => "downloaded from github.com/davidbarnhart/ipod-patches",
+        Source::Cache => "the copy flashpod last downloaded",
+        Source::Bundled => "the copy built into flashpod",
+    }
+}
+
 pub fn cmd_patches(ns: &Ns) -> i32 {
     let online = !matches!(ns.get("offline"), Some(Val::Bool(true)));
     let lib = match load(online) {
@@ -71,12 +80,7 @@ pub fn cmd_patches(ns: &Ns) -> i32 {
             return 1;
         }
     };
-    let from = match lib.source {
-        Source::Network => "downloaded from github.com/davidbarnhart/ipod-patches".to_string(),
-        Source::Cache => "the copy flashpod last downloaded".to_string(),
-        Source::Bundled => "the copy built into flashpod".to_string(),
-    };
-    println!("Patch library: {} ({} files)", from, lib.files.len());
+    println!("Patch library: {} ({} files)", source_words(lib.source), lib.files.len());
     if let (true, Some(why)) = (online, &lib.fallback_reason) {
         println!("  (couldn't refresh it: {})", why);
     }

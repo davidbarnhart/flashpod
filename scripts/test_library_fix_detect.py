@@ -229,7 +229,7 @@ def main():
         check(firmware.fix_on_card(fw_reader(img)[0], library.LIBRARY_FIX)
               is True, "flashpod 1.6 has the fix")
         stock = os.path.join(os.path.expanduser("~"), ".cache", "flashpod",
-                             "firmware", "iPod_1.1.5_2005_02_18.bin.gz")
+                             "firmware", "iPod_1.1.5_2005_02_18.bin")
         if os.path.exists(stock):
             img = os.path.join(tmp, "real15.img")
             card.create_blank(img, 96 << 20)

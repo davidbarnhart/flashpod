@@ -106,7 +106,7 @@ fn pick(choice: &str, n: usize) -> Option<usize> {
 /// choosers leave them out and --model names them as not supported yet.
 const READ_ONLY_MODELS: &[&str] = &["4G", "photo"];
 
-fn read_only(id: &str) -> bool {
+pub(crate) fn read_only(id: &str) -> bool {
     READ_ONLY_MODELS.iter().any(|m| m.eq_ignore_ascii_case(id))
 }
 
@@ -224,11 +224,16 @@ pub fn choose_firmware(manifest: &Value, model: Option<&Value>) -> Option<Value>
     }
 }
 
+/// The home folder: HOME, or USERPROFILE on Windows.
+pub(crate) fn home() -> std::path::PathBuf {
+    std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| "~".into()).into()
+}
+
 /// catalog._firmware_cache_dir.
-fn cache_dir() -> String {
+pub(crate) fn cache_dir() -> String {
     match std::env::var("XDG_CACHE_HOME") {
         Ok(v) if !v.is_empty() => format!("{}/flashpod/firmware", v),
-        _ => format!("{}/.cache/flashpod/firmware", std::env::var("HOME").unwrap_or_else(|_| "~".into())),
+        _ => format!("{}/.cache/flashpod/firmware", home().display()),
     }
 }
 
@@ -259,14 +264,32 @@ pub(crate) fn agent() -> Result<ureq::Agent, String> {
 }
 
 /// _download: stream `url` to `dst`, a progress line on a terminal. Err is
-/// worded like the urllib exception Python prints.
-fn download(url: &str, dst: &str, total: Option<u64>) -> Result<(), String> {
-    let resp = agent()?.get(url).set("User-Agent", "flashpod").call().map_err(|e| match e {
-        ureq::Error::Status(code, r) => format!("HTTP Error {}: {}", code, r.status_text()),
-        ureq::Error::Transport(t) => format!("<urlopen error {}>", t),
+/// worded like the urllib exception Python prints. `limit` stops a download
+/// that runs past the size the catalog gives.
+pub(crate) fn download(url: &str, dst: &str, total: Option<u64>, limit: Option<u64>) -> Result<(), String> {
+    download_once(url, dst, total, limit).map_err(|f| f.why)
+}
+
+/// Why a download failed, and whether the same URL may work if asked again.
+pub(crate) struct DownloadFailure {
+    pub why: String,
+    pub transient: bool,
+}
+
+/// `download`, saying whether the failure was a 5xx or the connection: those
+/// can pass, where a 4xx, a file too long or a full disk won't.
+pub(crate) fn download_once(url: &str, dst: &str, total: Option<u64>, limit: Option<u64>) -> Result<(), DownloadFailure> {
+    let lasting = |why: String| DownloadFailure { why, transient: false };
+    let passing = |why: String| DownloadFailure { why, transient: true };
+    let resp = agent().map_err(lasting)?.get(url).set("User-Agent", "flashpod").call().map_err(|e| match e {
+        ureq::Error::Status(code, r) => DownloadFailure {
+            why: format!("HTTP Error {}: {}", code, r.status_text()),
+            transient: code >= 500,
+        },
+        ureq::Error::Transport(t) => passing(format!("<urlopen error {}>", t)),
     })?;
     let total = total.filter(|&t| t != 0).or_else(|| resp.header("Content-Length").and_then(|v| v.parse().ok())).unwrap_or(0);
-    let mut out = std::fs::File::create(dst).map_err(|e| flashpod_core::tags::os_error(&e, dst))?;
+    let mut out = std::fs::File::create(dst).map_err(|e| lasting(flashpod_core::tags::os_error(&e, dst)))?;
     let mut body = resp.into_reader();
     let tty = std::io::stderr().is_terminal();
     let mut buf = vec![0u8; 1 << 16];
@@ -275,7 +298,7 @@ fn download(url: &str, dst: &str, total: Option<u64>) -> Result<(), String> {
         // resp.read(1 << 16): a full chunk unless the body ends first
         let mut n = 0;
         while n < buf.len() {
-            let k = body.read(&mut buf[n..]).map_err(|e| e.to_string())?;
+            let k = body.read(&mut buf[n..]).map_err(|e| passing(e.to_string()))?;
             if k == 0 {
                 break;
             }
@@ -284,8 +307,11 @@ fn download(url: &str, dst: &str, total: Option<u64>) -> Result<(), String> {
         if n == 0 {
             break;
         }
-        out.write_all(&buf[..n]).map_err(|e| flashpod_core::tags::os_error(&e, dst))?;
+        out.write_all(&buf[..n]).map_err(|e| lasting(flashpod_core::tags::os_error(&e, dst)))?;
         done += n as u64;
+        if limit.is_some_and(|l| done > l) {
+            return Err(lasting(format!("longer than the {} bytes expected", limit.unwrap_or(0))));
+        }
         if tty {
             let now = crate::window::monotonic();
             if now - last >= 0.2 {
@@ -331,7 +357,7 @@ pub fn ensure_firmware(entry: &Value, base_url: &str) -> Option<String> {
     }
     eprintln!("flashpod flash: downloading {}\n  from {}", name, url);
     let tmp = format!("{}.part", dst);
-    if let Err(e) = download(&url, &tmp, entry["size"].as_u64()) {
+    if let Err(e) = download(&url, &tmp, entry["size"].as_u64(), None) {
         let _ = std::fs::remove_file(&tmp);
         eprintln!("flashpod flash: download failed ({}).", e);
         eprintln!("  Or download it yourself from {} and pass it with --firmware.", url);

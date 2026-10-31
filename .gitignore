@@ -13,6 +13,7 @@ venv/
 # on the firmware release, not in the repo
 /flashpod/firmware/*.ipsw
 /flashpod/firmware/*.bin.gz
+/flashpod/firmware/*.bin
 
 # Local archive of Apple's original firmware distributions (.ipsw, updater
 # apps). The scripts in scripts/ read from here by convention, but it is
