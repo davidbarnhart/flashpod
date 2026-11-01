@@ -168,7 +168,7 @@ Firmware for 1st generation (newest first):
 
   #  Version         Built       Size  Notes
   -  --------------  ----------  ----  ---------------------------------------
-  0  1.6 (flashpod)  2026-10-16  5.2M  NOT AN APPLE RELEASE -- flashpod's 1.6:
+  0  1.6 (flashpod)  2026-10-29  5.2M  NOT AN APPLE RELEASE -- flashpod's 1.6:
                                        Apple's 1.5 plus 22 fixes. Plays FLAC;
                                        ...
   1  1.5 *           2005-02-18  2.0M  Last stock Apple-released firmware for
@@ -535,8 +535,9 @@ What you gain over 1.5:
   A flashpod firmware write leaves the ROM alone, so disk mode stays at 128 GiB as
   on 1.5.
 
-Hardware-tested on 2026-10-16 on a 1st-generation iPod, with a 250 GB card of
-31,958 songs and a 128 GB FLAC card of about 3,000. Known limit, as on 1.5:
+Hardware-tested: this image on 2026-10-31, on a 256 GB card of MP3s and a 128 GB
+card of FLAC files; these fixes on 2026-10-16 on a 1st-generation iPod, with a
+250 GB card of 31,958 songs and a 128 GB FLAC card of about 3,000. Known limit, as on 1.5:
 Shuffle Songs doesn't start on a library near 32,000 songs. It hasn't been
 tested on a 2G; it's offered for one because 1.5, which it's built from, is.
 
