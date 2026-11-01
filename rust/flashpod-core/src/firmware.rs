@@ -25,6 +25,8 @@ pub(crate) fn version_word_means(w: u32) -> Option<&'static str> {
 pub(crate) fn known_osos(sha: &str) -> Option<&'static str> {
     match sha {
         "109ed777110982e2a31d7f724e4a7f78b73bef17bee90952e2c35c79f0714e21" => Some("openpod 1.6 gate build (withdrawn)"),
+        // flashpod 1.6 as first released (0.5.0-0.5.2); cards flashed then
+        "fdf1372267d902b99276b1982b27bc80f1a50835fb61893870f618e291b4677a" => Some("flashpod 1.6"),
         _ => None,
     }
 }

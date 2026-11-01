@@ -168,8 +168,8 @@ Firmware for 1st generation (newest first):
 
   #  Version         Built       Size  Notes
   -  --------------  ----------  ----  ---------------------------------------
-  0  1.6 (flashpod)  2026-10-16  2.0M  NOT AN APPLE RELEASE -- flashpod's 1.6:
-                                       Apple's 1.5 plus 23 fixes. Plays FLAC;
+  0  1.6 (flashpod)  2026-10-16  5.2M  NOT AN APPLE RELEASE -- flashpod's 1.6:
+                                       Apple's 1.5 plus 22 fixes. Plays FLAC;
                                        ...
   1  1.5 *           2005-02-18  2.0M  Last stock Apple-released firmware for
                                        1G/2G iPods
@@ -506,9 +506,9 @@ so the 2001 images (1G's 1.0 and 1.0.4) would leave a 2G unusable — asking fir
 means they're never offered to one.
 
 **flashpod 1.6 (1st and 2nd generation).** The catalog's one firmware that
-isn't Apple's: Apple's last release, 1.5, with 23 fixes, built from the
-[openpod](https://github.com/davidbarnhart/openpod) project's fix folder
-(`firmware/1/1.6`). The picker marks it `(flashpod)` and NOT AN APPLE RELEASE,
+isn't Apple's: Apple's last release, 1.5, with 22 fixes, built from
+[ipod-patches](https://github.com/davidbarnhart/ipod-patches)
+(`builds/flashpod-1.6.json`). The picker marks it `(flashpod)` and NOT AN APPLE RELEASE,
 `inspect` reports it as `flashpod 1.6`, and Apple's 1.5 stays the default.
 What you gain over 1.5:
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.3 (2026-10-31)
+
+- flashpod 1.6 is now built from
+  [ipod-patches](https://github.com/davidbarnhart/ipod-patches), the new
+  home of its fixes, and downloads from archive.org as `flashpod_1.1.6.bin`. Earlier
+  versions of flashpod can no longer download 1.6; upgrade to flash it.
+  Cards already flashed with 1.6 are still recognised as `flashpod 1.6`.
+
 ## 0.5.2 (2026-10-20)
 
 - `.aac` files can be added. Adding one failed with "required argument is
@@ -26,7 +34,7 @@
 ### flashpod 1.6 firmware for the 1st and 2nd generation
 
 The firmware catalog has its first firmware that isn't Apple's: **flashpod
-1.6**, Apple's last release (1.5) with 23 fixes, built from the
+1.6**, Apple's last release (1.5) with 22 fixes, built from the
 [openpod](https://github.com/davidbarnhart/openpod) project's fix folder.
 `flashpod flash` offers it above 1.5, marked `(flashpod)` and NOT AN APPLE
 RELEASE, and Apple's 1.5 stays the default. Over 1.5 it gives:
