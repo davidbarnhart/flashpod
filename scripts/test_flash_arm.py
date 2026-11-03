@@ -2,7 +2,7 @@
 """`flashpod flash --arm`: the card is armed only when asked, and only with a
 disk-mode program flashpod knows.
 
-    PYTHONPATH=. python3 scripts/test_flash_arm.py [--asset flashpod_1.1.6_....bin.gz]
+    PYTHONPATH=. python3 scripts/test_flash_arm.py [--asset flashpod_1.1.6.bin]
 
 David's design (bridge #1231): --arm arms the card -- the aupd entry's id
 stays 0 ("update pending") in BOTH firmware directories, so on its next start
