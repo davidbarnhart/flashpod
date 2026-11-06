@@ -48,7 +48,9 @@ fn resolve_target(ns: &Ns, cmd: &str) -> Result<Target, i32> {
         if is_image(&p) {
             return Ok(Target { path: p, image: true });
         }
-        if !std::path::Path::new(&p).exists() {
+        // \\.\PhysicalDriveN never "exists" as a path on Windows;
+        // validate_target judges those.
+        if !p.starts_with(r"\\.\") && !std::path::Path::new(&p).exists() {
             eprintln!("flashpod {}: no such file or disk: {}", cmd, p);
             return Err(1);
         }

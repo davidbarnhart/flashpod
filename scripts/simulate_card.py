@@ -644,6 +644,13 @@ def main():
         os.environ.update(env_root)
 
         for argv in steps:
+            if LAYOUT_1[0] and sys.platform == "darwin" and "music" in argv:
+                # macOS auto-mounts the FAT that `drive partition` made, and
+                # a mounted slice makes the --raw open fail EBUSY: unmount
+                # it, as a --raw user on a Mac must (0.x flash wrote through
+                # that mount instead).
+                subprocess.run(["diskutil", "unmountDisk", node],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             say("running: %s" % " ".join(argv))
             rc, _ = run_flashpod(argv, music, node, model=opts.model)
             say("flashpod exited %d" % rc, GRN if rc == 0 else RED)
