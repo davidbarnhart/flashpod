@@ -150,34 +150,44 @@ fn mbr_fat_part_start(mbr: &[u8]) -> u64 {
 }
 
 /// prepare_raw_write: make raw music writes inside the FAT partition
-/// succeed. A partition Windows made a volume of is locked and dismounted
-/// (as for flashing). One partmgr claims from the MBR without making a
-/// volume has nothing to lock, so sector 0 is cleared to drop the claim and
-/// put back by finalize_raw_write; meanwhile raw_part_start_override says
-/// where the FAT partition is.
+/// succeed. Windows refuses them while it has a volume or a partmgr claim on
+/// the partition. Locking the volume in place was not enough on CI's
+/// Windows runner (a locked, dismounted, offlined volume still answered
+/// "[Errno 21] The device is not ready"), so this does what flash does
+/// before it writes a FAT: lock the volumes (their filesystem dismounts
+/// cleanly), then clear sector 0 so Windows drops the volumes and the claim
+/// (invalidate_cached_partitions). finalize_raw_write puts the MBR back;
+/// meanwhile raw_part_start_override says where the FAT partition is.
+/// (Python's prepare_raw_write clears only when there is no volume.)
 pub(crate) fn prepare_raw_write(dev: &str) {
     if !is_physical_drive(dev) {
         return;
     }
-    if !Windows.device_mountpoints(dev).is_empty() {
-        for (vol, err) in lock_volumes(dev) {
-            match err {
-                None => eprintln!("flashpod: locked volume {} for raw writing", vol),
-                Some(e) => eprintln!("flashpod: could NOT lock volume {} ({}) \u{2014} raw writes will likely be denied. Something may be holding the volume (AV scan, indexer, an open Explorer window).", vol, e),
+    let results = lock_volumes(dev);
+    // a volume has several access paths (E: and \\.\Volume{...}); once one
+    // holds the lock the others are refused, so report failures only when
+    // nothing locked.
+    if results.iter().any(|(_, e)| e.is_none()) {
+        for (vol, err) in &results {
+            if err.is_none() {
+                eprintln!("flashpod: locked volume {} for raw writing", vol);
             }
         }
-        return;
+    } else {
+        for (vol, err) in &results {
+            eprintln!("flashpod: could NOT lock volume {} ({}) \u{2014} Something may be holding the volume (AV scan, indexer, an open Explorer window).", vol, err.as_deref().unwrap_or(""));
+        }
     }
     let mut mbr = vec![0u8; SECTOR as usize];
     let read = open_handle(dev, false).and_then(|h| crate::sys::read_at(&h, &mut mbr, 0));
     let part_start = if read.is_ok() { mbr_fat_part_start(&mbr) } else { 0 };
     if part_start == 0 {
-        eprintln!("flashpod: no mountable volume on {} and no FAT partition found in its MBR \u{2014} cannot enable raw writes.", dev);
+        eprintln!("flashpod: no FAT partition found in {}'s MBR \u{2014} cannot enable raw writes.", dev);
         return;
     }
     Windows.invalidate_cached_partitions(dev);
     *CLEARED.lock().unwrap_or_else(|p| p.into_inner()) = Some((dev.to_string(), mbr, part_start));
-    eprintln!("flashpod: no mountable volume on {}; temporarily cleared its partition table so the FAT partition (LBA {}) accepts raw writes. The original table is restored when flashpod finishes.", dev, part_start);
+    eprintln!("flashpod: temporarily cleared {}'s partition table so Windows lets go of the FAT partition (LBA {}). The original table is restored when flashpod finishes.", dev, part_start);
 }
 
 /// raw_part_start_override: the FAT partition's LBA while sector 0 is cleared.
