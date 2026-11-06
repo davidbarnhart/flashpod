@@ -35,7 +35,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import synth_fixtures as synth  # noqa: E402
 
-NOT_BUILT = ["setup", "drive backup", "firmware list", "patch show", "patch apply", "music find",
+NOT_BUILT = ["drive backup", "firmware list", "patch show", "patch apply", "music find",
              "music check", "games list", "games add", "games remove", "emulate", "completion"]
 # #115: 0.x names kept so a habit is told the new one (rc 2)
 MOVED = {"card new": "image new", "card burn": "drive restore", "firmware patches": "patch list",
@@ -126,6 +126,8 @@ def image_cells(binary, fw, music, work, decoy):
     img = os.path.join(work, "target.img")
     step(binary, "image new", [img, "200M"], img, "image file", decoy)
     step(binary, "inspect", [img], img, "image file", decoy)
+    # no terminal: setup lists its four commands for this target and stops (the pty run is test_cli_1_0's)
+    step(binary, "setup", ["--target", img], img, "image file", decoy, refused=True)
     step(binary, "drive partition", ["--target", img, "--yes"], img, "image file", decoy, line=True)
     step(binary, "firmware write", ["--target", img, fw, "--yes"], img, "image file", decoy, line=True)
     # the synthetic firmware's aupd is no program flashpod knows: arm refuses
@@ -191,6 +193,7 @@ def card_cells(binary, fw, music, work, decoy):
     root = ["sudo", "-n", "env", "PATH=" + os.environ["PATH"]] + binary
     try:
         step(root, "inspect", [node], node, "card", decoy)
+        step(root, "setup", ["--target", node], node, "card", decoy, refused=True)
         step(root, "drive partition", ["--target", node, "--yes"], node, "card", decoy)
         step(root, "firmware write", ["--target", node, fw, "--yes"], node, "card", decoy)
         step(root, "bootrom arm", ["--target", node, "--yes"], node, "card", decoy, refused=True)

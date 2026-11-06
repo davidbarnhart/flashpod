@@ -157,8 +157,11 @@ def build():
     sub = parser.add_subparsers(dest="command")
     sub.required = True
 
-    add(sub, "setup", help="set up a card step by step: partition, firmware, library, music").add_argument(
-        "args", nargs="*", metavar="ARG")
+    p = add(sub, "setup", help="set up a card step by step: partition, firmware, library, music")
+    p.add_argument("firmware_file", nargs="?", metavar="FIRMWARE", help="the firmware file (else the catalog choosers)")
+    p.add_argument("--target", help="the drive or image file (else a chooser)")
+    p.add_argument("--model", help="the iPod model, for the catalog chooser (1G, 2G, ...)")
+    p.add_argument("--music", nargs="+", metavar="PATH", help="the music to add (else the directory picker)")
 
     p = add(sub, "inspect", help="report everything about a card, iPod or image")
     p.add_argument("target", help="card image file, or a card or iPod disk (needs root)")
@@ -185,7 +188,7 @@ def build():
 
     bsub = group(sub, "bootrom", "bootrom_command", "the iPod's boot ROM (disk-mode update)")
     p = add(bsub, "arm", help="arm a disk-mode update from the firmware on the drive")
-    p.add_argument("program", nargs="?", help="the program to arm (default: the one in the firmware on the drive)")
+    p.add_argument("program", nargs="?", choices=["stock"], help="stock: Apple 1.5's disk-mode program (default: the one in the firmware on the drive)")
     p.add_argument("--target", help="the drive or image file (else a chooser)")
     p.add_argument("--yes", action="store_true", help="skip the arm confirmation")
     p.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
@@ -258,7 +261,7 @@ RECOVERY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
                         "rust", "flashpod-cli", "src", "help_recovery.txt")
 
 # the commands the Rust binary parses and then says aren't built
-NOT_BUILT = {"setup", "drive backup", "firmware list", "patch show", "patch apply", "music find",
+NOT_BUILT = {"drive backup", "firmware list", "patch show", "patch apply", "music find",
              "music check", "games list", "games add", "games remove", "emulate", "completion"}
 
 # the flags `firmware write` lost (#115), each naming where it went

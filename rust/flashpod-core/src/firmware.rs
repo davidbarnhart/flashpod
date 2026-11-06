@@ -469,6 +469,72 @@ pub fn arm_firmware(fw: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// The live directory's aupd entry: (entry fields, its bytes). Format 3
+/// (4G+) is refused: flashpod writes only 1G-3G firmware.
+fn live_aupd(fw: &[u8]) -> Result<([u32; 8], &[u8]), String> {
+    if fw.len() < 0x10c || &fw[0x100..0x104] != b"]ih[" {
+        return Err("not an iPod firmware image (missing [hi] volume header)".into());
+    }
+    if u16::from_le_bytes(fw[0x10a..0x10c].try_into().unwrap()) == 3 {
+        return Err("a 4th-generation or later firmware (format 3); flashpod doesn't write those".into());
+    }
+    let (_, _, f) = walk_directory(fw, ptr_of(fw) + 0x200).into_iter().find(|(_, t, _)| t == b"aupd")
+        .ok_or("this firmware has no disk-mode program (aupd)")?;
+    let blob = crate::text::slice(fw, f[1] as usize, f[1] as usize + f[2] as usize);
+    if blob.len() != f[2] as usize {
+        return Err("the disk-mode program (aupd) runs past the end of the firmware".into());
+    }
+    Ok((f, blob))
+}
+
+/// `bootrom arm stock`'s splice: `card` with its disk-mode program (aupd)
+/// replaced by `donor`'s, everything else as it was. The donor's bytes go
+/// at the card's own aupd offset (aupd is the last image in every 1G-3G
+/// firmware, so it may grow into the zeros after it), and both directory
+/// entries take the donor's fields except devOffset. Not armed: arm_firmware
+/// does that. Refused unless aupd is the last image and the two load at
+/// the same address.
+pub fn with_aupd_of(card: &[u8], donor: &[u8]) -> Result<Vec<u8>, String> {
+    let (cf, _) = live_aupd(card)?;
+    let (df, blob) = live_aupd(donor)?;
+    if cf[3] != df[3] {
+        return Err(format!("the disk-mode programs load at different addresses (0x{:08x} on the drive, 0x{:08x} in the replacement)",
+                           cf[3], df[3]));
+    }
+    let (at, old_end) = (cf[1] as usize, cf[1] as usize + cf[2] as usize);
+    for (_, typ, f) in walk_directory(card, ptr_of(card) + 0x200) {
+        if &typ != b"aupd" && (f[1] as usize + f[2] as usize) > at {
+            return Err(format!("the disk-mode program isn't the last image (`{}` follows it)",
+                               String::from_utf8_lossy(&typ)));
+        }
+    }
+    let mut out = card.to_vec();
+    let new_end = at + blob.len();
+    if out.len() < new_end {
+        out.resize(new_end, 0);
+    }
+    out[at..new_end].copy_from_slice(blob);
+    if old_end > new_end {
+        out[new_end..old_end.min(card.len())].iter_mut().for_each(|b| *b = 0);
+    }
+    let ptr = ptr_of(card);
+    let mut n = 0;
+    for base in [ptr, ptr + 0x200] {
+        for (off, typ, _f) in walk_directory(card, base) {
+            if &typ == b"aupd" {
+                for k in [0usize, 2, 3, 4, 5, 6, 7] {   // every field but devOffset (1)
+                    out[off + 8 + 4 * k..off + 12 + 4 * k].copy_from_slice(&df[k].to_le_bytes());
+                }
+                n += 1;
+            }
+        }
+    }
+    if n != 2 {
+        return Err(format!("expected an aupd entry in both directories, found {}", n));
+    }
+    Ok(out)
+}
+
 /// The undo of arm_firmware: the aupd id back to 1 ("performed") in both
 /// directories. Any program: disarming never runs it.
 pub fn disarm_firmware(fw: &[u8]) -> Result<Vec<u8>, String> {
@@ -565,4 +631,75 @@ mod tests {
         fw[0x4214..0x4218].copy_from_slice(&PP5002_OSOS_ADDR.to_le_bytes());
         assert_eq!(check_writable(&fw), Ok(()));
     }
+
+    /// A format-2 volume: osos then aupd, both directories, staging offsets -0x200.
+    fn two_image(osos: &[u8], aupd: &[u8]) -> Vec<u8> {
+        let mut fw = vec![0u8; 0x4400];
+        fw[0..4].copy_from_slice(b"{{~~");
+        fw[0x100..0x104].copy_from_slice(b"]ih[");
+        fw[0x104..0x108].copy_from_slice(&0x4000u32.to_le_bytes());
+        fw[0x10a..0x10c].copy_from_slice(&2u16.to_le_bytes());
+        let sum = |b: &[u8]| b.iter().map(|&v| v as u64).sum::<u64>() as u32;
+        let (o_at, a_at) = (0x4400usize, 0x4400 + osos.len());
+        fw.extend_from_slice(osos);
+        fw.extend_from_slice(aupd);
+        for base in [0x4000usize, 0x4200] {
+            let d = if base == 0x4000 { 0x200 } else { 0 };
+            for (i, (typ, at, img, load)) in [(b"soso", o_at, osos, 0xFFFF_FFFFu32), (b"dpua", a_at, aupd, PP5002_OSOS_ADDR)]
+                .into_iter().enumerate() {
+                let e = base + 40 * i;
+                fw[e..e + 4].copy_from_slice(b"ksid");
+                fw[e + 4..e + 8].copy_from_slice(typ);
+                let w = [if i == 1 { 1 } else { 0 }, (at - d) as u32, img.len() as u32, PP5002_OSOS_ADDR, 0,
+                         sum(img), 0x130 + i as u32, load];
+                for (k, v) in w.iter().enumerate() {
+                    fw[e + 8 + 4 * k..e + 12 + 4 * k].copy_from_slice(&v.to_le_bytes());
+                }
+            }
+        }
+        fw
+    }
+
+    #[test]
+    fn with_aupd_of_swaps_only_the_disk_mode_program() {
+        let osos = vec![0x11u8; 0x3000];
+        for (old_len, new_len) in [(0x800usize, 0x800usize), (0x800, 0xa00), (0xa00, 0x800)] {
+            let card = two_image(&osos, &vec![0x22u8; old_len]);
+            let donor = two_image(&vec![0x33u8; 0x2000], &vec![0x44u8; new_len]);
+            let out = with_aupd_of(&card, &donor).unwrap();
+            let (cf, _) = live_aupd(&card).unwrap();
+            let (df, dblob) = live_aupd(&donor).unwrap();
+            let (of, oblob) = live_aupd(&out).unwrap();
+            assert_eq!(oblob, dblob, "the donor's bytes");
+            assert_eq!(of[1], cf[1], "at the card's own offset");
+            assert_eq!([of[0], of[2], of[3], of[4], of[5], of[6], of[7]], [df[0], df[2], df[3], df[4], df[5], df[6], df[7]]);
+            let at = cf[1] as usize;
+            assert_eq!(&out[..0x4000], &card[..0x4000], "header untouched");
+            assert_eq!(&out[0x4400..at], &card[0x4400..at], "osos untouched");
+            assert!(out[at + new_len..].iter().all(|&b| b == 0), "an old longer tail is zeroed");
+            assert_eq!(validate_firmware(&out), Ok(()));
+            // the staging copy moved the same way, its own offset kept
+            let st = walk_directory(&out, 0x4000).into_iter().find(|(_, t, _)| t == b"aupd").unwrap().2;
+            assert_eq!((st[1], st[2], st[5]), (cf[1] - 0x200, df[2], df[5]));
+            // and arm_firmware would only flip the id (it refuses this unknown program)
+            assert!(arm_firmware(&out).unwrap_err().contains("isn't one flashpod knows"));
+        }
+    }
+
+    #[test]
+    fn with_aupd_of_refuses_what_it_cant_place() {
+        let card = two_image(&[0x11u8; 0x3000], &[0x22u8; 0x800]);
+        let mut donor = two_image(&[0x33u8; 0x2000], &[0x44u8; 0x800]);
+        donor[0x4200 + 40 + 20..0x4200 + 40 + 24].copy_from_slice(&0x1000_0000u32.to_le_bytes());
+        assert!(with_aupd_of(&card, &donor).unwrap_err().contains("different addresses"));
+        // an image after aupd: aupd isn't last
+        let mut late = card.clone();
+        late[0x4200 + 12..0x4200 + 16].copy_from_slice(&(0x4400u32 + 0x3000 + 0x100).to_le_bytes());
+        assert!(with_aupd_of(&late, &card).unwrap_err().contains("isn't the last image"));
+        let mut gen4 = card.clone();
+        gen4[0x10a..0x10c].copy_from_slice(&3u16.to_le_bytes());
+        assert!(with_aupd_of(&gen4, &card).unwrap_err().contains("format 3"));
+        assert!(with_aupd_of(&card, &[0u8; 0x200]).is_err());
+    }
+
 }

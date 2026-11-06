@@ -290,7 +290,11 @@ fn build_cli() -> Cli {
     };
 
     let st = cli.add_parser_at(0, "setup", &[], "set up a card step by step: partition, firmware, library, music", &[]);
-    cli.parser(st).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
+    let sp = cli.parser(st);
+    sp.add(Arg::pos("firmware_file", Nargs::Optional).metavar("FIRMWARE").help("the firmware file (else the catalog choosers)"));
+    sp.add(Arg::opt(&["--target"]).help("the drive or image file (else a chooser)"));
+    sp.add(Arg::opt(&["--model"]).help("the iPod model, for the catalog chooser (1G, 2G, ...)"));
+    sp.add(Arg::opt(&["--music"]).nargs(Nargs::Plus).metavar("PATH").help("the music to add (else the directory picker)"));
 
     let inspect = cli.add_parser_at(0, "inspect", &[], "report everything about a card, iPod or image", &[]);
     cli.parser(inspect).add(Arg::pos("target", Nargs::One).help("card image file, or a card or iPod disk (needs root)"));
@@ -325,7 +329,7 @@ fn build_cli() -> Cli {
     cli.add_subparsers_at(br, "bootrom_command");
     let arm = cli.add_parser_at(br, "arm", &[], "arm a disk-mode update from the firmware on the drive", &[]);
     let ap = cli.parser(arm);
-    ap.add(Arg::pos("program", Nargs::Optional).help("the program to arm (default: the one in the firmware on the drive)"));
+    ap.add(Arg::pos("program", Nargs::Optional).choices(&["stock"]).help("stock: Apple 1.5's disk-mode program (default: the one in the firmware on the drive)"));
     ap.add(Arg::opt(&["--target"]).help("the drive or image file (else a chooser)"));
     ap.add(Arg::flag(&["--yes"]).help("skip the arm confirmation"));
     ap.add(Arg::flag(&["--dry-run"]).help("show what would change, write nothing"));
@@ -571,6 +575,7 @@ fn main() {
     let code = match command.as_str() {
         "firmware write" => drivecmd::cmd_firmware_write(&ns),
         "drive partition" => drivecmd::cmd_partition(&ns),
+        "setup" => drivecmd::cmd_setup(&ns),
         "bootrom arm" => drivecmd::cmd_bootrom(&ns, "arm"),
         "bootrom disarm" => drivecmd::cmd_bootrom(&ns, "disarm"),
         "firmware extract" => cmd_extract(&ns),

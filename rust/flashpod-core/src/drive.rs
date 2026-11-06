@@ -281,6 +281,27 @@ pub fn arm(dev: &mut dyn BlockDevice) -> Result<ArmResult, Error> {
     Ok(ArmResult { program, sectors_written: n, armed: true })
 }
 
+/// `bootrom arm stock`: replace the drive's disk-mode program with
+/// `donor`'s (firmware::with_aupd_of; the rest of the firmware is kept)
+/// and arm it. arm_firmware refuses a program flashpod doesn't know.
+pub fn arm_with(dev: &mut dyn BlockDevice, donor: &[u8]) -> Result<ArmResult, Error> {
+    let (_t, p) = firmware_partition(dev)?;
+    let old = read_installed(dev, &p)?;
+    let new = firmware::with_aupd_of(&old, donor)
+        .and_then(|f| firmware::arm_firmware(&f))
+        .map_err(|e| Error::new(ErrorKind::FirmwareInvalid, e).detail("reason", "cannot_arm"))?;
+    if new.len() as u64 > p.sectors * SECTOR {
+        return Err(Error::new(ErrorKind::LayoutMismatch, format!(
+            "the firmware with that disk-mode program ({} bytes) is larger than the firmware partition ({} bytes)",
+            new.len(), p.sectors * SECTOR)).detail("reason", "partition_too_small"));
+    }
+    // compare against what is on the drive over the whole new length
+    let old = if new.len() > old.len() { dev.read_vec(p.start * SECTOR, new.len())? } else { old };
+    let program = firmware::aupd_of(&new).and_then(|(_, k)| k);
+    let n = write_changed(dev, &p, &old, &new)?;
+    Ok(ArmResult { program, sectors_written: n, armed: true })
+}
+
 /// `bootrom disarm`: undo arm (the aupd id back to 1, "performed").
 pub fn disarm(dev: &mut dyn BlockDevice) -> Result<ArmResult, Error> {
     let (_t, p) = firmware_partition(dev)?;

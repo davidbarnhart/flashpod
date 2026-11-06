@@ -111,6 +111,10 @@ impl Arg {
         self.0.default = None;
         self
     }
+    pub fn nargs(mut self, n: Nargs) -> Self {
+        self.0.nargs = n;
+        self
+    }
     pub fn metavar(mut self, m: &str) -> Self {
         self.0.metavar = Some(m.to_string());
         self

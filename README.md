@@ -537,9 +537,16 @@ has no dump of your iPod's chip, so it can't rehearse the update first
 knows can be armed: flashpod 1.6's and Apple 1.5's.
 
 ```
-$ flashpod bootrom arm --target /dev/sdb      # asks, with the warning, then arms
-$ flashpod bootrom disarm --target /dev/sdb   # back to "already done"
+$ flashpod bootrom arm --target /dev/sdb        # asks, with the warning, then arms
+$ flashpod bootrom arm stock --target /dev/sdb  # Apple 1.5's disk-mode program instead
+$ flashpod bootrom disarm --target /dev/sdb     # back to "already done"
 ```
+
+`bootrom arm stock` puts Apple's own disk-mode program back, for an iPod whose
+disk mode is broken or that you want back on Apple's: it fetches Apple 1.5
+from the catalog (checked by SHA-256), replaces the disk-mode program in the
+firmware on the drive with 1.5's, and arms it. The firmware the iPod plays
+from is left as it is. `flashpod help recovery` says when you need it.
 
 `arm` asks "Arm this drive for an iPod update to disk-mode during the next
 boot? [y/N]"; `--yes` skips the question, and without a terminal it arms only
