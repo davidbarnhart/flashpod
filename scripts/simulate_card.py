@@ -296,6 +296,9 @@ def build_answers(dev, music_dir, model="0"):
         # the post-flash init offer -- the whole point of the exercise
         (re.compile(r"Run init on .* now\? \[Y/n\]\s*$"),         "y"),
         (re.compile(r"Load music onto the card now\? \[Y/n\]\s*$"), "y"),
+        # 1.0's separate music commands offer the eject after a raw write;
+        # the script detaches the card itself
+        (re.compile(r"Eject the iPod now\? \[Y/n\]\s*$"),           "n"),
         # the picker gate: typing a path here skips the full-screen picker
         # (which a scripted pty can't drive)
         (re.compile(r"Press ENTER to select content to add to the iPod "
