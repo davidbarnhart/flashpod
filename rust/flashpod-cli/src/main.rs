@@ -503,6 +503,9 @@ fn list(ns: &Ns, k: &str) -> Vec<String> {
 }
 
 
+/// `flashpod help recovery` (#115 N8); scripts/layout1_parser.py prints the same file.
+const HELP_RECOVERY: &str = include_str!("help_recovery.txt");
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(new) = renamed_command(&args) {
@@ -578,6 +581,10 @@ fn main() {
         "help" => match s(&ns, "topic").as_deref() {
             None => {
                 print!("{}", cli.group_help(&[]).unwrap_or_default());
+                0
+            }
+            Some("recovery") => {
+                print!("{}", HELP_RECOVERY);
                 0
             }
             Some(t) => {

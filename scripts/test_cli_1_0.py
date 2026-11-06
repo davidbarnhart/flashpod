@@ -480,6 +480,29 @@ def mac_card_checks(binary, work):
     check(rc == 2 and "never touches the data partition" in err, "--no-format is gone: firmware write never formats (#115)")
 
 
+def recovery_checks(binary, work):
+    """`help recovery` (#115 N8): every command it tells you to run exists and is built."""
+    print("help recovery")
+    rc, out, err = run(binary, "help", "recovery")
+    check(rc == 0 and "chip programmer" in out, "help recovery prints the cases (rc %d)" % rc)
+    named = sorted(set(re.findall(r"flashpod ((?:[a-z]+ )*[a-z]+)(?= TARGET| --target|`)", out)))
+    check(len(named) >= 5, "it names the commands to run (%s)" % ", ".join(named))
+    img = os.path.join(work, "recovery-nothing.img")   # never created: nothing is written
+    for cmd in named:
+        words = cmd.split()
+        rc, help_out, _ = run(binary, *(words + ["-h"]))
+        check(rc == 0, "`flashpod %s` parses (rc %d)" % (cmd, rc))
+        # only target-taking commands run (a bare `music init` would go looking for an iPod)
+        if "--target" in help_out:
+            rc, o, e = run(binary, *(words + ["--target", img, "--dry-run"]))
+        elif cmd == "inspect":
+            rc, o, e = run(binary, cmd, img)
+        else:
+            continue
+        check("not built yet" not in o + e, "`flashpod %s` is built" % cmd)
+        check(not os.path.exists(img), "`flashpod %s` on a missing image made nothing" % cmd)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rust", required=True)
@@ -496,6 +519,7 @@ def main():
         gen4_checks(os.path.abspath(opts.rust), work)
         card_new_checks(os.path.abspath(opts.rust), work)
         mac_card_checks(os.path.abspath(opts.rust), work)
+        recovery_checks(os.path.abspath(opts.rust), work)
     finally:
         if not opts.keep:
             shutil.rmtree(work, ignore_errors=True)

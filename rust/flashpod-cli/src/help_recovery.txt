@@ -1,0 +1,30 @@
+An iPod that won't start (1st and 2nd generation)
+
+Look first. Put the card in a reader, or the iPod in disk mode, and run
+  flashpod inspect TARGET
+It reports the firmware, the disk-mode program and the music library, and
+names what is missing or wrong. Then find the case below.
+
+The folder icon with "!" when it starts
+  The iPod found nothing on the card it can start: the firmware partition is
+  broken or empty. Write the firmware again; your music is not touched:
+    flashpod firmware write --target TARGET
+  Do it in a card reader, or over FireWire with the iPod in disk mode (hold
+  Menu and Play until the Apple logo, then hold Previous and Next). If
+  inspect says the music library is missing, also run `flashpod music init`.
+
+The connect-power icon when it starts
+  A disk-mode update is armed and waits for FireWire power. Plug the iPod
+  into FireWire power to let it run, or clear it from a reader:
+    flashpod bootrom disarm --target TARGET
+
+It plays from the card, but disk mode doesn't work
+  The disk-mode program in the iPod's own flash chip is broken. Put Apple's
+  back, then start the iPod from the card on FireWire power:
+    flashpod bootrom arm stock --target TARGET
+  It explains the risk and asks before it writes anything.
+
+Nothing at all: no Apple logo, no icon, no backlight
+  Charge it first. If a disk-mode update lost power early on (during the
+  erases and the first ~7% of the programming), the iPod's boot loader is
+  gone: only an external chip programmer can bring it back. flashpod can't.

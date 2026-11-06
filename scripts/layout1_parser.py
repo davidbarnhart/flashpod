@@ -253,10 +253,13 @@ def build():
     return parser
 
 
+# `help recovery`: the Rust binary include_str!s this same file
+RECOVERY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "rust", "flashpod-cli", "src", "help_recovery.txt")
+
 # the commands the Rust binary parses and then says aren't built
 NOT_BUILT = {"setup", "drive backup", "firmware list", "patch show", "patch apply", "music find",
-             "music check", "games list", "games add", "games remove", "emulate", "completion",
-             "help recovery"}
+             "music check", "games list", "games add", "games remove", "emulate", "completion"}
 
 # the flags `firmware write` lost (#115), each naming where it went
 MOVED = [
@@ -295,6 +298,10 @@ def main(argv):
     sub = getattr(opts, "%s_command" % opts.command, None)
     spelled = " ".join([opts.command] + ([sub] if sub else []))
     if opts.command == "help":
+        if opts.topic == "recovery":
+            with open(RECOVERY) as f:
+                sys.stdout.write(f.read())
+            return 0
         spelled += " " + opts.topic
     if spelled in NOT_BUILT:
         sys.stderr.write("flashpod %s: not built yet (flashpod 1.0, epic #88).\n" % spelled)
