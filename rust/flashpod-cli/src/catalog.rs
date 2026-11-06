@@ -20,7 +20,7 @@ pub fn load_manifest() -> Option<Value> {
         Ok(path) => match std::fs::read_to_string(&path) {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("flashpod flash: firmware manifest unusable ({}); pass --firmware", flashpod_core::tags::os_error(&e, &path));
+                eprintln!("flashpod firmware write: firmware manifest unusable ({}); name a firmware file: flashpod firmware write --target T FIRMWARE", flashpod_core::tags::os_error(&e, &path));
                 return None;
             }
         },
@@ -29,7 +29,7 @@ pub fn load_manifest() -> Option<Value> {
     match serde_json::from_str(&text) {
         Ok(v) => Some(v),
         Err(e) => {
-            eprintln!("flashpod flash: firmware manifest unusable ({}); pass --firmware", e);
+            eprintln!("flashpod firmware write: firmware manifest unusable ({}); name a firmware file: flashpod firmware write --target T FIRMWARE", e);
             None
         }
     }
@@ -125,7 +125,7 @@ pub fn choose_model(manifest: &Value, want: Option<&str>) -> Model {
     }
     if let Some(w) = want {
         if read_only(w) {
-            eprintln!("flashpod flash: writing {} firmware isn't supported yet (untested on hardware); \
+            eprintln!("flashpod firmware write: writing {} firmware isn't supported yet (untested on hardware); \
                        inspect and firmware extract still read it", w);
             return Model::Bail;
         }
@@ -133,7 +133,7 @@ pub fn choose_model(manifest: &Value, want: Option<&str>) -> Model {
             return Model::One(m.clone());
         }
         let known: Vec<String> = models.iter().map(|m| st(&m["id"])).collect();
-        eprintln!("flashpod flash: unknown model {} (known: {})", py_repr(w), known.join(", "));
+        eprintln!("flashpod firmware write: unknown model {} (known: {})", py_repr(w), known.join(", "));
         return Model::Bail;
     }
     if !term::stdin_isatty() {
@@ -157,7 +157,7 @@ pub fn choose_model(manifest: &Value, want: Option<&str>) -> Model {
     match pick(&choice, models.len()) {
         Some(i) => Model::One(models[i].clone()),
         None => {
-            eprintln!("flashpod flash: invalid selection");
+            eprintln!("flashpod firmware write: invalid selection");
             Model::Bail
         }
     }
@@ -168,21 +168,21 @@ pub fn choose_firmware(manifest: &Value, model: Option<&Value>) -> Option<Value>
     let mut entries = manifest["firmwares"].as_array().cloned().unwrap_or_default();
     entries.retain(|e| !e["models"].as_array().is_some_and(|a| !a.is_empty() && a.iter().all(|x| read_only(&st(x)))));
     if entries.is_empty() {
-        eprintln!("flashpod flash: no firmware listed in the manifest; pass --firmware");
+        eprintln!("flashpod firmware write: no firmware listed in the manifest; name a firmware file: flashpod firmware write --target T FIRMWARE");
         return None;
     }
     if let Some(m) = model {
         let id = st(&m["id"]);
         entries.retain(|e| e["models"].as_array().is_some_and(|a| a.iter().any(|x| st(x) == id)));
         if entries.is_empty() {
-            eprintln!("flashpod flash: no firmware hosted for {}; pass --firmware", model_name(m));
+            eprintln!("flashpod firmware write: no firmware hosted for {}; name a firmware file: flashpod firmware write --target T FIRMWARE", model_name(m));
             return None;
         }
     }
     let default = entries.iter().position(|e| e["default"].as_bool().unwrap_or(false) || e["default"].as_i64().is_some_and(|v| v != 0)).unwrap_or(0);
     if !term::stdin_isatty() {
         let e = &entries[default];
-        eprintln!("flashpod flash: using default firmware {} ({}, {})", st(&e["file"]), st(&e["generation"]), st(&e["version"]));
+        eprintln!("flashpod firmware write: using default firmware {} ({}, {})", st(&e["file"]), st(&e["generation"]), st(&e["version"]));
         return Some(e.clone());
     }
     println!("Firmware for {} (newest first):\n", model.map(model_name).unwrap_or_else(|| "your iPod".into()));
@@ -218,7 +218,7 @@ pub fn choose_firmware(manifest: &Value, model: Option<&Value>) -> Option<Value>
     match pick(&choice, entries.len()) {
         Some(i) => Some(entries[i].clone()),
         None => {
-            eprintln!("flashpod flash: invalid selection");
+            eprintln!("flashpod firmware write: invalid selection");
             None
         }
     }
@@ -315,37 +315,37 @@ pub fn ensure_firmware(entry: &Value, base_url: &str) -> Option<String> {
         if want.is_none() || sha256(&dst) == want {
             return Some(dst);
         }
-        eprintln!("flashpod flash: cached {} failed checksum; re-downloading", name);
+        eprintln!("flashpod firmware write: cached {} failed checksum; re-downloading", name);
         let _ = std::fs::remove_file(&dst);
     }
     let url = match url {
         Some(u) => u,
         None => {
-            eprintln!("flashpod flash: no download URL for {}; pass --firmware", name);
+            eprintln!("flashpod firmware write: no download URL for {}; name a firmware file: flashpod firmware write --target T FIRMWARE", name);
             return None;
         }
     };
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("flashpod flash: cannot create cache dir: {}", flashpod_core::tags::os_error(&e, &dir));
+        eprintln!("flashpod firmware write: cannot create cache dir: {}", flashpod_core::tags::os_error(&e, &dir));
         return None;
     }
-    eprintln!("flashpod flash: downloading {}\n  from {}", name, url);
+    eprintln!("flashpod firmware write: downloading {}\n  from {}", name, url);
     let tmp = format!("{}.part", dst);
     if let Err(e) = download(&url, &tmp, entry["size"].as_u64()) {
         let _ = std::fs::remove_file(&tmp);
-        eprintln!("flashpod flash: download failed ({}).", e);
+        eprintln!("flashpod firmware write: download failed ({}).", e);
         eprintln!("  Or download it yourself from {} and pass it with --firmware.", url);
         return None;
     }
     if want.is_some() && sha256(&tmp) != want {
         let _ = std::fs::remove_file(&tmp);
-        eprintln!("flashpod flash: {} failed checksum verification \u{2014} refusing to use it.\n  Re-run to retry, or download from {} and pass --firmware.", name, url);
+        eprintln!("flashpod firmware write: {} failed checksum verification \u{2014} refusing to use it.\n  Re-run to retry, or download from {} and name it: flashpod firmware write --target T FIRMWARE.", name, url);
         return None;
     }
     if let Err(e) = std::fs::rename(&tmp, &dst) {
-        eprintln!("flashpod flash: {}", flashpod_core::tags::os_error(&e, &tmp));
+        eprintln!("flashpod firmware write: {}", flashpod_core::tags::os_error(&e, &tmp));
         return None;
     }
-    eprintln!("flashpod flash: verified and cached {}", name);
+    eprintln!("flashpod firmware write: verified and cached {}", name);
     Some(dst)
 }

@@ -18,6 +18,7 @@ mod data;
 mod export;
 mod detect;
 mod devices;
+mod drivecmd;
 mod flash;
 mod host;
 mod rawdev;
@@ -235,87 +236,6 @@ fn diagnose_missing_db(fs: &mut flashpod_core::fat::Fat32, device: &str) {
     eprintln!("flashpod: no iTunesDB on {} (iPod_Control is present but iPod_Control/iTunes/iTunesDB is missing). If this iPod should have music, that's unexpected \u{2014} otherwise run `flashpod music init`.", device);
 }
 
-/// The `flash` branch of cli.main: the firmware is picked (and fetched)
-/// first, as the invoking user; then, for a device, root via sudo, the
-/// resolved choices carried across as flags.
-fn cmd_flash(ns: &mut Ns) -> i32 {
-    if b(ns, "self_test") {
-        return flash::self_test();
-    }
-    let device = s(ns, "device").filter(|d| !d.is_empty());
-    let image = device.as_deref().map(flash::is_image).unwrap_or(false);
-    let mut max_data_gb = None;
-    let firmware = match s(ns, "firmware").filter(|f| !f.is_empty()) {
-        Some(f) => f,
-        None => {
-            let manifest = match catalog::load_manifest() {
-                Some(m) => m,
-                None => return 1,
-            };
-            let model = match catalog::choose_model(&manifest, s(ns, "model").as_deref().filter(|m| !m.is_empty())) {
-                catalog::Model::Bail => return 1,
-                catalog::Model::Any => None,
-                catalog::Model::One(m) => Some(m),
-            };
-            let entry = match catalog::choose_firmware(&manifest, model.as_ref()) {
-                Some(e) => e,
-                None => return 1,
-            };
-            max_data_gb = entry["max_data_gb"].as_f64();
-            match catalog::ensure_firmware(&entry, manifest["base_url"].as_str().unwrap_or("")) {
-                Some(f) => f,
-                None => return 1,
-            }
-        }
-    };
-    if let Some(Val::Float(f)) = ns.get("max_data_gb") {
-        max_data_gb = Some(*f);
-    }
-    // carry both resolved choices across the sudo boundary
-    ns.insert("firmware".into(), Val::Str(firmware.clone()));
-    ns.insert("max_data_gb".into(), max_data_gb.map(Val::Float).unwrap_or(Val::None));
-    if !b(ns, "arm") && !b(ns, "no_arm") {
-        let armed = flash::ask_arm(&firmware);
-        ns.insert("arm".into(), Val::Bool(armed));
-        ns.insert("no_arm".into(), Val::Bool(!armed));
-    }
-    if !image && !b(ns, "dry_run") && !crate::platform::current().is_admin() {
-        let args = detect::cmd_args(ns);
-        if term::stdin_isatty() {
-            eprintln!("flashpod flash: writing to a disk needs root \u{2014} elevating via sudo...");
-            crate::platform::current().elevate(&args);
-        }
-        eprintln!("flashpod flash: Run as root (sudo) to write to a block device.\n  sudo {}",
-                  host::self_cmd().into_iter().chain(args).collect::<Vec<_>>().join(" "));
-        return 1;
-    }
-    let o = flash::Opts {
-        device,
-        firmware,
-        yes: b(ns, "yes"),
-        dry_run: b(ns, "dry_run"),
-        no_format: b(ns, "no_format"),
-        arm: b(ns, "arm"),
-        lba48: b(ns, "lba48"),
-        max_data_gb,
-        hfs: s(ns, "format").as_deref() == Some("hfs"),
-    };
-    // offer init on the fresh card only when it will work: interactive, a
-    // real write, a FAT32 data partition
-    let offer = term::stdin_isatty() && !o.dry_run && !o.no_format && !o.hfs;
-    let mut hook = |dev: &str, open: Option<(&mut dyn flashpod_core::block::BlockDevice, u64)>| match open {
-        Some((f, data_start)) => data::offer_init_after_flash_image(dev, f, data_start),
-        None => data::offer_init_after_flash_unix(dev),
-    };
-    match flash::flash(&o, if offer { Some(&mut hook) } else { None }) {
-        Ok(rc) => rc,
-        Err(flash::Exit(msg)) => {
-            eprintln!("{}", msg);
-            1
-        }
-    }
-}
-
 /// The `burn` branch of cli.main: root via sudo unless it's a dry run.
 fn cmd_burn(ns: &Ns) -> i32 {
     if !b(ns, "dry_run") && !crate::platform::current().is_admin() {
@@ -376,15 +296,33 @@ fn build_cli() -> Cli {
     exp.add(Arg::pos("target", Nargs::One).help("card image file, or a card or iPod disk (needs root)"));
     exp.add(Arg::opt(&["-o", "--output"]).required().help("file to write; a FILE.json note is written beside it"));
     exp.add(Arg::opt(&["--image"]).choices(&["osos", "aupd", "rsrc"]).help("one image from the firmware directory, not the whole partition"));
-    let w = cli.add_parser_at(fw, "write", &[], "write iPod firmware to a CF/SD card (erases it)", &[]);
-    flash_args(cli.parser(w));
+    let w = cli.add_parser_at(fw, "write", &[], "write firmware into a drive's firmware partition (nothing else changes)", &[]);
+    firmware_write_args(cli.parser(w));
     let pp = cli.add_parser_at(fw, "patches", &[], "list the patch library", &[]);
     cli.parser(pp).add(Arg::flag(&["--offline"]).help("don't refresh the library; use the copy on this computer"));
     for (name, help) in [("patch", "build a patched firmware"),
-                         ("arm", "arm a disk-mode (boot ROM) update"), ("recover", "the boot ROM recovery routine")] {
+                         ("arm", "now `flashpod bootrom arm`"), ("recover", "now `flashpod help recovery`")] {
         let i = cli.add_parser_at(fw, name, &[], help, &[]);
         cli.parser(i).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
     }
+
+    let drv = cli.add_parser_at(0, "drive", &[], "a drive's partition layout", &[]);
+    cli.add_subparsers_at(drv, "drive_command");
+    let pa = cli.add_parser_at(drv, "partition", &[], "partition a drive for an iPod (erases it)", &[]);
+    partition_args(cli.parser(pa));
+
+    let br = cli.add_parser_at(0, "bootrom", &[], "the iPod's boot ROM (disk-mode update)", &[]);
+    cli.add_subparsers_at(br, "bootrom_command");
+    let arm = cli.add_parser_at(br, "arm", &[], "arm a disk-mode update from the firmware on the drive", &[]);
+    let ap = cli.parser(arm);
+    ap.add(Arg::pos("program", Nargs::Optional).help("the program to arm (default: the one in the firmware on the drive)"));
+    ap.add(Arg::opt(&["--target"]).help("the drive or image file (else a chooser)"));
+    ap.add(Arg::flag(&["--yes"]).help("skip the arm confirmation"));
+    ap.add(Arg::flag(&["--dry-run"]).help("show what would change, write nothing"));
+    let dis = cli.add_parser_at(br, "disarm", &[], "clear an armed disk-mode update", &[]);
+    let dp = cli.parser(dis);
+    dp.add(Arg::opt(&["--target"]).help("the drive or image file (else a chooser)"));
+    dp.add(Arg::flag(&["--dry-run"]).help("show what would change, write nothing"));
 
     let card = cli.add_parser_at(0, "card", &[], "card image files", &[]);
     cli.add_subparsers_at(card, "card_command");
@@ -433,8 +371,6 @@ fn build_cli() -> Cli {
 
     let em = cli.add_parser_at(0, "emulate", &[], "boot a firmware or card image in emupod", &[]);
     cli.parser(em).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
-    let fl = cli.add_parser_at(0, "flash", &[], "write iPod firmware to a CF/SD card (alias of `firmware write`)", &[]);
-    flash_args(cli.parser(fl));
     cli
 }
 
@@ -447,33 +383,35 @@ fn burn_args(burn: &mut Parser) {
     burn.add(Arg::flag(&["--no-verify"]).help("don't read the card back afterwards"));
 }
 
-/// flash's arguments (firmware write, and its alias flash).
-fn flash_args(fl: &mut Parser) {
-    fl.add(Arg::pos("device", Nargs::Optional).help("target disk, e.g. /dev/sdb (else interactive chooser)"));
-    fl.add(Arg::opt(&["--firmware"]).help(
-        "firmware image: raw Firmware-*, .bin.gz or .ipsw (default: choose from firmware/firmware.json)"));
-    fl.add(Arg::opt(&["--model"]).help(
-        "iPod model to flash for, e.g. 1G, 2G, 3G (default: ask; decides which firmware is offered)"));
-    fl.add(Arg::flag(&["--yes"]).help("skip the typed ERASE confirmation"));
-    fl.add(Arg::flag(&["--dry-run"]).help("show the plan, write nothing"));
-    fl.add(Arg::flag(&["--no-format"]).help(
-        "keep the data partition and its music: rewrite only the firmware and partition table (refused \
-         unless the card's data partition matches)"));
-    fl.add_mutex(vec![
-        Arg::flag(&["--arm"]).help(
-            "arm the card for a disk-mode update: on its next start on FireWire power, the iPod reprograms its \
-             flash chip from the card (small risk; see README)"),
-        Arg::flag(&["--no-arm"]).help("don't arm, and don't ask"),
-    ]);
-    fl.add(Arg::flag(&["--lba48"]).help(
-        "EXPERIMENTAL: use the whole card for data, past the 128 GiB LBA28 cap (only works on an LBA48-patched iPod)"));
-    fl.add(Arg::opt(&["--max-data-gb"]).float().help(
-        "cap the data partition to N decimal GB, overriding the firmware's manifest limit (use to probe an \
-         early firmware's real disk-size ceiling)"));
-    fl.add(Arg::flag(&["--self-test"]).help("validate layout logic and exit (no hardware)"));
-    fl.add(Arg::opt(&["--format"]).choices(&["fat32", "hfs"]).help(
-        "the data partition's filesystem: fat32 (default; Windows-style card, any OS) or hfs (a Mac card: Apple \
-         Partition Map + HFS+; add music through the OS's mount)"));
+/// firmware write's arguments (#115 decision 15), plus the 0.x flash
+/// flags, hidden, so each can say where it went.
+fn firmware_write_args(p: &mut Parser) {
+    p.add(Arg::pos("firmware_file", Nargs::Optional).metavar("FIRMWARE").help(
+        "firmware image: raw Firmware-*, .bin.gz or .ipsw (default: choose from the catalog)"));
+    p.add(Arg::opt(&["--target"]).help("the drive or image file (else a chooser)"));
+    p.add(Arg::opt(&["--model"]).help(
+        "iPod model, e.g. 1G, 2G, 3G (default: ask; decides which firmware is offered)"));
+    p.add(Arg::flag(&["--yes"]).help("skip the confirmation (never approves an erase)"));
+    p.add(Arg::flag(&["--dry-run"]).help("show the plan, write nothing"));
+    p.add(Arg::flag(&["--no-format"]).hidden());
+    p.add(Arg::flag(&["--arm"]).hidden());
+    p.add(Arg::flag(&["--no-arm"]).hidden());
+    p.add(Arg::flag(&["--lba48"]).hidden());
+    p.add(Arg::opt(&["--max-data-gb"]).dest("max_data_gb_moved").hidden());
+    p.add(Arg::opt(&["--format"]).dest("format_moved").hidden());
+    p.add(Arg::opt(&["--firmware"]).dest("firmware_flag").hidden());
+}
+
+/// drive partition's arguments.
+fn partition_args(p: &mut Parser) {
+    p.add(Arg::opt(&["--target"]).help("the drive or image file (else a chooser)"));
+    p.add(Arg::flag(&["--128g"]).dest("cap_128g").help(
+        "cap the data partition at 128 GiB, for firmware without large-disk support (Apple's)"));
+    p.add(Arg::opt(&["--max-data-gb"]).float().help("cap the data partition to N decimal GB"));
+    p.add(Arg::opt(&["--format"]).choices(&["fat32", "hfs"]).help(
+        "the data partition's filesystem: fat32 (default; any OS) or hfs (a Mac drive: Apple Partition Map + HFS+)"));
+    p.add(Arg::flag(&["--yes"]).help("skip the typed ERASE confirmation"));
+    p.add(Arg::flag(&["--dry-run"]).help("show the plan, write nothing"));
 }
 
 /// 0.x command names and their 1.0 spelling.
@@ -482,6 +420,9 @@ const RENAMED: [(&str, &str); 10] = [
     ("delete", "music rm"), ("erase", "music rm"), ("init", "music init"), ("rebuild", "music rebuild"),
     ("burn", "card burn"),
 ];
+
+/// 0.x `flash` did three things; 1.0 splits them (#115).
+const FLASH_SPLIT: &str = "drive partition --target T` (erases the drive), then `flashpod firmware write --target T FIRMWARE";
 
 /// A 0.x command name in place of the command: say its new name. The
 /// top-level options before it are skipped (--mount and --raw take a value).
@@ -496,6 +437,9 @@ fn renamed_command(args: &[String]) -> Option<&'static str> {
         if a.starts_with('-') {
             i += 1;
             continue;
+        }
+        if a == "flash" {
+            return Some(FLASH_SPLIT);
         }
         return RENAMED.iter().find(|(old, _)| *old == a).map(|(_, new)| *new);
     }
@@ -538,11 +482,12 @@ fn main() {
         "music" => s(&ns, "music_command"),
         "firmware" => s(&ns, "firmware_command"),
         "card" => s(&ns, "card_command"),
+        "drive" => s(&ns, "drive_command"),
+        "bootrom" => s(&ns, "bootrom_command"),
         _ => None,
     };
     let handler = match (group.as_str(), sub.as_deref()) {
         ("music", Some(m)) => m.to_string(),
-        ("firmware", Some("write")) | ("flash", None) => "flash".to_string(),
         ("card", Some("burn")) => "burn".to_string(),
         (g, Some(m)) => format!("{} {}", g, m),
         (g, None) => g.to_string(),
@@ -551,7 +496,18 @@ fn main() {
     ns.insert("group".into(), Val::Str(group.clone()));
     let command = handler;
     let code = match command.as_str() {
-        "flash" => cmd_flash(&mut ns),
+        "firmware write" => drivecmd::cmd_firmware_write(&ns),
+        "drive partition" => drivecmd::cmd_partition(&ns),
+        "bootrom arm" => drivecmd::cmd_bootrom(&ns, "arm"),
+        "bootrom disarm" => drivecmd::cmd_bootrom(&ns, "disarm"),
+        "firmware arm" => {
+            eprintln!("flashpod firmware arm: that is now `flashpod bootrom arm`.");
+            2
+        }
+        "firmware recover" => {
+            eprintln!("flashpod firmware recover: there is no recover command; `flashpod help recovery` (coming in flashpod 1.0) says what to do.");
+            2
+        }
         "firmware extract" => cmd_extract(&ns),
         "firmware patches" => patches::cmd_patches(&ns),
         "inspect" => cmd_inspect(&ns),
@@ -609,7 +565,7 @@ fn cmd_card_new(ns: &Ns) -> i32 {
     let made = std::fs::OpenOptions::new().write(true).create_new(true).open(&image).and_then(|f| f.set_len(size));
     match made {
         Ok(()) => {
-            println!("Made {} ({} bytes, sparse). Next: flashpod firmware write {}", image, size, image);
+            println!("Made {} ({} bytes, sparse). Next: flashpod drive partition --target {}, then flashpod firmware write --target {} FIRMWARE", image, size, image, image);
             0
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {

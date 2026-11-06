@@ -93,7 +93,7 @@ fn render(cands: &[Disk]) {
 /// Lock, dismount and take offline every volume on `dev`, holding the
 /// handles so Windows doesn't bring them back mid-write. A refused lock
 /// gets a forced dismount (invalidating whoever holds it) and a retry.
-fn lock_volumes(dev: &str) -> Vec<(String, Option<String>)> {
+pub(crate) fn lock_volumes(dev: &str) -> Vec<(String, Option<String>)> {
     let mut held = HELD.lock().unwrap_or_else(|p| p.into_inner());
     let mut out = Vec::new();
     for (vol, _) in Windows.device_mountpoints(dev) {
@@ -127,6 +127,118 @@ fn lock_volumes(dev: &str) -> Vec<(String, Option<String>)> {
 
 fn release_locks() {
     HELD.lock().unwrap_or_else(|p| p.into_inner()).clear();
+}
+
+/// While prepare_raw_write has sector 0 cleared: (disk, original MBR, the
+/// FAT partition's LBA).
+static CLEARED: Mutex<Option<(String, Vec<u8>, u64)>> = Mutex::new(None);
+
+/// _mbr_fat_part_start: LBA of the first 0x0b/0x0c partition, or 0.
+fn mbr_fat_part_start(mbr: &[u8]) -> u64 {
+    if mbr.len() < SECTOR as usize || mbr[510..512] != [0x55, 0xaa] {
+        return 0;
+    }
+    for poff in [446usize, 462, 478, 494] {
+        if matches!(mbr[poff + 4], 0x0b | 0x0c) {
+            let start = u32::from_le_bytes(mbr[poff + 8..poff + 12].try_into().unwrap()) as u64;
+            if start != 0 {
+                return start;
+            }
+        }
+    }
+    0
+}
+
+/// prepare_raw_write: make raw music writes inside the FAT partition
+/// succeed. Windows refuses them while it has a volume or a partmgr claim on
+/// the partition. Locking the volume in place was not enough on CI's
+/// Windows runner (a locked, dismounted, offlined volume still answered
+/// "[Errno 21] The device is not ready"), so this does what flash does
+/// before it writes a FAT: lock the volumes (their filesystem dismounts
+/// cleanly), then clear sector 0 so Windows drops the volumes and the claim
+/// (invalidate_cached_partitions). finalize_raw_write puts the MBR back;
+/// meanwhile raw_part_start_override says where the FAT partition is.
+/// (Python's prepare_raw_write clears only when there is no volume.)
+pub(crate) fn prepare_raw_write(dev: &str) {
+    if !is_physical_drive(dev) {
+        return;
+    }
+    let results = lock_volumes(dev);
+    // a volume has several access paths (E: and \\.\Volume{...}); once one
+    // holds the lock the others are refused, so report failures only when
+    // nothing locked.
+    if results.iter().any(|(_, e)| e.is_none()) {
+        for (vol, err) in &results {
+            if err.is_none() {
+                eprintln!("flashpod: locked volume {} for raw writing", vol);
+            }
+        }
+    } else {
+        for (vol, err) in &results {
+            eprintln!("flashpod: could NOT lock volume {} ({}) \u{2014} Something may be holding the volume (AV scan, indexer, an open Explorer window).", vol, err.as_deref().unwrap_or(""));
+        }
+    }
+    let mut mbr = vec![0u8; SECTOR as usize];
+    let read = open_handle(dev, false).and_then(|h| crate::sys::read_at(&h, &mut mbr, 0));
+    let part_start = if read.is_ok() { mbr_fat_part_start(&mbr) } else { 0 };
+    if part_start == 0 {
+        eprintln!("flashpod: no FAT partition found in {}'s MBR \u{2014} cannot enable raw writes.", dev);
+        return;
+    }
+    Windows.invalidate_cached_partitions(dev);
+    *CLEARED.lock().unwrap_or_else(|p| p.into_inner()) = Some((dev.to_string(), mbr, part_start));
+    eprintln!("flashpod: temporarily cleared {}'s partition table so Windows lets go of the FAT partition (LBA {}). The original table is restored when flashpod finishes.", dev, part_start);
+    wait_writable(dev, part_start);
+}
+
+/// Windows drops the volume after the table is cleared, but not always at
+/// once: on CI the clear once took 20 s and the first write after it still
+/// got "[Errno 21] The device is not ready". Wait until the FAT partition's
+/// boot sector reads and writes back (its own bytes, so nothing changes),
+/// for up to 30 s; the command then reports whatever error remains.
+fn wait_writable(dev: &str, lba: u64) {
+    let t0 = std::time::Instant::now();
+    let mut said = false;
+    loop {
+        let ok = open_handle(dev, true).and_then(|h| {
+            let mut b = vec![0u8; SECTOR as usize];
+            crate::sys::read_at(&h, &mut b, lba * SECTOR)?;
+            crate::sys::write_all_at(&h, &b, lba * SECTOR)
+        });
+        match ok {
+            Ok(()) => return,
+            Err(e) if t0.elapsed() >= std::time::Duration::from_secs(30) => {
+                eprintln!("flashpod: {} still refuses writes to the FAT partition after 30 s ({}).", dev, e);
+                return;
+            }
+            Err(_) => {
+                if !said && t0.elapsed() >= std::time::Duration::from_secs(2) {
+                    eprintln!("flashpod: waiting for Windows to release {}'s FAT partition...", dev);
+                    said = true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+    }
+}
+
+/// raw_part_start_override: the FAT partition's LBA while sector 0 is cleared.
+pub(crate) fn raw_part_start_override() -> Option<u64> {
+    CLEARED.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map(|c| c.2)
+}
+
+/// finalize_raw_write / _restore_mbr: write the saved MBR back and re-read
+/// the table so Windows finds the partition again. Only the first call after
+/// a clear does anything.
+pub(crate) fn finalize_raw_write() {
+    let saved = CLEARED.lock().unwrap_or_else(|p| p.into_inner()).take();
+    if let Some((dev, mbr, _)) = saved {
+        if let Ok(h) = open_handle(&dev, true) {
+            let _ = crate::sys::write_all_at(&h, &mbr, 0);
+            let _ = h.sync_all();
+            let _ = crate::sys::ioctl(&h, IOCTL_DISK_UPDATE_PROPERTIES, 0);
+        }
+    }
 }
 
 impl Platform for Windows {

@@ -13,7 +13,7 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(windows)]
-mod windows;
+pub(crate) mod windows;
 #[cfg(any(target_os = "macos", windows))]
 mod aligned;
 
@@ -28,8 +28,10 @@ pub trait Platform: Sync {
     fn choose_device(&self) -> Result<String, Exit>;
     /// Refuse a missing disk, a partition node, or the system disk.
     fn validate_target(&self, dev: &str) -> Result<(), Exit>;
+    #[allow(dead_code)] // kept for `flashpod setup` (#115)
     /// The disk's size in 512-byte sectors, 0 when it can't be read.
     fn device_sectors(&self, dev: &str) -> u64;
+    #[allow(dead_code)] // kept for `flashpod setup` (#115)
     /// Partition `index` of whole disk `dev`.
     fn partition_node(&self, dev: &str, index: u32) -> String;
     /// Before the raw write: unmount every partition of `dev`.
@@ -40,6 +42,7 @@ pub trait Platform: Sync {
     fn reread_partition_table(&self, dev: &str);
     /// After the raw write: push everything to the card.
     fn flush_buffers(&self, dev: &str);
+    #[allow(dead_code)] // kept for `flashpod setup` (#115)
     /// The command that mounts FAT partition `part` at `mnt`.
     fn fat_mount_cmd(&self, part: &str, mnt: &str) -> Vec<String>;
     /// Flush, unmount and power off / eject `dev` (prints its own progress).
@@ -52,6 +55,7 @@ pub trait Platform: Sync {
     fn open_raw(&self, dev: &str, write: bool) -> std::io::Result<Box<dyn BlockDevice>> {
         Ok(Box::new(FileDevice::open(std::path::Path::new(dev), write)?))
     }
+    #[allow(dead_code)] // kept for `flashpod setup` (#115)
     /// The post-flash init runs through the still-open raw handle before the
     /// MBR is written (Windows: no table = no volume to block the writes),
     /// rather than on a mount after it.

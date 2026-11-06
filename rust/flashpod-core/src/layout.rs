@@ -156,12 +156,17 @@ pub fn write_layout_body(dev: &mut dyn crate::BlockDevice, fw: &[u8], total: u64
 
 /// layout.verify_region: Err(VerifyFailed) with its details.
 pub fn verify_region(dev: &mut dyn crate::BlockDevice, fw: &[u8]) -> Result<(), crate::Error> {
+    verify_region_at(dev, FW_START, fw)
+}
+
+/// verify_region for a firmware partition starting at sector `start`.
+pub fn verify_region_at(dev: &mut dyn crate::BlockDevice, start: u64, fw: &[u8]) -> Result<(), crate::Error> {
     use crate::error::{Error, ErrorKind};
     let n = fw.len();
     let mut off = 0usize;
     while off < n {
         let want = (1usize << 20).min(n - off);
-        let chunk = dev.read_vec(FW_START * SECTOR + off as u64, want)?;
+        let chunk = dev.read_vec(start * SECTOR + off as u64, want)?;
         if chunk.is_empty() {
             return Err(Error::new(ErrorKind::VerifyFailed, "short read")
                 .detail("reason", "short_read").detail("got", off).detail("want", n));
@@ -171,7 +176,7 @@ pub fn verify_region(dev: &mut dyn crate::BlockDevice, fw: &[u8]) -> Result<(), 
                 let bad = off + i;
                 return Err(Error::new(ErrorKind::VerifyFailed, "mismatch")
                     .detail("reason", "mismatch").detail("offset", bad)
-                    .detail("sector", FW_START + bad as u64 / SECTOR)
+                    .detail("sector", start + bad as u64 / SECTOR)
                     .detail("card", b).detail("image", fw[bad]));
             }
         }

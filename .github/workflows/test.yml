@@ -279,12 +279,14 @@ jobs:
         run: python scripts/test_cli_args.py --rust rust/target/release/flashpod --layout-1
 
       # `terminal` is left out: its expectations are written against the
-      # 2686d4a baseline, not this tree.
+      # 2686d4a baseline, not this tree. terminal_flash, flash_catalog and
+      # wrong_confirm test 0.x flash's own interface, which 1.0 split into
+      # drive partition + firmware write (#115): test_firmware_write_only.py.
       - name: Every command on card images, the picker key by key
         run: |
           python scripts/test_cli_unchanged.py --baseline . --rust rust/target/release/flashpod --layout-1 \
             --only lifecycle rejections limits terminal_dblimit terminal_space terminal_keys \
-                   terminal_lines terminal_rebuild terminal_flash flash_catalog wrong_confirm \
+                   terminal_lines terminal_rebuild \
                    mount mount_terminal_db mount_terminal_space mount_terminal_big picker
 
       # Ubuntu 24.04 confines unprivileged user namespaces through AppArmor;
@@ -309,9 +311,18 @@ jobs:
           python scripts/test_cli_targets.py --rust rust/target/release/flashpod --loop
           python scripts/test_cli_targets.py --rust rust/target/release/flashpod --mutants
 
+      # #115: firmware write changes nothing outside the firmware partition
+      # (MBR and Apple map), and no prompt path writes without a yes (the
+      # confirmations, the ERASE, the large-disk gate, the catalog choosers).
+      - name: firmware write writes only firmware; every prompt needs a yes
+        run: |
+          python scripts/test_firmware_write_only.py --rust rust/target/release/flashpod
+          python scripts/test_firmware_write_only.py --rust rust/target/release/flashpod --mutants
+
   # The Rust CLI's Platform layer (rust/flashpod-cli/src/platform) driving a
   # real block device: simulate_card.py attaches a backing file (losetup,
-  # hdiutil, a diskpart VHD), runs `flash` with the init and music prompts,
+  # hdiutil, a diskpart VHD), runs `flash` with the init and music prompts
+  # (with --layout-1: drive partition, firmware write, music init, music add),
   # then ls/add --raw, and verifies the backing file. On macOS and Windows
   # this is the only place those backends run at all; on Linux it is the
   # only automatic run of a real device write (the fake host's root mode

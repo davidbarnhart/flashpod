@@ -39,6 +39,15 @@ def run(binary, *args):
     return r.returncode, r.stdout, r.stderr
 
 
+def flash(binary, img, fw, *partition_args):
+    """0.x `flash IMG --firmware FW --yes`: partition, then the firmware (#115)."""
+    rc, out, err = run(binary, "drive", "partition", "--target", img, "--yes", *partition_args)
+    if rc:
+        return rc, out, err
+    rc, o, e = run(binary, "firmware", "write", "--target", img, fw, "--yes")
+    return rc, out + o, err + e
+
+
 def extract_checks(binary, work):
     print("firmware extract")
     fw = synth.write_firmware(os.path.join(work, "fw.bin"))
@@ -47,7 +56,7 @@ def extract_checks(binary, work):
     img = os.path.join(work, "card.img")
     with open(img, "wb") as f:
         f.truncate(200 << 20)
-    rc, out, err = run(binary, "firmware", "write", img, "--firmware", fw, "--yes", "--no-arm")
+    rc, out, err = flash(binary, img, fw)
     check(rc == 0, "firmware write on a blank image (rc %d)" % rc)
 
     o = os.path.join(work, "osos.bin")
@@ -100,7 +109,7 @@ def export_checks(binary, work):
     img = os.path.join(work, "lib.img")
     with open(img, "wb") as f:
         f.truncate(200 << 20)
-    run(binary, "firmware", "write", img, "--firmware", fw, "--yes", "--no-arm")
+    flash(binary, img, fw)
     run(binary, "music", "init", "--raw", img, "Test Pod")
     rc, out, err = run(binary, "music", "add", "--raw", img, music)
     said = [l for l in (out + err).splitlines() if "added" in l]
@@ -230,7 +239,7 @@ def playlist_checks(binary, work):
     img = os.path.join(work, "pl.img")
     with open(img, "wb") as f:
         f.truncate(200 << 20)
-    run(binary, "firmware", "write", img, "--firmware", fw, "--yes", "--no-arm")
+    flash(binary, img, fw)
     run(binary, "music", "init", "--raw", img)
     run(binary, "music", "add", "--raw", img, music)
 
@@ -278,7 +287,7 @@ def inspect_checks(binary, work):
         with open(img, "wb") as f:
             f.truncate(150 << 20)
     for img in (fresh, full):
-        run(binary, "firmware", "write", img, "--firmware", fw, "--yes", "--no-arm")
+        flash(binary, img, fw)
         run(binary, "music", "init", "--raw", img)
     run(binary, "music", "add", "--raw", full, music)
     for name, img in (("blank", blank), ("flashed and initialized", fresh), ("with music", full)):
@@ -304,7 +313,7 @@ def contribute_checks(binary, work):
     img = os.path.join(work, "u.img")
     with open(img, "wb") as f:
         f.truncate(150 << 20)
-    run(binary, "firmware", "write", img, "--firmware", fw, "--yes", "--no-arm")
+    flash(binary, img, fw)
     rc, out, err = run(binary, "inspect", img, "--json")
     installed = json.loads(out)["firmware"] if rc == 0 else {}
     check(installed.get("build") == "unrecognized", "the synthetic build is unrecognized")
@@ -335,7 +344,7 @@ def contribute_checks(binary, work):
         s_img = os.path.join(work, "u-stock.img")
         with open(s_img, "wb") as f:
             f.truncate(150 << 20)
-        run(binary, "firmware", "write", s_img, "--firmware", stock, "--yes", "--no-arm")
+        flash(binary, s_img, stock)
         rc, out, err = run(binary, "inspect", s_img)
         check(rc == 0 and "firmware: stock" in out and "github" not in out, "a stock catalog build: no link")
     else:
@@ -356,14 +365,13 @@ def gen4_checks(binary, work):
     with open(img, "wb") as f:
         f.truncate(150 << 20)
     before = hashlib.sha256(open(img, "rb").read()).hexdigest()
-    rc, out, err = run(binary, "firmware", "write", img, "--firmware", fw4, "--yes", "--no-arm")
+    rc, out, err = run(binary, "firmware", "write", "--target", img, fw4, "--yes")
     check(rc == 1 and "4th-generation or later" in err, "a 4G firmware file is refused: %r" % err.strip()[-120:])
     check(hashlib.sha256(open(img, "rb").read()).hexdigest() == before, "the refused write left the image untouched")
     for model in ("4G", "photo"):
-        rc, out, err = run(binary, "firmware", "write", img, "--model", model, "--yes", "--no-arm")
+        rc, out, err = run(binary, "firmware", "write", "--target", img, "--model", model, "--yes")
         check(rc == 1 and "isn't supported yet" in err, "--model %s is refused" % model)
-    rc, out, err = run(binary, "firmware", "write", img, "--firmware", synth.write_firmware(os.path.join(work, "fw-1g.bin")),
-                       "--yes", "--no-arm")
+    rc, out, err = flash(binary, img, synth.write_firmware(os.path.join(work, "fw-1g.bin")))
     check(rc == 0, "a 1G/2G firmware still writes (rc %d)" % rc)
     # a 4G card as an older flashpod wrote it: the library's layout steps
     # directly (card.flash refuses 4G now too), read by 1.0
@@ -413,7 +421,7 @@ def card_new_checks(binary, work):
 
 
 def mac_card_checks(binary, work):
-    print("firmware write --format hfs (a Mac card)")
+    print("drive partition --format hfs + firmware write (a Mac card)")
     import struct
     sys.path.insert(0, os.path.dirname(HERE))
     from flashpod import ipod_flash
@@ -422,8 +430,8 @@ def mac_card_checks(binary, work):
     size = 300 * 10**6 // 512 * 512
     with open(img, "wb") as f:
         f.truncate(size)
-    rc, out, err = run(binary, "firmware", "write", img, "--firmware", fw, "--yes", "--no-arm", "--format", "hfs")
-    check(rc == 0 and "Apple Partition Map + HFS+" in err, "write --format hfs (rc %d)" % rc)
+    rc, out, err = flash(binary, img, fw, "--format", "hfs")
+    check(rc == 0 and "Apple Partition Map + HFS+" in err, "drive partition --format hfs, then firmware write (rc %d)" % rc)
     with open(img, "rb") as f:
         head = f.read(4 * 512)
     total = size // 512
@@ -468,8 +476,8 @@ def mac_card_checks(binary, work):
           and 0 < fsys.get("free_bytes", 0) < fsys.get("total_bytes", 0) <= data_n * 512
           and info.get("ipod_compatible") is True and info.get("itunesdb", {}).get("state") == "not_read",
           "inspect reads the Mac card: apm, firmware present, a wrapped HFS+ volume no bigger than its partition")
-    rc, out, err = run(binary, "firmware", "write", img, "--firmware", fw, "--yes", "--no-format", "--format", "hfs")
-    check(rc == 1 and "--no-format" in err, "--no-format with --format hfs is refused")
+    rc, out, err = run(binary, "firmware", "write", "--target", img, fw, "--yes", "--no-format")
+    check(rc == 2 and "never touches the data partition" in err, "--no-format is gone: firmware write never formats (#115)")
 
 
 def main():

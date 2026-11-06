@@ -1025,6 +1025,26 @@ def disk_digest(image, mounted):
     return "fat:" + h.hexdigest()
 
 
+#: #115: flash steps compared by their chooser only / retired
+CHOOSER = [0]
+RETIRED = [0]
+
+
+def chooser_part(text):
+    """The device chooser's transcript: from the disk list (or the
+    nothing-found line) to the last selection prompt and its answer."""
+    lines = text.replace("\r\n", "\n").split("\n")
+    start = next((k for k, l in enumerate(lines)
+                  if "Attached removable storage" in l or "No removable/USB disks found" in l), None)
+    if start is None:
+        return None
+    # the colour that opens the list sits on the line before it
+    start = max(start - 1, 0) if lines[start - 1].strip() in ("\x1b[36m", "") else start
+    end = max([k for k, l in enumerate(lines) if "Select device number" in l]
+              + [k for k, l in enumerate(lines) if "No removable/USB disks found" in l])
+    return "\n".join(lines[start:end + 1])
+
+
 def run_scenario(name, sc, mode, cards, build, rust, root):
     run = os.path.join(root, "%s-%s-%s" % (name, mode, build))
     st = build_host(run, sc["host"], cards, mode, None)
@@ -1059,7 +1079,18 @@ def run_scenario(name, sc, mode, cards, build, rust, root):
             step = dict(step, argv=[a.format(fw=FIXTURE_FW, ipod_img=cards["ipod"], blank_img=cards["blank"],
                                              burntail_img=cards["burntail"])
                                     for a in step["argv"]])
-            if build == "rust" and LAYOUT_1:
+            if LAYOUT_1 and step["argv"][:1] == ["flash"]:
+                # #115: 0.x flash is split; only its device chooser carries
+                # over (drive partition with no --target). Without a terminal
+                # 1.0 asks for --target instead of offering one: retired.
+                if "pty" not in step:
+                    RETIRED[0] += build == "rust"
+                    recs.append({"step": i, "argv": step["argv"], "retired": True})
+                    continue
+                if build == "rust":
+                    step = dict(step, argv=["drive", "partition", "--dry-run"])
+                    CHOOSER[0] += 1
+            elif build == "rust" and LAYOUT_1:
                 step = dict(step, argv=layout1.argv_1_0(step["argv"]))
             rc, out, err = run_step(run, step, ["flashpod"])
             if build == "rust" and LAYOUT_1:
@@ -1071,6 +1102,9 @@ def run_scenario(name, sc, mode, cards, build, rust, root):
                 state = json.load(f)
             mounted = mounted or any(c["tool"] == "mount" or c["tool"] == "udisksctl" and c["argv"][:1] == ["mount"]
                                      for c in calls)
+            if LAYOUT_1 and step["argv"][:1] in (["flash"], ["drive"]):
+                recs.append({"step": i, "argv": step["argv"], "chooser": chooser_part(out + err)})
+                continue
             recs.append({
                 "step": i, "argv": step["argv"], "rc": rc,
                 "stdout": normalize(out, run, selfcmd), "stderr": normalize(err, run, selfcmd),
@@ -1129,7 +1163,7 @@ def main():
         ref = {}
         asked = sum(1 for _name, sc in chosen for step in sc["steps"]
                     if opts.mode in step.get("modes", (opts.mode,)))
-        log, counted = {}, [0]
+        log, counted, retired = {}, [0], [0]
 
         def compare(rust, label, dump=False):
             bad, n = [], 0
@@ -1145,7 +1179,18 @@ def main():
                     log[name] = {"python": a, "rust": b}
                 shutil.rmtree(os.path.join(root, "%s-%s-rust" % (name, opts.mode)), ignore_errors=True)
                 for ra, rb in zip(a, b):
+                    if rb.get("retired"):
+                        if not label:
+                            retired[0] += 1
+                        continue
                     n += 1
+                    if "chooser" in ra:
+                        if not label:
+                            counted[0] += 1
+                        if ra["chooser"] is None or ra["chooser"] != rb["chooser"]:
+                            bad.append((name, ra["step"], ra["argv"], "chooser", ra["chooser"] or "(no chooser)",
+                                        rb["chooser"] or "(no chooser)"))
+                        continue
                     if dump:
                         print("==== %s step %d %s rc=%s" % (name, ra["step"], ra["argv"], ra["rc"]))
                         print(ra["stdout"] + ra["stderr"])
@@ -1173,7 +1218,8 @@ def main():
 
         def result():
             return result_line.emit(
-                "cli_fakehost_" + opts.mode, os.path.dirname(HERE), asked, n, counted[0],
+                # #115: a retired step is asked of 0.x only (counted by name below)
+                "cli_fakehost_" + opts.mode, os.path.dirname(HERE), asked - retired[0], n, counted[0],
                 bool(bad), log, binary=opts.rust,
                 mutants=(len(mutant_names) - len(missed), len(mutant_names)) if opts.mutants else None)
         if not bad:
@@ -1181,6 +1227,9 @@ def main():
             if LAYOUT_1:
                 print("  layout 1.0: the Rust side ran the 1.0 command names; %d output line(s) or "
                       "recorded call(s) had their 1.0 names read back" % NORMALIZED[0])
+                print("  #115: %d flash step(s) compared by their device chooser only (drive partition "
+                      "--dry-run); %d retired (1.0 asks for --target without a terminal)"
+                      % (CHOOSER[0], RETIRED[0]))
             return result()
         print("DIFFERENT: %d of %d steps (%s mode)" % (len(bad), n, opts.mode))
         for name, i, argv, key, x, y in bad:

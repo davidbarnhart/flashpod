@@ -35,13 +35,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import synth_fixtures as synth  # noqa: E402
 
-NOT_BUILT = ["firmware list", "firmware patch", "firmware arm", "firmware recover", "emulate"]
+NOT_BUILT = ["firmware list", "firmware patch", "emulate"]
+# #115: names kept so a 0.x habit is told the new one (rc 2)
+MOVED = {"firmware arm": "bootrom arm", "firmware recover": "help recovery"}
 EXEMPT = {"firmware patches": "reads the patch library; it has no target"}
-GROUPS = ["firmware", "card", "music"]
+GROUPS = ["firmware", "drive", "bootrom", "card", "music"]
 MUSIC = ["music ls", "music list", "music add", "music rm", "music remove", "music delete",
          "music erase", "music init", "music rebuild", "music export", "music playlist"]
 NOT_APPLICABLE = {
-    "mount": "inspect, firmware extract/write, flash, card new and card burn take a file or disk, not a mount",
+    "mount": "inspect, firmware extract/write, drive partition, bootrom, card new and card burn take a file "
+             "or disk, not a mount",
     "card": "card new makes a file",
 }
 
@@ -85,6 +88,14 @@ def step(binary, key, args, target, kind, decoy, refused=False, line=False, env=
     return out
 
 
+def flash(binary, img, fw):
+    """0.x `flash IMG --firmware FW --yes`: partition, then the firmware (#115)."""
+    rc, out, err = run(binary + ["drive", "partition", "--target", img, "--yes"])
+    if rc == 0:
+        rc, out, err = run(binary + ["firmware", "write", "--target", img, fw, "--yes"])
+    return rc, out, err
+
+
 def music_steps(binary, flag, target, kind, decoy, music, work):
     """The music commands in an order that gives each one something to do."""
     def go(key, *args):
@@ -110,8 +121,11 @@ def image_cells(binary, fw, music, work, decoy):
     img = os.path.join(work, "target.img")
     step(binary, "card new", [img, "200M"], img, "image file", decoy)
     step(binary, "inspect", [img], img, "image file", decoy)
-    step(binary, "firmware write", [img, "--firmware", fw, "--yes", "--no-arm"], img, "image file", decoy)
-    step(binary, "flash", [img, "--firmware", fw, "--yes", "--no-arm"], img, "image file", decoy)
+    step(binary, "drive partition", ["--target", img, "--yes"], img, "image file", decoy, line=True)
+    step(binary, "firmware write", ["--target", img, fw, "--yes"], img, "image file", decoy, line=True)
+    # the synthetic firmware's aupd is no program flashpod knows: arm refuses
+    step(binary, "bootrom arm", ["--target", img, "--yes"], img, "image file", decoy, refused=True)
+    step(binary, "bootrom disarm", ["--target", img], img, "image file", decoy, line=True)
     step(binary, "firmware extract", [img, "-o", os.path.join(work, "fw-out.bin")], img, "image file", decoy)
     music_steps(binary, "--raw", img, "image file", decoy, music, work)
     # burn's target is the disk it writes; a file is not one
@@ -141,7 +155,7 @@ def loop_mount_cells(binary, fw, music, work):
     img = os.path.join(work, "mounted.img")
     with open(img, "wb") as f:
         f.truncate(200 << 20)
-    rc, _, err = run(binary + ["firmware", "write", img, "--firmware", fw, "--yes", "--no-arm"])
+    rc, _, err = flash(binary, img, fw)
     check(rc == 0, "the image to mount is flashed (rc %d) %s" % (rc, err.strip()[-200:] if rc else ""))
     # the data partition's own loop device: partition nodes don't appear on CI's runner
     with open(img, "rb") as f:
@@ -172,8 +186,10 @@ def card_cells(binary, fw, music, work, decoy):
     root = ["sudo", "-n", "env", "PATH=" + os.environ["PATH"]] + binary
     try:
         step(root, "inspect", [node], node, "card", decoy)
-        step(root, "firmware write", [node, "--firmware", fw, "--yes", "--no-arm"], node, "card", decoy)
-        step(root, "flash", [node, "--firmware", fw, "--yes", "--no-arm"], node, "card", decoy)
+        step(root, "drive partition", ["--target", node, "--yes"], node, "card", decoy)
+        step(root, "firmware write", ["--target", node, fw, "--yes"], node, "card", decoy)
+        step(root, "bootrom arm", ["--target", node, "--yes"], node, "card", decoy, refused=True)
+        step(root, "bootrom disarm", ["--target", node], node, "card", decoy)
         step(root, "firmware extract", [node, "-o", os.path.join(work, "card-fw.bin")], node, "card", decoy)
         music_steps(root, "--raw", node, "card", decoy, music, work)
         # burn only takes a removable disk, which a loop device is not: the
@@ -189,7 +205,7 @@ def card_cells(binary, fw, music, work, decoy):
         burnable = os.path.join(work, "burn.img")
         with open(burnable, "wb") as f:
             f.truncate(100 << 20)
-        run(binary + ["firmware", "write", burnable, "--firmware", fw, "--yes", "--no-arm"])
+        flash(binary, burnable, fw)
         env = dict(os.environ, PATH=fake + os.pathsep + os.environ["PATH"])
         step(binary, "card burn", [burnable, node, "--dry-run"], node, "card", decoy, env=env)
     finally:
@@ -216,10 +232,13 @@ def walk_checks(binary, loop):
         rc, _, err = run(binary + key.split())
         check(rc == 2 and "not built yet" in err,
               "%s still says not built yet: when built, move it into a cell (#100-#103)" % key)
+    for key, new in MOVED.items():
+        rc, _, err = run(binary + key.split())
+        check(rc == 2 and ("`flashpod %s`" % new) in err, "%s says it is now `flashpod %s`" % (key, new))
     for key, why in EXEMPT.items():
         print("  exempt %s: %s" % (key, why))
     for key in offered:
-        if key in NOT_BUILT or key in EXEMPT:
+        if key in NOT_BUILT or key in EXEMPT or key in MOVED:
             continue
         check(key in COVERED["image file"], "%s is checked on an image file" % key)
         if key in MUSIC:
@@ -253,7 +272,7 @@ PY
 def mutants(binary, work):
     """Strip the target from one command at a time: the run must fail, on that
     command and no other."""
-    keys = [k for k in listed_commands([binary]) if k not in NOT_BUILT and k not in EXEMPT]
+    keys = [k for k in listed_commands([binary]) if k not in NOT_BUILT and k not in EXEMPT and k not in MOVED]
     for key in keys:
         wrap = os.path.join(work, "strip-%s" % key.replace(" ", "-"))
         with open(wrap, "w") as f:

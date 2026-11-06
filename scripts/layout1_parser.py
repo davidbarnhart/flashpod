@@ -27,6 +27,10 @@ RENAMED = [
     ("burn", "card burn"),
 ]
 
+# 0.x flash did three things; 1.0 splits them (#115)
+FLASH_SPLIT = ("drive partition --target T` (erases the drive), then "
+               "`flashpod firmware write --target T FIRMWARE")
+
 
 def renamed_command(args):
     i = 0
@@ -38,41 +42,38 @@ def renamed_command(args):
         if a.startswith("-"):
             i += 1
             continue
+        if a == "flash":
+            return FLASH_SPLIT
         return dict(RENAMED).get(a)
     return None
 
 
-def flash_args(p):
-    p.add_argument("device", nargs="?", help="target disk, e.g. /dev/sdb (else interactive chooser)")
-    p.add_argument("--firmware", default=None,
-                   help="firmware image: raw Firmware-*, .bin.gz or .ipsw "
-                        "(default: choose from firmware/firmware.json)")
+def firmware_write_args(p):
+    p.add_argument("firmware_file", nargs="?", metavar="FIRMWARE",
+                   help="firmware image: raw Firmware-*, .bin.gz or .ipsw (default: choose from the catalog)")
+    p.add_argument("--target", help="the drive or image file (else a chooser)")
     p.add_argument("--model", default=None,
-                   help="iPod model to flash for, e.g. 1G, 2G, 3G "
-                        "(default: ask; decides which firmware is offered)")
+                   help="iPod model, e.g. 1G, 2G, 3G (default: ask; decides which firmware is offered)")
+    p.add_argument("--yes", action="store_true", help="skip the confirmation (never approves an erase)")
+    p.add_argument("--dry-run", action="store_true", help="show the plan, write nothing")
+    # the 0.x flash flags, hidden, so each can say where it went
+    for flag in ("--no-format", "--arm", "--no-arm", "--lba48"):
+        p.add_argument(flag, action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--max-data-gb", dest="max_data_gb_moved", help=argparse.SUPPRESS)
+    p.add_argument("--format", dest="format_moved", help=argparse.SUPPRESS)
+    p.add_argument("--firmware", dest="firmware_flag", help=argparse.SUPPRESS)
+
+
+def partition_args(p):
+    p.add_argument("--target", help="the drive or image file (else a chooser)")
+    p.add_argument("--128g", dest="cap_128g", action="store_true",
+                   help="cap the data partition at 128 GiB, for firmware without large-disk support (Apple's)")
+    p.add_argument("--max-data-gb", type=float, default=None, help="cap the data partition to N decimal GB")
+    p.add_argument("--format", choices=["fat32", "hfs"],
+                   help="the data partition's filesystem: fat32 (default; any OS) or hfs "
+                        "(a Mac drive: Apple Partition Map + HFS+)")
     p.add_argument("--yes", action="store_true", help="skip the typed ERASE confirmation")
     p.add_argument("--dry-run", action="store_true", help="show the plan, write nothing")
-    p.add_argument("--no-format", action="store_true",
-                   help="keep the data partition and its music: rewrite "
-                        "only the firmware and partition table (refused "
-                        "unless the card's data partition matches)")
-    arm = p.add_mutually_exclusive_group()
-    arm.add_argument("--arm", action="store_true",
-                     help="arm the card for a disk-mode update: on its next "
-                          "start on FireWire power, the iPod reprograms its "
-                          "flash chip from the card (small risk; see README)")
-    arm.add_argument("--no-arm", action="store_true", help="don't arm, and don't ask")
-    p.add_argument("--lba48", action="store_true",
-                   help="EXPERIMENTAL: use the whole card for data, past the "
-                        "128 GiB LBA28 cap (only works on an LBA48-patched iPod)")
-    p.add_argument("--max-data-gb", type=float, default=None,
-                   help="cap the data partition to N decimal GB, overriding the "
-                        "firmware's manifest limit (use to probe an early "
-                        "firmware's real disk-size ceiling)")
-    p.add_argument("--self-test", action="store_true", help="validate layout logic and exit (no hardware)")
-    p.add_argument("--format", choices=["fat32", "hfs"],
-                   help="the data partition's filesystem: fat32 (default; Windows-style card, any OS) or hfs "
-                        "(a Mac card: Apple Partition Map + HFS+; add music through the OS's mount)")
 
 
 def burn_args(p):
@@ -116,12 +117,29 @@ def build():
     p.add_argument("-o", "--output", required=True, help="file to write; a FILE.json note is written beside it")
     p.add_argument("--image", choices=["osos", "aupd", "rsrc"],
                    help="one image from the firmware directory, not the whole partition")
-    flash_args(fsub.add_parser("write", help="write iPod firmware to a CF/SD card (erases it)"))
+    firmware_write_args(fsub.add_parser("write", help="write firmware into a drive's firmware partition (nothing else changes)"))
     fsub.add_parser("patches", help="list the patch library").add_argument(
         "--offline", action="store_true", help="don't refresh the library; use the copy on this computer")
     for name, help_ in (("patch", "build a patched firmware"),
-                        ("arm", "arm a disk-mode (boot ROM) update"), ("recover", "the boot ROM recovery routine")):
+                        ("arm", "now `flashpod bootrom arm`"), ("recover", "now `flashpod help recovery`")):
         fsub.add_parser(name, help=help_).add_argument("args", nargs="*", metavar="ARG")
+
+    drv = sub.add_parser("drive", help="a drive's partition layout")
+    dsub = drv.add_subparsers(dest="drive_command")
+    dsub.required = True
+    partition_args(dsub.add_parser("partition", help="partition a drive for an iPod (erases it)"))
+
+    br = sub.add_parser("bootrom", help="the iPod's boot ROM (disk-mode update)")
+    bsub = br.add_subparsers(dest="bootrom_command")
+    bsub.required = True
+    p = bsub.add_parser("arm", help="arm a disk-mode update from the firmware on the drive")
+    p.add_argument("program", nargs="?", help="the program to arm (default: the one in the firmware on the drive)")
+    p.add_argument("--target", help="the drive or image file (else a chooser)")
+    p.add_argument("--yes", action="store_true", help="skip the arm confirmation")
+    p.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
+    p = bsub.add_parser("disarm", help="clear an armed disk-mode update")
+    p.add_argument("--target", help="the drive or image file (else a chooser)")
+    p.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
 
     card = sub.add_parser("card", help="card image files")
     csub = card.add_subparsers(dest="card_command")
@@ -172,8 +190,19 @@ def build():
 
     sub.add_parser("emulate", help="boot a firmware or card image in emupod").add_argument(
         "args", nargs="*", metavar="ARG")
-    flash_args(sub.add_parser("flash", help="write iPod firmware to a CF/SD card (alias of `firmware write`)"))
     return parser
+
+# the flags `firmware write` lost (#115), each naming where it went
+MOVED = [
+    ("no_format", "--no-format: `firmware write` never touches the data partition now, so drop it."),
+    ("arm", "--arm: arming is its own command now: `flashpod bootrom arm --target T`."),
+    ("no_arm", "--no-arm: `firmware write` never arms now, so drop it."),
+    ("lba48", "--lba48: `flashpod drive partition` uses the whole drive by default now (--128g caps it)."),
+    ("max_data_gb_moved", "--max-data-gb: it moved to `flashpod drive partition`."),
+    ("format_moved", "--format: it moved to `flashpod drive partition`."),
+    ("firmware_flag", "--firmware: the firmware file is the argument now and the drive is --target: "
+                      "`flashpod firmware write --target T FIRMWARE`."),
+]
 
 
 def main(argv):
@@ -183,6 +212,11 @@ def main(argv):
                          "run `flashpod --help`).\n" % new)
         return 2
     opts = build().parse_args(argv)
+    if opts.command == "firmware" and opts.firmware_command == "write":
+        for k, msg in MOVED:
+            if getattr(opts, k) not in (None, False):
+                sys.stderr.write("flashpod firmware write: %s\n" % msg)
+                return 2
     print("parsed: %r" % sorted(vars(opts).items()))
     return 0
 

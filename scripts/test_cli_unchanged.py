@@ -173,8 +173,13 @@ SCENARIOS = {
         S("add --raw {img} {music}", expect="couldn't open a FAT"),
         # 64 MiB leaves too few clusters for FAT32: flashed, but unformatted
         S("flash {img} --firmware {fw} --yes", write=True,
-          expect="too small for FAT32"),
-        S("init --raw {img}", expect="couldn't open a FAT"),
+          expect="too small for FAT32", intended_115={
+              "why": "1.0 drive partition refuses a card too small for "
+                     "FAT32 before writing, instead of leaving it unformatted",
+              "rc": 1, "sha": "unchanged"}),
+        S("init --raw {img}", expect="couldn't open a FAT", intended_115={
+            "why": "follows the refusal above: the image is still blank",
+            "sha": "unchanged"}),
         {"py": "image", "size": 80 << 20},
         S("flash {img} --firmware {fw} --yes", write=True),
         # BUG in the baseline: add on a card with no iTunesDB exited 1
@@ -664,6 +669,11 @@ def run_scenario(name, steps, tree, work, fixtures, runner, rust=None):
             records.append({"step": i, "py": step["py"], "sha": sha(img)})
             continue
         argv = [expand_arg(a, ctx) for a in step["argv"]]
+        split = layout1.flash_split(argv) if rust and LAYOUT_1 else False
+        if split is None:
+            records.append({"step": i, "argv": " ".join(step["argv"]),
+                            "retired": True, "sha": sha(img)})
+            continue
         if rust and LAYOUT_1:
             argv = layout1.argv_1_0(argv)
         cmd = ([rust] if rust else [sys.executable, runner]) + argv
@@ -676,6 +686,18 @@ def run_scenario(name, steps, tree, work, fixtures, runner, rust=None):
             extra.setdefault("FP_DISK_FREE", str(10 << 30))
         env = env_for(work, tree, extra)
         before = sha(img)
+        if split:
+            rc, out, err = 0, "", ""
+            for part in split:
+                rc, o, e = run_pipe([rust] + part, env, work)
+                out, err = out + o, err + e
+                if rc:
+                    break
+            records.append({"step": i, "argv": " ".join(step["argv"]),
+                            "split": True, "rc": rc, "stdout": out,
+                            "stderr": err, "sha": sha(img),
+                            "changed": sha(img) != before})
+            continue
         if "pty" in step:
             answers = [(rx, ans.format(**ctx)) for rx, ans in step["pty"]]
             rc, out, err = run_pty(cmd, env, work, answers)
@@ -738,6 +760,9 @@ def rewrite_baseline(records):
 
 #: streams compared so far, for the RESULT line
 COMPARED = [0]
+#: #115: flash steps run as drive partition + firmware write / retired
+SPLIT = [0]
+RETIRED = [0]
 
 
 def compare(name, a, b, steps=None):
@@ -749,7 +774,19 @@ def compare(name, a, b, steps=None):
     steps = steps or [{}] * len(a)
     for ra, rb, step in zip(a, b, steps):
         intended = step.get("intended") or {}
-        for key in ("rc", "stdout", "stderr", "sha"):
+        if LAYOUT_1 and step.get("intended_115"):
+            intended = step["intended_115"]
+        if rb.get("retired"):
+            # #115: a 0.x flash-interface step, no 1.0 counterpart here
+            RETIRED[0] += 1
+            continue
+        keys = ("rc", "stdout", "stderr", "sha")
+        if rb.get("split"):
+            # #115: drive partition + firmware write, judged by result only
+            keys = ("rc", "sha")
+            intended = step.get("intended_115") or {}
+            SPLIT[0] += 1
+        for key in keys:
             if "argv" in ra:             # a py setup step runs no command
                 COMPARED[0] += 1
             if key + "_has" in intended:          # named: must contain
@@ -942,13 +979,18 @@ def main():
         main_compared = [0]          # the mutant runs below compare too
 
         def result(failed, new=None, mutants=None):
-            entered = 0
+            entered = retired = 0
             if new is not None:
                 entered = sum(1 for name in base
                               for ra, rb in zip(base[name], new.get(name, []))
                               if "argv" in ra and "rc" in ra and "rc" in rb)
+                # #115: a retired step is asked of 0.x only; 1.0 has no such
+                # command, and the summary line counts it by name
+                retired = sum(1 for name in base
+                              for ra, rb in zip(base[name], new.get(name, []))
+                              if "argv" in ra and rb.get("retired"))
             return result_line.emit(
-                "cli_unchanged", tree, asked, entered, main_compared[0], failed,
+                "cli_unchanged", tree, asked - retired, entered, main_compared[0], failed,
                 {"baseline": base, "tree": new}, binary=bin_, mutants=mutants)
         if opts.dump:
             for name, recs in base.items():
@@ -991,8 +1033,16 @@ def main():
             print("DIFFERENT from baseline (%s):" % tree)
             print("\n\n".join(diffs))
             return result(True, new)
-        named = [(n, i, st["intended"]["why"]) for n, steps in SCENARIOS.items()
-                 if n in base for i, st in enumerate(steps) if st.get("intended")]
+        def applied(st):
+            # what compare() applied: under layout 1.0 a split flash step
+            # carries only its #115 change
+            if LAYOUT_1 and st.get("intended_115"):
+                return st["intended_115"]
+            if LAYOUT_1 and st.get("argv", [""])[0] == "flash":
+                return None
+            return st.get("intended")
+        named = [(n, i, applied(st)["why"]) for n, steps in SCENARIOS.items()
+                 if n in base for i, st in enumerate(steps) if applied(st)]
         print("IDENTICAL: %s matches the baseline on every step "
               "(rc, stdout, stderr, image sha256)%s" % (
                   tree, ", except %d NAMED change%s, each exactly as stated:"
@@ -1006,6 +1056,10 @@ def main():
             print("  - layout 1.0: the Rust side ran the 1.0 command names; "
                   "%d output line(s) had their 1.0 program name read back"
                   % NORMALIZED[0])
+            print("  - #115: %d flash step(s) ran as `drive partition` + "
+                  "`firmware write`, judged by exit code and image bytes; "
+                  "%d flash-interface step(s) retired (see "
+                  "scripts/test_firmware_write_only.py)" % (SPLIT[0], RETIRED[0]))
 
         if opts.mutants:
             failed_to_catch = []

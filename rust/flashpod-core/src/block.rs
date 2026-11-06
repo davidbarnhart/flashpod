@@ -88,8 +88,15 @@ impl FileDevice {
 }
 
 impl BlockDevice for FileDevice {
+    /// A regular file's length; anything else (a Linux block device, whose
+    /// metadata says 0) is asked by seeking to its end.
     fn len(&self) -> io::Result<u64> {
-        Ok(self.file.metadata()?.len())
+        let m = self.file.metadata()?;
+        if m.is_file() {
+            return Ok(m.len());
+        }
+        use std::io::{Seek, SeekFrom};
+        (&self.file).seek(SeekFrom::End(0))
     }
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
         use std::io::{Read, Seek, SeekFrom};

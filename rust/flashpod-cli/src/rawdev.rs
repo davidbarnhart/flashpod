@@ -105,6 +105,13 @@ impl RawDevice {
         o.read(true).write(writable);
         if physical {
             o.share_mode(1 | 2); // FILE_SHARE_READ | FILE_SHARE_WRITE
+            if writable {
+                // Python's open_raw_fat goes through platform.open_raw, which
+                // locks, dismounts and offlines the disk's volumes first:
+                // without that, Windows refuses writes inside a volume it
+                // mounted (a freshly partitioned card's FAT).
+                crate::platform::windows::lock_volumes(path);
+            }
         }
         let file = o.open(path)?;
         let bounce = if physical { Some(Bounce::new(max_xfer as usize * SECTOR)) } else { None };
@@ -176,6 +183,12 @@ impl BlockDevice for RawDevice {
 /// MBR's 0x0b/0x0c partition (a whole disk).
 pub fn open_raw_fat(dev: &mut RawDevice, max_xfer: u64) -> Result<Fat32<'_>, String> {
     let mut sec = Sectors { dev, part_start: 0, max_xfer };
+    #[cfg(windows)]
+    if let Some(start) = crate::platform::windows::raw_part_start_override() {
+        // prepare_raw_write cleared the MBR, so the walk below would find nothing.
+        sec.part_start = start;
+        return Fat32::open(sec);
+    }
     let boot = sec.read(0, 1)?;
     let is_fat = &boot[82..85] == b"FAT" && boot[510..512] == [0x55, 0xaa];
     if !is_fat && boot[510..512] == [0x55, 0xaa] {

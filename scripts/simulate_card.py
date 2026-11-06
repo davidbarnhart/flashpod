@@ -296,6 +296,9 @@ def build_answers(dev, music_dir, model="0"):
         # the post-flash init offer -- the whole point of the exercise
         (re.compile(r"Run init on .* now\? \[Y/n\]\s*$"),         "y"),
         (re.compile(r"Load music onto the card now\? \[Y/n\]\s*$"), "y"),
+        # 1.0's separate music commands offer the eject after a raw write;
+        # the script detaches the card itself
+        (re.compile(r"Eject the iPod now\? \[Y/n\]\s*$"),           "n"),
         # the picker gate: typing a path here skips the full-screen picker
         # (which a scripted pty can't drive)
         (re.compile(r"Press ENTER to select content to add to the iPod "
@@ -622,17 +625,40 @@ def main():
 
         cmd = opts.flashpod.split() if opts.flashpod else \
             [sys.executable, "-m", "flashpod"]
-        argv = cmd + words("flash") + [node, "--yes"]
-        if opts.firmware:
-            argv += ["--firmware", opts.firmware]
-        say("running: %s" % " ".join(argv))
+        if LAYOUT_1[0]:
+            # 1.0 has no flash (#115): the drive is partitioned, then the
+            # firmware written, then the library made and loaded, each its
+            # own command -- the four steps 0.x flash ran with its offers.
+            # Without --firmware, the pty answers the same model/firmware
+            # choosers flash asked.
+            fw = [opts.firmware] if opts.firmware else []
+            steps = [cmd + ["drive", "partition", "--target", node, "--yes"],
+                     cmd + ["firmware", "write", "--target", node, "--yes"] + fw,
+                     cmd + ["music", "init", "--raw", node, "iPod"],
+                     cmd + ["music", "add", "--raw", node, music]]
+        else:
+            argv = cmd + words("flash") + [node, "--yes"]
+            if opts.firmware:
+                argv += ["--firmware", opts.firmware]
+            steps = [argv]
 
         env_root = os.environ.copy()
         env_root.setdefault("PYTHONPATH", ROOT)
         os.environ.update(env_root)
 
-        rc, _ = run_flashpod(argv, music, node, model=opts.model)
-        say("flashpod exited %d" % rc, GRN if rc == 0 else RED)
+        for argv in steps:
+            if LAYOUT_1[0] and sys.platform == "darwin" and "music" in argv:
+                # macOS auto-mounts the FAT that `drive partition` made, and
+                # a mounted slice makes the --raw open fail EBUSY: unmount
+                # it, as a --raw user on a Mac must (0.x flash wrote through
+                # that mount instead).
+                subprocess.run(["diskutil", "unmountDisk", node],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            say("running: %s" % " ".join(argv))
+            rc, _ = run_flashpod(argv, music, node, model=opts.model)
+            say("flashpod exited %d" % rc, GRN if rc == 0 else RED)
+            if rc != 0:
+                break
     finally:
         detach(node, img)
 

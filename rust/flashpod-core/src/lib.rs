@@ -8,6 +8,7 @@
 pub mod api;
 pub mod block;
 pub mod card;
+pub mod drive;
 pub mod entropy;
 pub mod error;
 pub mod export;
