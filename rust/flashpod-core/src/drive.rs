@@ -96,14 +96,7 @@ fn firmware_partition(dev: &mut dyn BlockDevice) -> Result<(Table, Partition), E
 /// for a build flashpod recognizes without it, None when flashpod can't
 /// tell (an unrecognized build).
 pub fn large_disk_support(fw: &[u8]) -> Option<bool> {
-    let mut read = |off: i64, n: usize| -> Vec<u8> {
-        if off < 0 || off as usize >= fw.len() {
-            return Vec::new();
-        }
-        let o = off as usize;
-        fw[o..(o + n).min(fw.len())].to_vec()
-    };
-    let d = firmware::describe_installed(&mut read, &firmware::catalog());
+    let d = describe(fw);
     if d["fixes"].as_array().map(|a| a.iter().any(|f| f == "large-disks")).unwrap_or(false) {
         return Some(true);
     }
@@ -111,6 +104,18 @@ pub fn large_disk_support(fw: &[u8]) -> Option<bool> {
         Some("unrecognized") | None => None,
         Some(_) => Some(false),
     }
+}
+
+/// describe_installed on firmware bytes in memory.
+pub fn describe(fw: &[u8]) -> serde_json::Value {
+    let mut read = |off: i64, n: usize| -> Vec<u8> {
+        if off < 0 || off as usize >= fw.len() {
+            return Vec::new();
+        }
+        let o = off as usize;
+        fw[o..(o + n).min(fw.len())].to_vec()
+    };
+    firmware::describe_installed(&mut read, &firmware::catalog())
 }
 
 /// Why this firmware can't use this drive's data partition, or None when

@@ -130,6 +130,11 @@ impl Arg {
         self.0.float = true;
         self
     }
+    /// dest=
+    pub fn dest(mut self, d: &str) -> Self {
+        self.0.dest = Some(d.to_string());
+        self
+    }
 }
 
 pub struct Parser {
