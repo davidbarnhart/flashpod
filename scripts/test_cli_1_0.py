@@ -401,22 +401,22 @@ def gen4_checks(binary, work):
 
 
 def card_new_checks(binary, work):
-    print("card new (sizes and refusals against card.create_blank's rules)")
+    print("image new (sizes and refusals against card.create_blank's rules)")
     sys.path.insert(0, os.path.dirname(HERE))
     from flashpod import card
     for text, want in (("150M", 150 * 10**6 // 512 * 512), ("1GiB", 1 << 30), ("200000001", 200000001 // 512 * 512)):
         img = os.path.join(work, "new-%s.img" % text)
-        rc, out, err = run(binary, "card", "new", img, text)
+        rc, out, err = run(binary, "image", "new", img, text)
         check(rc == 0 and os.path.getsize(img) == want, "%s makes %d bytes" % (text, want))
     img = os.path.join(work, "new-150M.img")
-    rc, out, err = run(binary, "card", "new", img, "300M")
+    rc, out, err = run(binary, "image", "new", img, "300M")
     check(rc == 1 and "already exists" in err and os.path.getsize(img) == 150 * 10**6 // 512 * 512,
           "an existing image is refused and left as it was")
     tiny = card.min_card_bytes() - 512
-    rc, out, err = run(binary, "card", "new", os.path.join(work, "tiny.img"), str(tiny))
+    rc, out, err = run(binary, "image", "new", os.path.join(work, "tiny.img"), str(tiny))
     check(rc == 1 and "smaller than" in err and not os.path.exists(os.path.join(work, "tiny.img")),
           "one sector under min_card_bytes() (%d) is refused, nothing made" % card.min_card_bytes())
-    rc, out, err = run(binary, "card", "new", os.path.join(work, "bad.img"), "lots")
+    rc, out, err = run(binary, "image", "new", os.path.join(work, "bad.img"), "lots")
     check(rc == 2 and "not a size" in err, "a non-size is a usage error")
 
 

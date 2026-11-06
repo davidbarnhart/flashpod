@@ -31,7 +31,7 @@ mod term;
 mod window;
 mod winnow;
 
-const VERSION: &str = "0.5.2";
+const VERSION: &str = "1.0.0-dev";
 
 /// What Python's `orunknown` does.
 fn orunknown(s: &Option<String>) -> String {
@@ -241,10 +241,10 @@ fn cmd_burn(ns: &Ns) -> i32 {
     if !b(ns, "dry_run") && !crate::platform::current().is_admin() {
         let args = detect::cmd_args(ns);
         if term::stdin_isatty() {
-            eprintln!("flashpod card burn: writing to a disk needs root \u{2014} elevating via sudo...");
+            eprintln!("flashpod drive restore: writing to a disk needs root \u{2014} elevating via sudo...");
             crate::platform::current().elevate(&args);
         }
-        eprintln!("flashpod card burn: needs root.\n  sudo {}", host::self_cmd().into_iter().chain(args).collect::<Vec<_>>().join(" "));
+        eprintln!("flashpod drive restore: needs root.\n  sudo {}", host::self_cmd().into_iter().chain(args).collect::<Vec<_>>().join(" "));
         return 1;
     }
     let image = s(ns, "image").unwrap_or_default();
@@ -282,34 +282,44 @@ fn build_cli() -> Cli {
         Arg::flag(&["--unsafe-queue"]).no_default().hidden(),
     ];
 
-    // 1.0 layout (#97): commands grouped by what they act on. `flash` stays
-    // as a top-level alias of `firmware write`.
+    // 1.0 layout (#97, #115): commands grouped by what they act on. A
+    // "(coming)" command parses its arguments and says it isn't built yet.
+    let coming = |cli: &mut Cli, at: usize, name: &str, help: &str| {
+        let i = cli.add_parser_at(at, name, &[], &format!("{} (coming)", help), &[]);
+        cli.parser(i).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
+    };
+
+    let st = cli.add_parser_at(0, "setup", &[], "set up a card step by step: partition, firmware, library, music", &[]);
+    cli.parser(st).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
+
     let inspect = cli.add_parser_at(0, "inspect", &[], "report everything about a card, iPod or image", &[]);
     cli.parser(inspect).add(Arg::pos("target", Nargs::One).help("card image file, or a card or iPod disk (needs root)"));
     cli.parser(inspect).add(Arg::flag(&["--json"]).help("print the report as JSON"));
 
-    let fw = cli.add_parser_at(0, "firmware", &[], "inspect, extract, patch and write firmware", &[]);
+    let drv = cli.add_parser_at(0, "drive", &[], "a whole drive: its partitions, copies to and from image files", &[]);
+    cli.add_subparsers_at(drv, "drive_command");
+    let pa = cli.add_parser_at(drv, "partition", &[], "partition a drive for an iPod (erases it)", &[]);
+    partition_args(cli.parser(pa));
+    coming(&mut cli, drv, "backup", "copy a whole drive into an image file");
+    let rs = cli.add_parser_at(drv, "restore", &[], "write a card image file onto a drive (erases it)", &[]);
+    burn_args(cli.parser(rs));
+
+    let img = cli.add_parser_at(0, "image", &[], "card image files", &[]);
+    cli.add_subparsers_at(img, "image_command");
+    let new = cli.add_parser_at(img, "new", &[], "make a blank card image", &[]);
+    cli.parser(new).add(Arg::pos("image", Nargs::One).help("the image file to make (must not exist)"));
+    cli.parser(new).add(Arg::pos("size", Nargs::One).help("its size: bytes, or with K/M/G/T (decimal, as cards are sold) or KiB/MiB/GiB/TiB"));
+
+    let fw = cli.add_parser_at(0, "firmware", &[], "write firmware to a drive, or copy it off one", &[]);
     cli.add_subparsers_at(fw, "firmware_command");
-    cli.add_parser_at(fw, "list", &[], "the firmware flashpod can write", &[]);
+    coming(&mut cli, fw, "list", "the firmware flashpod can write");
+    let w = cli.add_parser_at(fw, "write", &[], "write firmware into a drive's firmware partition (nothing else changes)", &[]);
+    firmware_write_args(cli.parser(w));
     let ex = cli.add_parser_at(fw, "extract", &[], "copy the firmware partition (or one image) off a card", &[]);
     let exp = cli.parser(ex);
     exp.add(Arg::pos("target", Nargs::One).help("card image file, or a card or iPod disk (needs root)"));
     exp.add(Arg::opt(&["-o", "--output"]).required().help("file to write; a FILE.json note is written beside it"));
     exp.add(Arg::opt(&["--image"]).choices(&["osos", "aupd", "rsrc"]).help("one image from the firmware directory, not the whole partition"));
-    let w = cli.add_parser_at(fw, "write", &[], "write firmware into a drive's firmware partition (nothing else changes)", &[]);
-    firmware_write_args(cli.parser(w));
-    let pp = cli.add_parser_at(fw, "patches", &[], "list the patch library", &[]);
-    cli.parser(pp).add(Arg::flag(&["--offline"]).help("don't refresh the library; use the copy on this computer"));
-    for (name, help) in [("patch", "build a patched firmware"),
-                         ("arm", "now `flashpod bootrom arm`"), ("recover", "now `flashpod help recovery`")] {
-        let i = cli.add_parser_at(fw, name, &[], help, &[]);
-        cli.parser(i).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
-    }
-
-    let drv = cli.add_parser_at(0, "drive", &[], "a drive's partition layout", &[]);
-    cli.add_subparsers_at(drv, "drive_command");
-    let pa = cli.add_parser_at(drv, "partition", &[], "partition a drive for an iPod (erases it)", &[]);
-    partition_args(cli.parser(pa));
 
     let br = cli.add_parser_at(0, "bootrom", &[], "the iPod's boot ROM (disk-mode update)", &[]);
     cli.add_subparsers_at(br, "bootrom_command");
@@ -324,23 +334,24 @@ fn build_cli() -> Cli {
     dp.add(Arg::opt(&["--target"]).help("the drive or image file (else a chooser)"));
     dp.add(Arg::flag(&["--dry-run"]).help("show what would change, write nothing"));
 
-    let card = cli.add_parser_at(0, "card", &[], "card image files", &[]);
-    cli.add_subparsers_at(card, "card_command");
-    let new = cli.add_parser_at(card, "new", &[], "make a blank card image", &[]);
-    cli.parser(new).add(Arg::pos("image", Nargs::One).help("the image file to make (must not exist)"));
-    cli.parser(new).add(Arg::pos("size", Nargs::One).help("its size: bytes, or with K/M/G/T (decimal, as cards are sold) or KiB/MiB/GiB/TiB"));
-    let burn = cli.add_parser_at(card, "burn", &[], "write a card image file to an SD/CF card (erases it)", &[]);
-    burn_args(cli.parser(burn));
+    let pt = cli.add_parser_at(0, "patch", &[], "firmware patches", &[]);
+    cli.add_subparsers_at(pt, "patch_command");
+    let pl = cli.add_parser_at(pt, "list", &[], "the patch library", &[]);
+    cli.parser(pl).add(Arg::flag(&["--offline"]).help("don't refresh the library; use the copy on this computer"));
+    coming(&mut cli, pt, "show", "one patch in full");
+    coming(&mut cli, pt, "apply", "build a patched firmware");
 
     let music = cli.add_parser_at(0, "music", &[], "the music library on an iPod, card or image", &[]);
     cli.add_subparsers_at(music, "music_command");
-    let i = cli.add_parser_at(music, "ls", &["list"], "list library", &common());
-    cli.parser(i).add(Arg::pos("field", Nargs::Optional).choices(&["all", "artist", "artists", "album", "albums"])
-        .help("'all' adds tracks to the tree; 'artist'/'album' print flat counts"));
+    let i = cli.add_parser_at(music, "list", &["ls"], "the library: artist/album tree, its tracks, or flat counts", &common());
+    cli.parser(i).add(Arg::pos("field", Nargs::Optional).choices(&["tracks", "artists", "albums"])
+        .help("'tracks' adds the tracks (with ids) to the tree; 'artists'/'albums' print flat counts"));
+    coming(&mut cli, music, "find", "search the library");
+    coming(&mut cli, music, "check", "check the library against the files on the card");
     let i = cli.add_parser_at(music, "add", &[], "add audio files", &common());
     cli.parser(i).add(Arg::pos("files", Nargs::Star).metavar("path")
         .help("audio files or directories (scanned recursively); prompts if omitted"));
-    let i = cli.add_parser_at(music, "rm", &["remove", "delete", "erase"], "remove tracks", &common());
+    let i = cli.add_parser_at(music, "remove", &["rm"], "remove tracks", &common());
     cli.parser(i).add(Arg::pos("what", Nargs::Plus).metavar("id|artist|album")
         .help("track ids, or `artist <name>` / `album <name>` to remove every matching track"));
     let i = cli.add_parser_at(music, "init", &[], "create directory structure + empty DB", &common());
@@ -356,25 +367,34 @@ fn build_cli() -> Cli {
     ]);
     let pl = cli.add_parser_at(music, "playlist", &[], "make and edit playlists", &common());
     cli.add_subparsers_at(pl, "playlist_command");
-    let i = cli.add_parser_at(pl, "ls", &[], "the playlists, or one playlist's tracks", &common());
+    let i = cli.add_parser_at(pl, "list", &["ls"], "the playlists, or one playlist's tracks", &common());
     cli.parser(i).add(Arg::pos("name", Nargs::Optional).help("a playlist to list the tracks of"));
     let i = cli.add_parser_at(pl, "new", &[], "make a playlist", &common());
     cli.parser(i).add(Arg::pos("name", Nargs::One).help("its name"));
     cli.parser(i).add(Arg::pos("ids", Nargs::Star).metavar("id").help("tracks to put in it, in order"));
-    for (name, help) in [("add", "add tracks to a playlist"), ("rm", "take tracks out of a playlist (they stay on the iPod)")] {
-        let i = cli.add_parser_at(pl, name, &[], help, &common());
+    for (name, aliases, help) in [("add", &[][..], "add tracks to a playlist"),
+                                  ("remove", &["rm"][..], "take tracks out of a playlist (they stay on the iPod)")] {
+        let i = cli.add_parser_at(pl, name, aliases, help, &common());
         cli.parser(i).add(Arg::pos("name", Nargs::One).help("the playlist"));
-        cli.parser(i).add(Arg::pos("ids", Nargs::Plus).metavar("id").help("track ids (from `flashpod music ls all`)"));
+        cli.parser(i).add(Arg::pos("ids", Nargs::Plus).metavar("id").help("track ids (from `flashpod music list tracks`)"));
     }
     let i = cli.add_parser_at(pl, "delete", &[], "delete a playlist (its tracks stay on the iPod)", &common());
     cli.parser(i).add(Arg::pos("name", Nargs::One).help("the playlist"));
 
-    let em = cli.add_parser_at(0, "emulate", &[], "boot a firmware or card image in emupod", &[]);
-    cli.parser(em).add(Arg::pos("args", Nargs::Star).metavar("ARG"));
+    let gm = cli.add_parser_at(0, "games", &[], "games on the iPod", &[]);
+    cli.add_subparsers_at(gm, "games_command");
+    coming(&mut cli, gm, "list", "the games on the iPod");
+    coming(&mut cli, gm, "add", "add a game");
+    coming(&mut cli, gm, "remove", "remove a game");
+
+    coming(&mut cli, 0, "emulate", "boot a firmware or card image in emupod");
+    coming(&mut cli, 0, "completion", "shell completion for bash, zsh or fish");
+    let h = cli.add_parser_at(0, "help", &[], "help on a topic: recovery (a card or iPod that won't start)", &[]);
+    cli.parser(h).add(Arg::pos("topic", Nargs::Optional).choices(&["recovery"]).help("the topic (default: the command list)"));
     cli
 }
 
-/// burn's arguments (card burn).
+/// burn's arguments (drive restore).
 fn burn_args(burn: &mut Parser) {
     burn.add(Arg::pos("image", Nargs::One).help("the card image file"));
     burn.add(Arg::pos("device", Nargs::Optional).help("target disk, e.g. /dev/sdc (else a chooser of removable disks)"));
@@ -414,36 +434,54 @@ fn partition_args(p: &mut Parser) {
     p.add(Arg::flag(&["--dry-run"]).help("show the plan, write nothing"));
 }
 
-/// 0.x command names and their 1.0 spelling.
-const RENAMED: [(&str, &str); 10] = [
-    ("ls", "music ls"), ("list", "music ls"), ("add", "music add"), ("rm", "music rm"), ("remove", "music rm"),
-    ("delete", "music rm"), ("erase", "music rm"), ("init", "music init"), ("rebuild", "music rebuild"),
-    ("burn", "card burn"),
+/// 0.x command names and the 1.0 spelling that replaced them.
+const RENAMED: [(&str, &str); 12] = [
+    ("ls", "music list"), ("list", "music list"), ("add", "music add"), ("rm", "music remove"),
+    ("remove", "music remove"), ("delete", "music remove"), ("erase", "music remove"), ("init", "music init"),
+    ("rebuild", "music rebuild"), ("burn", "drive restore"), ("wizard", "setup"), ("card", "image new` or `flashpod drive restore"),
+];
+
+/// Two-word names that moved in 1.0 (#115).
+const RENAMED_2: [((&str, &str), &str); 8] = [
+    (("card", "new"), "image new"), (("card", "burn"), "drive restore"),
+    (("firmware", "patches"), "patch list"), (("firmware", "patch"), "patch apply"),
+    (("firmware", "arm"), "bootrom arm"), (("firmware", "recover"), "help recovery"),
+    (("music", "delete"), "music remove"), (("music", "erase"), "music remove"),
 ];
 
 /// 0.x `flash` did three things; 1.0 splits them (#115).
 const FLASH_SPLIT: &str = "drive partition --target T` (erases the drive), then `flashpod firmware write --target T FIRMWARE";
 
-/// A 0.x command name in place of the command: say its new name. The
-/// top-level options before it are skipped (--mount and --raw take a value).
-fn renamed_command(args: &[String]) -> Option<&'static str> {
+/// The command words: `args` after the top-level options (--mount and
+/// --raw take a value).
+fn command_words(args: &[String]) -> &[String] {
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
         if a == "--mount" || a == "--raw" {
             i += 2;
-            continue;
-        }
-        if a.starts_with('-') {
+        } else if a.starts_with('-') {
             i += 1;
-            continue;
+        } else {
+            return &args[i..];
         }
-        if a == "flash" {
-            return Some(FLASH_SPLIT);
-        }
-        return RENAMED.iter().find(|(old, _)| *old == a).map(|(_, new)| *new);
     }
-    None
+    &args[args.len()..]
+}
+
+/// A 0.x command name in place of the command: its new name.
+fn renamed_command(args: &[String]) -> Option<&'static str> {
+    let w = command_words(args);
+    let first = w.first()?.as_str();
+    if first == "flash" {
+        return Some(FLASH_SPLIT);
+    }
+    if let Some(second) = w.get(1) {
+        if let Some((_, new)) = RENAMED_2.iter().find(|((a, b), _)| *a == first && b == second) {
+            return Some(new);
+        }
+    }
+    RENAMED.iter().find(|(old, _)| *old == first).map(|(_, new)| *new)
 }
 
 fn s(ns: &Ns, k: &str) -> Option<String> {
@@ -471,7 +509,15 @@ fn main() {
         eprintln!("flashpod: that command is now `flashpod {}` (flashpod 1.0 groups commands: run `flashpod --help`).", new);
         std::process::exit(2);
     }
-    let mut ns = match build_cli().parse_args(&args) {
+    let cli = build_cli();
+    // a bare group (or bare `flashpod`) lists its commands (#115 H)
+    if command_words(&args).len() == args.len() {
+        if let Some(help) = cli.group_help(&args) {
+            print!("{}", help);
+            std::process::exit(0);
+        }
+    }
+    let mut ns = match cli.parse_args(&args) {
         Ok(ns) => ns,
         Err(code) => std::process::exit(code),
     };
@@ -481,14 +527,38 @@ fn main() {
     let sub = match group.as_str() {
         "music" => s(&ns, "music_command"),
         "firmware" => s(&ns, "firmware_command"),
-        "card" => s(&ns, "card_command"),
+        "image" => s(&ns, "image_command"),
         "drive" => s(&ns, "drive_command"),
         "bootrom" => s(&ns, "bootrom_command"),
+        "patch" => s(&ns, "patch_command"),
+        "games" => s(&ns, "games_command"),
         _ => None,
     };
+    // an alias runs its command: ls is list, rm is remove
+    let sub = sub.map(|m| match m.as_str() {
+        "ls" => "list".to_string(),
+        "rm" => "remove".to_string(),
+        _ => m,
+    });
+    // the spelling, for messages: `music list`, `drive restore`
+    let spelled = match &sub {
+        Some(m) => format!("{} {}", group, m),
+        None => group.clone(),
+    };
+    if let Some(pc) = s(&ns, "playlist_command") {
+        let pc = match pc.as_str() { "list" => "ls", "remove" => "rm", p => p }.to_string();
+        ns.insert("playlist_command".into(), Val::Str(pc));
+    }
+    if s(&ns, "field").as_deref() == Some("tracks") {
+        ns.insert("field".into(), Val::Str("all".into()));
+    }
     let handler = match (group.as_str(), sub.as_deref()) {
+        ("music", Some("list")) => "ls".to_string(),
+        ("music", Some("remove")) => "rm".to_string(),
         ("music", Some(m)) => m.to_string(),
-        ("card", Some("burn")) => "burn".to_string(),
+        ("drive", Some("restore")) => "burn".to_string(),
+        ("image", Some("new")) => "card new".to_string(),
+        ("patch", Some("list")) => "firmware patches".to_string(),
         (g, Some(m)) => format!("{} {}", g, m),
         (g, None) => g.to_string(),
     };
@@ -500,22 +570,24 @@ fn main() {
         "drive partition" => drivecmd::cmd_partition(&ns),
         "bootrom arm" => drivecmd::cmd_bootrom(&ns, "arm"),
         "bootrom disarm" => drivecmd::cmd_bootrom(&ns, "disarm"),
-        "firmware arm" => {
-            eprintln!("flashpod firmware arm: that is now `flashpod bootrom arm`.");
-            2
-        }
-        "firmware recover" => {
-            eprintln!("flashpod firmware recover: there is no recover command; `flashpod help recovery` (coming in flashpod 1.0) says what to do.");
-            2
-        }
         "firmware extract" => cmd_extract(&ns),
         "firmware patches" => patches::cmd_patches(&ns),
         "inspect" => cmd_inspect(&ns),
         "card new" => cmd_card_new(&ns),
         "burn" => cmd_burn(&ns),
+        "help" => match s(&ns, "topic").as_deref() {
+            None => {
+                print!("{}", cli.group_help(&[]).unwrap_or_default());
+                0
+            }
+            Some(t) => {
+                eprintln!("flashpod help {}: not built yet (flashpod 1.0, epic #88).", t);
+                2
+            }
+        },
         "ls" | "list" | "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild" | "export" | "playlist" => data_command(&ns, &command),
-        other => {
-            eprintln!("flashpod {}: not built yet (flashpod 1.0, epic #88).", other);
+        _ => {
+            eprintln!("flashpod {}: not built yet (flashpod 1.0, epic #88).", spelled);
             2
         }
     };
@@ -552,13 +624,13 @@ fn cmd_card_new(ns: &Ns) -> i32 {
     let image = s(ns, "image").unwrap_or_default();
     let text = s(ns, "size").unwrap_or_default();
     let Some(bytes) = parse_size(&text) else {
-        eprintln!("flashpod card new: {:?} is not a size (try 2G, 512M, 4GiB or a byte count).", text);
+        eprintln!("flashpod image new: {:?} is not a size (try 2G, 512M, 4GiB or a byte count).", text);
         return 2;
     };
     let size = match flashpod_core::card::blank_size(bytes) {
         Ok(n) => n,
         Err(e) => {
-            eprintln!("flashpod card new: {}", e.message);
+            eprintln!("flashpod image new: {}", e.message);
             return 1;
         }
     };
@@ -569,11 +641,11 @@ fn cmd_card_new(ns: &Ns) -> i32 {
             0
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            eprintln!("flashpod card new: {} already exists.", image);
+            eprintln!("flashpod image new: {} already exists.", image);
             1
         }
         Err(e) => {
-            eprintln!("flashpod card new: can't make {}: {}", image, e);
+            eprintln!("flashpod image new: can't make {}: {}", image, e);
             1
         }
     }

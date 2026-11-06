@@ -250,7 +250,7 @@ pub fn cmd_partition(ns: &Ns) -> i32 {
     };
     let total = dev.len().unwrap_or(0) / SECTOR;
     if total == 0 && t.image {
-        eprintln!("flashpod {}: {} is empty -- give it the card's size first, e.g. `flashpod card new {} 1G`", cmd, t.path, t.path);
+        eprintln!("flashpod {}: {} is empty -- give it the card's size first, e.g. `flashpod image new {} 1G`", cmd, t.path, t.path);
         return 1;
     }
     if total == 0 {

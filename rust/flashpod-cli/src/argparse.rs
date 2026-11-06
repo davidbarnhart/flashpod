@@ -281,6 +281,71 @@ impl Cli {
     }
 }
 
+// ------------------------------------------------------------- difflib
+
+/// difflib.SequenceMatcher(None, a, b).ratio(): 2*M/T, M the characters
+/// in the matching blocks (no junk: autojunk and the popular-element cut only start at
+/// 200 characters).
+fn seq_ratio(a: &[char], b: &[char]) -> f64 {
+    fn longest(a: &[char], b: &[char], alo: usize, ahi: usize, blo: usize, bhi: usize) -> (usize, usize, usize) {
+        // find_longest_match: the longest block, earliest in a, then in b
+        let (mut bi, mut bj, mut bs) = (alo, blo, 0usize);
+        let mut j2len: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for i in alo..ahi {
+            let mut next = std::collections::HashMap::new();
+            for j in blo..bhi {
+                if b[j] != a[i] {
+                    continue;
+                }
+                let k = j.checked_sub(1).and_then(|p| j2len.get(&p)).copied().unwrap_or(0) + 1;
+                next.insert(j, k);
+                if k > bs {
+                    bi = i + 1 - k;
+                    bj = j + 1 - k;
+                    bs = k;
+                }
+            }
+            j2len = next;
+        }
+        (bi, bj, bs)
+    }
+    let mut matched = 0usize;
+    let mut queue = vec![(0, a.len(), 0, b.len())];
+    while let Some((alo, ahi, blo, bhi)) = queue.pop() {
+        let (i, j, k) = longest(a, b, alo, ahi, blo, bhi);
+        if k > 0 {
+            matched += k;
+            if alo < i && blo < j {
+                queue.push((alo, i, blo, j));
+            }
+            if i + k < ahi && j + k < bhi {
+                queue.push((i + k, ahi, j + k, bhi));
+            }
+        }
+    }
+    let total = a.len() + b.len();
+    if total == 0 { 1.0 } else { 2.0 * matched as f64 / total as f64 }
+}
+
+/// difflib.get_close_matches(word, choices, 1): the best choice scoring at
+/// least 0.6, a tie going to the greater string (heapq.nlargest on
+/// (score, choice)).
+pub fn close_match(word: &str, choices: &[String]) -> Option<String> {
+    let w: Vec<char> = word.chars().collect();
+    let mut best: Option<(f64, &String)> = None;
+    for c in choices {
+        let x: Vec<char> = c.chars().collect();
+        let r = seq_ratio(&x, &w);
+        if r < 0.6 {
+            continue;
+        }
+        if best.map_or(true, |(br, bc)| r > br || (r == br && c > bc)) {
+            best = Some((r, c));
+        }
+    }
+    best.map(|(_, c)| c.clone())
+}
+
 // ---------------------------------------------------------------- errors
 
 /// Python's repr() of a str.
@@ -553,7 +618,9 @@ impl Cli {
         let check = |s: &str| -> Result<(), ArgError> {
             match &a.choices {
                 Some(c) if !c.iter().any(|x| x == s) => Err(err(Some(a), format!(
-                    "invalid choice: {} (choose from {})", py_repr(s),
+                    "invalid choice: {}{} (choose from {})", py_repr(s),
+                    // suggest_on_error=True (Python 3.14), on every parser
+                    close_match(s, c).map(|m| format!(", maybe you meant {}?", py_repr(&m))).unwrap_or_default(),
                     c.iter().map(|x| py_repr(x)).collect::<Vec<_>>().join(", ")))),
                 _ => Ok(()),
             }
@@ -1232,6 +1299,17 @@ impl Cli {
         if out.is_empty() { out } else { out + "\n" }
     }
 
+    /// `words` naming only command groups (each with subcommands), and
+    /// nothing else: that group's help, as -h prints it. Bare `flashpod`
+    /// (no words) is the top's.
+    pub fn group_help(&self, words: &[String]) -> Option<String> {
+        let mut pi = 0;
+        for w in words {
+            pi = self.parsers[pi].subs.iter().find(|(n, _)| n == w).map(|(_, i)| *i)?;
+        }
+        self.parsers[pi].sub_action.map(|_| self.format_help(pi))
+    }
+
     pub fn format_usage(&self, pi: usize) -> String {
         Self::tidy(self.usage_block(pi, theme(), Self::width()))
     }
@@ -1330,5 +1408,175 @@ mod tests {
         assert_eq!(py_float("abc"), None);
         assert_eq!(py_float("-inf"), Some(f64::NEG_INFINITY));
         assert_eq!(py_float("1e3"), Some(1000.0));
+    }
+}
+
+#[cfg(test)]
+mod difflib_tests {
+    /// Answers from Python 3.14's difflib.get_close_matches(word, choices,
+    /// 1) on typo'd command names, ties included.
+    #[test]
+    fn close_match_is_difflibs() {
+        let cases: &[(&str, &[&str], Option<&str>)] = &[
+        ("wite", &["show", "write", "backup", "disarm", "artists", "tracks", "extract", "games", "patch"], Some("write")),
+        ("dchecbk", &["delete", "add", "inspect"], None),
+        ("new", &["ls", "write", "games", "backup", "recovery"], None),
+        ("lnit", &["bootrom", "arm", "list", "init", "write", "firmware", "partition", "disarm", "new", "apply", "add", "completion"], Some("list")),
+        ("list", &["bootrom", "help", "rm"], None),
+        ("exitrat", &["remove", "extract", "help", "inspect", "partition"], Some("extract")),
+        ("partition", &["partition", "export"], Some("partition")),
+        ("wsite", &["write", "arm"], Some("write")),
+        ("adlbubs", &["playlist", "partition", "help", "export", "inspect", "apply", "albums", "list", "recovery", "restore", "new", "bootrom", "find", "extract"], Some("albums")),
+        ("bootrom", &["image", "list", "emulate", "bootrom", "help", "rm", "disarm", "add", "rebuild"], Some("bootrom")),
+        ("dsride", &["setup", "recovery", "write", "playlist", "extract", "delete", "help", "init", "games", "rm", "find"], None),
+        ("remeve", &["help", "extract", "init", "partition", "remove", "rebuild", "disarm", "ls", "image", "playlist", "export", "setup"], Some("remove")),
+        ("r", &["tracks", "rm", "playlist", "music", "extract", "apply", "firmware", "rebuild", "write", "new"], Some("rm")),
+        ("add", &["remove", "add", "tracks", "bootrom", "setup"], Some("add")),
+        ("mularte", &["playlist", "backup", "emulate", "new", "recovery", "add", "ls"], Some("emulate")),
+        ("extract", &["extract", "rm", "patch"], Some("extract")),
+        ("partition", &["delete", "setup", "add", "playlist", "emulate", "completion", "init", "new", "drive"], None),
+        ("recovlry", &["apply", "list", "help", "show", "recovery", "rm", "init", "add", "games"], Some("recovery")),
+        ("exporm", &["recovery", "write", "backup", "apply", "init", "disarm", "ls", "find", "patch", "add", "drive", "list", "export"], Some("export")),
+        ("palth", &["list", "setup", "patch", "find", "artists", "check"], Some("patch")),
+        ("help", &["image", "artists", "restore", "apply", "albums", "help", "music", "bootrom", "write", "check", "rebuild", "rm"], Some("help")),
+        ("albums", &["rm", "firmware", "check", "export", "backup", "extract", "apply", "write", "rebuild", "partition", "albums", "artists", "games"], Some("albums")),
+        ("tbacmkup", &["backup", "games", "rm", "add", "firmware", "delete", "new", "bootrom", "tracks", "find", "apply"], Some("backup")),
+        ("rduild", &["drive", "find", "remove", "export", "backup", "rebuild"], Some("rebuild")),
+        ("hblp", &["image", "tracks", "list", "extract", "add", "apply", "music", "playlist", "help"], Some("help")),
+        ("lst", &["help", "playlist", "backup", "write", "artists", "list", "recovery", "firmware"], Some("list")),
+        ("inet", &["export", "albums", "drive"], None),
+        ("conmpletion", &["ls", "completion", "disarm", "init", "add", "backup", "emulate", "firmware", "albums", "help", "playlist", "drive", "list"], Some("completion")),
+        ("backup", &["playlist", "extract", "find", "new", "delete", "backup", "arm"], Some("backup")),
+        ("dlee", &["music", "backup", "new", "bootrom", "check", "disarm", "image", "find", "emulate", "artists", "restore", "patch", "rebuild", "extract"], None),
+        ("debbete", &["delete", "export", "disarm", "list", "help", "ls", "add", "image"], Some("delete")),
+        ("etroact", &["write", "partition", "inspect", "firmware", "drive", "extract", "arm", "rm", "check", "albums"], Some("extract")),
+        ("image", &["image", "playlist"], Some("image")),
+        ("usic", &["find", "music", "list", "bootrom", "games"], Some("music")),
+        ("image", &["disarm", "image", "artists"], Some("image")),
+        ("check", &["partition", "new", "check", "delete", "albums", "apply", "disarm", "restore"], Some("check")),
+        ("new", &["completion", "tracks", "games", "show", "artists", "albums", "new", "backup", "remove", "rm", "export", "extract", "setup"], Some("new")),
+        ("lsn", &["partition", "delete", "playlist", "artists", "inspect", "ls", "rebuild", "arm"], Some("ls")),
+        ("extract", &["emulate", "disarm", "artists", "rm", "extract", "rebuild", "ls", "arm", "help", "firmware", "patch", "image"], Some("extract")),
+        ("rrbuild", &["tracks", "export", "albums", "check", "bootrom"], None),
+        ("write", &["rebuild", "games", "inspect", "write", "restore", "disarm", "completion", "albums", "recovery", "patch", "tracks", "list", "apply", "arm"], Some("write")),
+        ("check", &["write", "setup", "apply", "inspect", "artists", "check", "rebuild", "image"], Some("check")),
+        ("itge", &["inspect", "apply", "artists", "disarm", "emulate", "image", "firmware", "write", "remove", "setup", "backup", "help", "init", "show"], Some("write")),
+        ("remove", &["albums", "tracks", "rm", "emulate", "patch", "extract", "rebuild", "list"], None),
+        ("tnspect", &["patch", "emulate", "albums", "inspect", "tracks", "rm"], Some("inspect")),
+        ("image", &["rebuild", "drive", "image"], Some("image")),
+        ("llp", &["artists", "help", "list", "rebuild", "image", "new", "firmware", "backup", "check", "arm", "extract", "disarm", "albums", "partition"], None),
+        ("hel", &["help", "extract", "check", "arm"], Some("help")),
+        ("patch", &["new", "inspect", "patch", "setup", "recovery", "bootrom"], Some("patch")),
+        ("add", &["ls", "list", "drive", "add", "check", "partition"], Some("add")),
+        ("extract", &["inspect", "remove", "games", "rm", "music", "restore", "extract"], Some("extract")),
+        ("write", &["new", "rebuild"], None),
+        ("cimpletion", &["export", "remove", "partition", "write", "albums"], None),
+        ("seeu", &["partition", "write", "image", "recovery", "setup", "playlist", "bootrom", "new", "rm", "export", "drive", "remove"], Some("setup")),
+        ("brecovery", &["apply", "artists", "firmware", "drive", "recovery", "delete", "new", "backup", "emulate", "ls", "games", "extract"], Some("recovery")),
+        ("r", &["delete", "firmware", "rm", "init", "check"], Some("rm")),
+        ("export", &["emulate", "arm", "playlist", "rm", "export"], Some("export")),
+        ("heop", &["restore", "image", "help", "find", "setup", "delete", "games", "disarm", "firmware"], Some("help")),
+        ("games", &["write", "games", "init"], Some("games")),
+        ("ind", &["list", "rm", "patch", "albums", "init", "show", "arm", "setup", "help", "completion", "check", "find", "apply", "export"], Some("find")),
+        ("recbvry", &["backup", "apply", "firmware", "recovery", "new", "patch", "write"], Some("recovery")),
+        ("setu", &["setup", "inspect"], Some("setup")),
+        ("tracks", &["recovery", "apply", "tracks", "init"], Some("tracks")),
+        ("ew", &["new", "remove", "delete", "check", "apply"], Some("new")),
+        ("init", &["delete", "init", "emulate", "apply", "firmware", "rebuild"], Some("init")),
+        ("esulatem", &["find", "rebuild", "restore", "drive", "music", "arm", "emulate", "help", "new", "artists", "tracks", "check"], Some("emulate")),
+        ("add", &["add", "partition", "completion", "list", "help", "init", "write", "extract", "firmware", "games", "delete"], Some("add")),
+        ("helep", &["partition", "find", "drive", "check", "help", "delete", "games", "rebuild"], Some("help")),
+        ("write", &["export", "patch", "find", "tracks", "remove", "write", "ls", "bootrom", "drive", "inspect", "arm", "check", "new"], Some("write")),
+        ("ini", &["drive", "extract", "disarm", "music", "backup", "tracks", "firmware", "artists", "init", "help", "find"], Some("init")),
+        ("haetp", &["emulate", "show", "init", "extract", "music", "inspect", "remove", "rebuild"], None),
+        ("arm", &["setup", "backup", "drive", "partition", "check", "delete", "new", "help", "arm"], Some("arm")),
+        ("trackn", &["firmware", "new", "delete", "remove", "find", "tracks", "list", "rebuild", "partition", "restore", "rm", "write"], Some("tracks")),
+        ("recoaedry", &["extract", "write", "init"], None),
+        ("ew", &["init", "backup", "albums", "add", "partition", "arm", "check", "extract", "new", "find", "disarm", "apply"], Some("new")),
+        ("inspoect", &["rm", "playlist", "rebuild", "inspect", "write", "export", "backup"], Some("inspect")),
+        ("finn", &["write", "list", "albums"], None),
+        ("in", &["patch", "emulate", "inspect", "init", "image", "artists", "disarm", "arm", "setup", "remove", "check", "find", "playlist"], Some("init")),
+        ("playlist", &["find", "rebuild", "playlist"], Some("playlist")),
+        ("artists", &["artists", "inspect", "add", "write"], Some("artists")),
+        ("erport", &["add", "check", "export", "restore", "partition"], Some("export")),
+        ("eemulate", &["find", "help", "extract", "emulate", "partition"], Some("emulate")),
+        ("albusms", &["artists", "emulate", "patch", "backup", "rebuild", "help", "albums"], Some("albums")),
+        ("dnletu", &["image", "delete", "patch", "show"], Some("delete")),
+        ("playlist", &["apply", "ls", "artists", "init", "playlist"], Some("playlist")),
+        ("bnackup", &["setup", "firmware", "write"], None),
+        ("find", &["check", "emulate", "find", "export", "list", "bootrom"], Some("find")),
+        ("cew", &["apply", "setup", "check", "tracks", "rm", "write", "add", "artists", "init", "inspect", "emulate", "new", "find", "help"], Some("new")),
+        ("nenw", &["partition", "write", "add", "find", "new"], Some("new")),
+        ("ilag", &["image", "drive", "apply", "emulate"], Some("image")),
+        ("appy", &["extract", "completion", "partition"], None),
+        ("partition", &["partition", "restore", "export", "show", "new", "emulate", "apply", "albums", "backup"], Some("partition")),
+        ("backup", &["help", "games", "patch", "rm", "drive", "export", "backup", "disarm"], Some("backup")),
+        ("sretu", &["rebuild", "new", "drive", "delete", "patch", "inspect", "show", "backup", "add"], None),
+        ("rebuild", &["partition", "apply", "export", "rm", "rebuild", "playlist", "show", "backup", "firmware", "bootrom", "music", "list", "find"], Some("rebuild")),
+        ("new", &["tracks", "rm", "backup", "show", "new", "inspect", "find"], Some("new")),
+        ("l", &["patch", "ls"], Some("ls")),
+        ("remove", &["extract", "albums", "artists", "bootrom"], None),
+        ("resmve", &["completion", "extract", "ls", "tracks", "artists", "drive", "new"], None),
+        ("parntition", &["playlist", "emulate", "backup", "partition", "init", "check", "music", "restore"], Some("partition")),
+        ("emulateb", &["bootrom", "firmware", "setup", "new", "export", "music", "patch", "backup", "write", "init", "emulate", "delete"], Some("emulate")),
+        ("cdd", &["new", "add", "list"], Some("add")),
+        ("drive", &["artists", "drive", "tracks", "firmware", "ls", "show"], Some("drive")),
+        ("firmware", &["write", "help", "list", "arm", "remove", "tracks", "rm", "firmware", "apply", "games", "disarm"], Some("firmware")),
+        ("albums", &["bootrom", "disarm", "new", "delete", "tracks", "check", "export", "patch", "albums", "arm"], Some("albums")),
+        ("oarm", &["drive", "image", "arm", "delete", "music", "show", "apply", "ls", "rebuild", "patch", "completion", "extract", "bootrom"], Some("arm")),
+        ("eioit", &["restore", "disarm", "backup", "image", "ls", "rm", "export", "write", "init"], Some("init")),
+        ("new", &["add", "games", "new", "image", "arm", "init", "check", "artists"], Some("new")),
+        ("gcames", &["games", "partition"], Some("games")),
+        ("ed", &["write", "new", "add", "list", "drive", "partition", "find", "show", "artists", "firmware", "arm", "apply", "albums"], None),
+        ("write", &["drive", "partition", "write", "init", "music", "setup", "patch", "check", "show", "arm"], Some("write")),
+        ("emuate", &["emulate", "apply"], Some("emulate")),
+        ("albdums", &["help", "remove", "albums", "partition", "completion", "drive", "tracks", "inspect"], Some("albums")),
+        ("rm", &["write", "patch", "extract", "backup", "arm", "tracks", "new", "rebuild", "firmware", "artists", "albums"], Some("arm")),
+        ("firmware", &["tracks", "image", "disarm", "inspect", "albums", "firmware", "rebuild", "recovery", "ls", "rm"], Some("firmware")),
+        ("hmlp", &["drive", "export", "ls", "games", "help", "backup", "init", "restore", "disarm", "artists", "check", "playlist", "new", "image"], Some("help")),
+        ("artists", &["artists", "find"], Some("artists")),
+        ("deirte", &["patch", "partition", "restore", "extract", "delete"], Some("delete")),
+        ("inspect", &["find", "albums", "firmware", "delete", "backup", "inspect", "playlist", "artists"], Some("inspect")),
+        ("bootrom", &["bootrom", "setup", "completion"], Some("bootrom")),
+        ("upplsy", &["extract", "apply"], Some("apply")),
+        ("exort", &["export", "setup", "drive", "image", "init", "restore", "recovery"], Some("export")),
+        ("firnware", &["arm", "firmware", "music", "check", "inspect", "artists"], Some("firmware")),
+        ("restsrbe", &["emulate", "restore", "find"], Some("restore")),
+        ("afirmware", &["rm", "inspect", "firmware", "remove", "help", "arm", "patch"], Some("firmware")),
+        ("patch", &["games", "setup", "patch", "image", "tracks", "extract", "help"], Some("patch")),
+        ("hrelp", &["albums", "rm", "remove", "delete", "partition", "new", "apply", "playlist", "add", "disarm", "music"], None),
+        ("setup", &["firmware", "patch", "arm", "setup", "extract", "ls", "find", "apply", "rebuild", "playlist"], Some("setup")),
+        ("eulate", &["list", "delete", "inspect", "recovery", "drive", "arm", "init", "patch", "partition", "firmware"], Some("delete")),
+        ("games", &["games", "albums"], Some("games")),
+        ("apply", &["check", "emulate", "arm", "apply"], Some("apply")),
+        ("rbuid", &["delete", "arm", "drive", "show", "setup", "games", "tracks", "write", "image", "new", "rm", "add"], None),
+        ("setup", &["extract", "add", "check", "partition", "recovery", "remove", "completion", "playlist", "artists", "image", "setup", "inspect", "arm", "write"], Some("setup")),
+        ("albume", &["games", "tracks", "emulate", "albums", "playlist", "partition", "new", "patch", "setup", "disarm", "arm", "inspect"], Some("albums")),
+        ("extrac", &["tracks", "list", "extract", "recovery", "playlist"], Some("extract")),
+        ("emove", &["playlist", "remove", "check", "export", "add", "artists", "bootrom", "tracks"], Some("remove")),
+        ("sntup", &["extract", "check", "setup", "rm", "patch", "backup", "bootrom", "export", "artists", "show"], Some("setup")),
+        ("baockup", &["find", "backup", "tracks", "rebuild", "image", "arm"], Some("backup")),
+        ("find", &["find", "firmware", "inspect", "apply", "games", "music", "init", "drive", "rebuild", "tracks", "delete"], Some("find")),
+        ("puatch", &["list", "patch", "init"], Some("patch")),
+        ("inspuect", &["extract", "add", "partition", "completion", "inspect", "remove", "albums", "firmware"], Some("inspect")),
+        ("delete", &["backup", "apply", "remove", "tracks", "ls"], None),
+        ("backups", &["rm", "firmware", "completion", "ls", "patch", "recovery", "write", "list", "backup", "rebuild", "add", "tracks"], Some("backup")),
+        ("ls", &["inspect", "patch", "delete", "rebuild", "extract", "recovery", "partition", "playlist", "backup"], None),
+        ("setupi", &["find", "music", "games", "help", "setup", "disarm", "firmware", "inspect", "tracks", "show", "backup"], Some("setup")),
+        ("emculate", &["rebuild", "image", "emulate", "albums", "tracks", "delete", "remove", "setup", "rm", "firmware", "find"], Some("emulate")),
+        ("cestore", &["completion", "tracks", "restore", "ls", "list", "inspect", "remove"], Some("restore")),
+        ("music", &["recovery", "rebuild", "games", "restore", "extract", "music", "arm", "albums", "help", "completion", "init", "partition", "playlist", "add"], Some("music")),
+        ("tracks", &["completion", "new", "list", "find", "help", "remove", "albums", "patch", "extract", "tracks", "music", "recovery", "games", "arm"], Some("tracks")),
+        ("disarm", &["write", "restore", "partition"], None),
+        ("ab", &["ac", "ad"], None),
+        ("ab", &["ad", "ac"], None),
+        ("rm", &["ls", "rmm", "rn"], Some("rmm")),
+        ("", &["a"], None),
+        ("x", &["x"], Some("x")),
+        ];
+        for (w, cs, want) in cases {
+            let cs: Vec<String> = cs.iter().map(|c| c.to_string()).collect();
+            assert_eq!(super::close_match(w, &cs).as_deref(), *want, "{:?} in {:?}", w, cs);
+        }
     }
 }
