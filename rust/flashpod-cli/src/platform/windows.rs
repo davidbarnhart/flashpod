@@ -93,7 +93,7 @@ fn render(cands: &[Disk]) {
 /// Lock, dismount and take offline every volume on `dev`, holding the
 /// handles so Windows doesn't bring them back mid-write. A refused lock
 /// gets a forced dismount (invalidating whoever holds it) and a retry.
-fn lock_volumes(dev: &str) -> Vec<(String, Option<String>)> {
+pub(crate) fn lock_volumes(dev: &str) -> Vec<(String, Option<String>)> {
     let mut held = HELD.lock().unwrap_or_else(|p| p.into_inner());
     let mut out = Vec::new();
     for (vol, _) in Windows.device_mountpoints(dev) {

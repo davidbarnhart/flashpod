@@ -105,6 +105,13 @@ impl RawDevice {
         o.read(true).write(writable);
         if physical {
             o.share_mode(1 | 2); // FILE_SHARE_READ | FILE_SHARE_WRITE
+            if writable {
+                // Python's open_raw_fat goes through platform.open_raw, which
+                // locks, dismounts and offlines the disk's volumes first:
+                // without that, Windows refuses writes inside a volume it
+                // mounted (a freshly partitioned card's FAT).
+                crate::platform::windows::lock_volumes(path);
+            }
         }
         let file = o.open(path)?;
         let bounce = if physical { Some(Bounce::new(max_xfer as usize * SECTOR)) } else { None };

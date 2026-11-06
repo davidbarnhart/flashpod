@@ -13,7 +13,7 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(windows)]
-mod windows;
+pub(crate) mod windows;
 #[cfg(any(target_os = "macos", windows))]
 mod aligned;
 

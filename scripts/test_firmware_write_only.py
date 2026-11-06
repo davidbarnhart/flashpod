@@ -49,6 +49,7 @@ GIB = 1 << 30
 LBA28 = 1 << 28                 # sectors: the 128 GiB line
 fails = []
 MUTANT = [None]                 # the check name being mutated, when --mutants runs one
+REACHED = set()                 # mutation sites this run reached (a section that is NOT RUN reaches none)
 
 
 def check(cond, what):
@@ -97,6 +98,7 @@ def poke(path, offset):
 
 
 def mutate(name, path, offset):
+    REACHED.add(name)
     if MUTANT[0] == name:
         poke(path, offset)
 
@@ -429,20 +431,30 @@ def main():
         run_all(binary)
         print("PASS" if not fails else "FAIL: %d check(s)" % len(fails))
         sys.exit(0 if not fails else 1)
-    missed = []
+    missed, not_run = [], []
     for m in MUTANTS:
         MUTANT[0] = m
         del fails[:]
+        REACHED.clear()
         print("== mutant: %s" % m)
         run_all(binary)
+        if m not in REACHED:
+            # its section printed NOT RUN (e.g. no Apple 1.1.5 in the cache): nothing to catch here
+            not_run.append(m)
+            continue
         # the unmutated run passes, so any failure here is the mutant's
         if not fails:
             missed.append(m)
+    if len(not_run) == len(MUTANTS):
+        print("FAIL: no mutant's site was reached")
+        sys.exit(1)
+    for m in not_run:
+        print("  NOT RUN mutant: %s (its section did not run here)" % m)
     del fails[:]
     for m in missed:
         fails.append("mutant not caught: %s" % m)
         print("  FAIL mutant not caught: %s" % m)
-    print("PASS (%d mutants caught)" % len(MUTANTS) if not missed else "FAIL: %d mutant(s) not caught" % len(missed))
+    print("PASS (%d mutants caught)" % (len(MUTANTS) - len(not_run)) if not missed else "FAIL: %d mutant(s) not caught" % len(missed))
     sys.exit(0 if not missed else 1)
 
 
