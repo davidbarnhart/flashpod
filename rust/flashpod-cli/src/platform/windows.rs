@@ -188,6 +188,38 @@ pub(crate) fn prepare_raw_write(dev: &str) {
     Windows.invalidate_cached_partitions(dev);
     *CLEARED.lock().unwrap_or_else(|p| p.into_inner()) = Some((dev.to_string(), mbr, part_start));
     eprintln!("flashpod: temporarily cleared {}'s partition table so Windows lets go of the FAT partition (LBA {}). The original table is restored when flashpod finishes.", dev, part_start);
+    wait_writable(dev, part_start);
+}
+
+/// Windows drops the volume after the table is cleared, but not always at
+/// once: on CI the clear once took 20 s and the first write after it still
+/// got "[Errno 21] The device is not ready". Wait until the FAT partition's
+/// boot sector reads and writes back (its own bytes, so nothing changes),
+/// for up to 30 s; the command then reports whatever error remains.
+fn wait_writable(dev: &str, lba: u64) {
+    let t0 = std::time::Instant::now();
+    let mut said = false;
+    loop {
+        let ok = open_handle(dev, true).and_then(|h| {
+            let mut b = vec![0u8; SECTOR as usize];
+            crate::sys::read_at(&h, &mut b, lba * SECTOR)?;
+            crate::sys::write_all_at(&h, &b, lba * SECTOR)
+        });
+        match ok {
+            Ok(()) => return,
+            Err(e) if t0.elapsed() >= std::time::Duration::from_secs(30) => {
+                eprintln!("flashpod: {} still refuses writes to the FAT partition after 30 s ({}).", dev, e);
+                return;
+            }
+            Err(_) => {
+                if !said && t0.elapsed() >= std::time::Duration::from_secs(2) {
+                    eprintln!("flashpod: waiting for Windows to release {}'s FAT partition...", dev);
+                    said = true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+    }
 }
 
 /// raw_part_start_override: the FAT partition's LBA while sector 0 is cleared.
