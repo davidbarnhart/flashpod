@@ -16,15 +16,20 @@ flashpod 1.0 groups its commands by what they act on:
 | Group | Commands |
 | --- | --- |
 | `flashpod inspect TARGET` | everything about a card, iPod or image |
-| `flashpod drive ...` | `partition` (erases the drive) |
-| `flashpod firmware ...` | `write`, `extract`, `patches`; not built yet: `list`, `patch` |
+| `flashpod drive ...` | `partition` (erases the drive), `restore` (writes an image onto it); not built yet: `backup` |
+| `flashpod image ...` | `new` |
+| `flashpod firmware ...` | `write`, `extract`; not built yet: `list` |
 | `flashpod bootrom ...` | `arm`, `disarm` (the iPod's disk-mode update) |
-| `flashpod card ...` | `new`, `burn` |
-| `flashpod music ...` | `ls`, `add`, `rm`, `init`, `rebuild`, `export`, `playlist` |
+| `flashpod patch ...` | `list`; not built yet: `show`, `apply` |
+| `flashpod music ...` | `list` (or `ls`), `add`, `remove` (or `rm`), `init`, `rebuild`, `export`, `playlist`; not built yet: `find`, `check` |
+| `flashpod games ...` | not built yet: `list`, `add`, `remove` |
 | `flashpod emulate` | boot a firmware or card in emupod (not built yet) |
 
-The 0.x names point you to the new ones: `flashpod ls` says
-"that command is now `flashpod music ls`" and does nothing else.
+A group on its own lists its commands (`flashpod music`), and a mistyped
+command gets a suggestion. The 0.x names point you to the new ones:
+`flashpod ls` says "that command is now `flashpod music list`" and does
+nothing else; `card new` is now `image new`, `card burn` is `drive restore`,
+and `firmware patches` is `patch list`.
 `flashpod flash` is split in two: `flashpod drive partition` lays out and
 formats the drive (it erases it), and `flashpod firmware write` writes only
 the firmware partition and never touches your music. `flashpod flash` names
@@ -191,7 +196,7 @@ Found iPod on /dev/rdisk1 — 82 tracks.
 [1/1] Adding: Blue Monday — New Order... 100% (6.8/6.8 MiB)
 1 track added in 26s (6.8 MiB at 268 KiB/s)
 
-$ flashpod music rm album Substance
+$ flashpod music remove album Substance
 Found iPod on /dev/rdisk1 — 83 tracks.
 Removed: New Order - Ceremony
 Removed: New Order - Temptation
@@ -223,7 +228,7 @@ is plugged in but the kernel hasn't attached it as a disk yet, flashpod loads
 the driver it needs first, so the iPod shows up instead of silently going
 missing.
 
-All library commands — `music ls`, `music add`, `music rm`, `music init`,
+All library commands — `music list`, `music add`, `music remove`, `music init`,
 `music rebuild`, `music export`, `music playlist` — work this way.
 
 ### `flashpod music list`
@@ -237,16 +242,16 @@ New Order
   Brotherhood (9 tracks)
   Technique (9 tracks)
 
-$ flashpod music list all           # same tree + every track (id, track no., duration)
-$ flashpod music list artist        # flat per-artist track counts (or `artists`)
-$ flashpod music list album         # flat per-album track counts (or `albums`)
+$ flashpod music list tracks        # same tree + every track (id, track no., duration)
+$ flashpod music list artists       # flat per-artist track counts
+$ flashpod music list albums        # flat per-album track counts
 ```
 
 <details>
-<summary><strong>See full <code>flashpod music list all</code> output</strong> — every track with its id, track number, and duration</summary>
+<summary><strong>See full <code>flashpod music list tracks</code> output</strong> — every track with its id, track number, and duration</summary>
 
 ```
-$ flashpod music list all
+$ flashpod music list tracks
 flashpod: looking for an iPod means reading attached disks, which needs root — elevating via sudo...
 Found iPod on /dev/sdb2 (IPOD FireWire 119.1G) — 25 tracks.
 iPod "iPod": 25 tracks, 2 artists, 3 albums
@@ -284,7 +289,7 @@ New Order
 
 </details>
 
-Track ids shown by `list all` are what `flashpod music rm <id>` takes.
+Track ids shown by `list tracks` are what `flashpod music remove <id>` takes.
 
 ### `flashpod music add [path ...]`
 
@@ -365,16 +370,16 @@ tracks 1–5 scrolled away above.
 > playlist cap. `FLASHPOD_DB_LIMIT=<bytes>` overrides the ceiling and skips
 > that check (`0` disables it — e.g. for later models that may load more).
 
-### `flashpod music rm`
+### `flashpod music remove`
 
 ```
-$ flashpod music rm 52 53           # by track id (see `flashpod music list all`)
-$ flashpod music rm artist Relic Pop      # every track by the artist
-$ flashpod music rm album Thick As Thieves # every track in the album
+$ flashpod music remove 52 53       # by track id (see `flashpod music list tracks`)
+$ flashpod music remove artist Relic Pop      # every track by the artist
+$ flashpod music remove album Thick As Thieves # every track in the album
 ```
 
 Artist/album matching is case-insensitive exact match; multiword names need
-no quotes. `remove`, `delete`, and `erase` all work as synonyms for `rm`.
+no quotes. `rm` is short for `remove`.
 **Removal is immediate — there is no confirmation prompt.**
 
 ### `flashpod music init [name]`
@@ -577,14 +582,14 @@ $ flashpod drive partition --target ipod.img --yes
 $ flashpod firmware write --target ipod.img iPod_1.1.5.ipsw --yes
 $ flashpod music init --raw ipod.img
 $ flashpod music add  --raw ipod.img ~/Music/*.mp3
-$ flashpod music ls   --raw ipod.img
+$ flashpod music list --raw ipod.img
 ```
 
 The image is what an iPod emulator boots — openpod's
 `tools/ipod_emu_ui.py` reads one with `OPENPOD_DISK=ipod.img` — and it can be
-written to a real card with `flashpod card burn`, below.
+written to a real card with `flashpod drive restore`, below.
 
-### `flashpod card burn IMAGE [/dev/sdX]`
+### `flashpod drive restore IMAGE [/dev/sdX]`
 
 Writes a card image file onto a real SD/CF card in a reader, byte for byte,
 then reads the card back to check it. Like `drive partition`, it erases the card, needs
@@ -611,7 +616,7 @@ through that mount: `flashpod music init --mount /Volumes/iPod` once, then
 map, the firmware and the HFS+ volume. A small wrapped card has booted and
 played on a 1st-gen iPod; large Mac cards have not yet been tried on hardware.
 
-### `flashpod card new IMAGE SIZE`
+### `flashpod image new IMAGE SIZE`
 
 Makes a blank card image to flash: a sparse file, so it takes no disk
 space until written. SIZE is a byte count, or a number with `K`, `M`, `G`
@@ -643,7 +648,7 @@ in with the build's sha256 and what flashpod read. flashpod sends nothing
 itself: open the link, add where the file came from, and submit it if you
 want the build added. `inspect --json` doesn't carry the link.
 
-### `flashpod firmware patches [--offline]`
+### `flashpod patch list [--offline]`
 
 Lists the patch library: each base firmware, the patches written against
 it (with their status), and the named builds such as flashpod 1.6. The
@@ -674,15 +679,15 @@ It never writes to the iPod.
 ### `flashpod music playlist`
 
 ```
-flashpod music playlist ls [NAME]        the playlists, or one playlist's tracks
-flashpod music playlist new NAME [id ...]  make a playlist
-flashpod music playlist add NAME id ...    add tracks to it
-flashpod music playlist rm NAME id ...     take tracks out (they stay on the iPod)
-flashpod music playlist delete NAME        delete it (its tracks stay)
+flashpod music playlist list [NAME]        the playlists, or one playlist's tracks
+flashpod music playlist new NAME [id ...]    make a playlist
+flashpod music playlist add NAME id ...      add tracks to it
+flashpod music playlist remove NAME id ...   take tracks out (they stay on the iPod)
+flashpod music playlist delete NAME          delete it (its tracks stay)
 ```
 
-Track ids are the ones `flashpod music ls all` prints. Names are matched
-without regard to case. Playlists now survive `music add` and `music rm`
+Track ids are the ones `flashpod music list tracks` prints. Names are matched
+without regard to case. Playlists now survive `music add` and `music remove`
 (a removed song leaves every playlist); flashpod 0.x dropped every
 playlist but the iPod's own whenever it changed the database.
 
