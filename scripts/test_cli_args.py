@@ -107,6 +107,11 @@ CASES_1_0 = [
     "music playlist rm -h", "music playlist delete", "music playlist ls a b", "music playlist bogus",
     "inspect", "inspect a b", "inspect --json", "card new", "card new x", "card new x 1G y",
     "firmware write --format", "firmware write --format ntfs x", "flash --format hfs --format",
+    # #115: the drive commands
+    "drive", "drive -h", "drive partition -h", "drive partition --128g --max-data-gb abc",
+    "drive partition --format ntfs", "drive partition x", "bootrom", "bootrom -h", "bootrom arm -h",
+    "bootrom disarm -h", "bootrom disarm x", "bootrom arm a b", "firmware write --target",
+    "firmware write --no-format x", "firmware arm -h", "firmware recover -h", "flash --firmware x /dev/sdz",
 ]
 
 

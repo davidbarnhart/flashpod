@@ -4,8 +4,13 @@ Commands:
   flashpod inspect TARGET            everything about a card, iPod or image
   flashpod firmware list             the firmware flashpod can write
   flashpod firmware extract TARGET   copy the firmware partition (or one image) off
-  flashpod firmware write [/dev/sdX] write firmware + partition layout to a CF/SD
-                                     card (needs sudo); `flashpod flash` is the same
+  flashpod firmware write [--target T] [FIRMWARE]
+                                     write firmware into the drive's firmware
+                                     partition; nothing else on it changes
+  flashpod drive partition [--target T]
+                                     partition a drive for an iPod (erases it)
+  flashpod bootrom arm|disarm [--target T]
+                                     arm or clear a disk-mode update
   flashpod card new IMAGE SIZE       make a blank card image
   flashpod card burn IMAGE [/dev/sdX]
                                      write a card image onto a removable card
@@ -22,4 +27,5 @@ Commands:
 
 The music commands work on the mounted iPod (auto-detected and confirmed
 first; --mount names it) or on a card image (--raw IMAGE). flashpod 1.0
-renamed the 0.x commands: ls is now `music ls`, burn is `card burn`, and so on.
+renamed the 0.x commands: ls is now `music ls`, burn is `card burn`, and so on;
+flash is now `drive partition` then `firmware write`.
