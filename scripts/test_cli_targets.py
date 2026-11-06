@@ -35,17 +35,22 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import synth_fixtures as synth  # noqa: E402
 
-NOT_BUILT = ["firmware list", "firmware patch", "emulate"]
-# #115: names kept so a 0.x habit is told the new one (rc 2)
-MOVED = {"firmware arm": "bootrom arm", "firmware recover": "help recovery"}
-EXEMPT = {"firmware patches": "reads the patch library; it has no target"}
-GROUPS = ["firmware", "drive", "bootrom", "card", "music"]
-MUSIC = ["music ls", "music list", "music add", "music rm", "music remove", "music delete",
-         "music erase", "music init", "music rebuild", "music export", "music playlist"]
+NOT_BUILT = ["drive backup", "firmware list", "patch show", "patch apply", "music find",
+             "music check", "games list", "games add", "games remove", "emulate", "completion"]
+# #115: 0.x names kept so a habit is told the new one (rc 2)
+MOVED = {"card new": "image new", "card burn": "drive restore", "firmware patches": "patch list",
+         "firmware patch": "patch apply", "firmware arm": "bootrom arm", "firmware recover": "help recovery",
+         "music delete": "music remove", "music erase": "music remove", "ls": "music list",
+         "rm": "music remove", "burn": "drive restore", "wizard": "setup"}
+EXEMPT = {"patch list": "reads the patch library; it has no target",
+          "help": "prints help; it has no target"}
+GROUPS = ["drive", "image", "firmware", "bootrom", "patch", "music", "games"]
+MUSIC = ["music list", "music ls", "music add", "music remove", "music rm", "music init", "music rebuild",
+         "music export", "music playlist"]
 NOT_APPLICABLE = {
-    "mount": "inspect, firmware extract/write, drive partition, bootrom, card new and card burn take a file "
+    "mount": "inspect, firmware extract/write, drive partition/restore, bootrom and image new take a file "
              "or disk, not a mount",
-    "card": "card new makes a file",
+    "card": "image new makes a file",
 }
 
 FAILS = []
@@ -102,14 +107,14 @@ def music_steps(binary, flag, target, kind, decoy, music, work):
         return step(binary, key, [flag, target] + list(args), target, kind, decoy, line=True)
     go("music init", "TargetPod")
     go("music add", music)
-    listing = go("music ls", "all")
-    go("music list")
+    listing = go("music list", "tracks")
+    go("music ls")
     ids = re.findall(r"\[\s*(\d+)\]|^\s*(\d+)\s", listing, re.M)
     ids = [a or b for a, b in ids]
-    check(len(ids) >= 5, "music ls all on %s lists the tracks (%d ids)" % (kind, len(ids)))
+    check(len(ids) >= 5, "music list tracks on %s lists the tracks (%d ids)" % (kind, len(ids)))
     ids += ["0"] * 5
     go("music playlist", "new", "Mix", ids[0])
-    for key, i in zip(["music rm", "music remove", "music delete", "music erase"], ids):
+    for key, i in zip(["music remove", "music rm"], ids):
         go(key, i)
     go("music rebuild", "TargetPod")
     dest = tempfile.mkdtemp(prefix="export-", dir=work)
@@ -119,8 +124,10 @@ def music_steps(binary, flag, target, kind, decoy, music, work):
 def image_cells(binary, fw, music, work, decoy):
     print("an image file")
     img = os.path.join(work, "target.img")
-    step(binary, "card new", [img, "200M"], img, "image file", decoy)
+    step(binary, "image new", [img, "200M"], img, "image file", decoy)
     step(binary, "inspect", [img], img, "image file", decoy)
+    # no terminal: setup lists its four commands for this target and stops (the pty run is test_cli_1_0's)
+    step(binary, "setup", ["--target", img], img, "image file", decoy, refused=True)
     step(binary, "drive partition", ["--target", img, "--yes"], img, "image file", decoy, line=True)
     step(binary, "firmware write", ["--target", img, fw, "--yes"], img, "image file", decoy, line=True)
     # the synthetic firmware's aupd is no program flashpod knows: arm refuses
@@ -129,7 +136,7 @@ def image_cells(binary, fw, music, work, decoy):
     step(binary, "firmware extract", [img, "-o", os.path.join(work, "fw-out.bin")], img, "image file", decoy)
     music_steps(binary, "--raw", img, "image file", decoy, music, work)
     # burn's target is the disk it writes; a file is not one
-    step(binary, "card burn", [img, decoy + ".not-a-disk", "--dry-run"], decoy + ".not-a-disk", "image file",
+    step(binary, "drive restore", [img, decoy + ".not-a-disk", "--dry-run"], decoy + ".not-a-disk", "image file",
          None, refused=True)
 
 
@@ -186,6 +193,7 @@ def card_cells(binary, fw, music, work, decoy):
     root = ["sudo", "-n", "env", "PATH=" + os.environ["PATH"]] + binary
     try:
         step(root, "inspect", [node], node, "card", decoy)
+        step(root, "setup", ["--target", node], node, "card", decoy, refused=True)
         step(root, "drive partition", ["--target", node, "--yes"], node, "card", decoy)
         step(root, "firmware write", ["--target", node, fw, "--yes"], node, "card", decoy)
         step(root, "bootrom arm", ["--target", node, "--yes"], node, "card", decoy, refused=True)
@@ -207,7 +215,7 @@ def card_cells(binary, fw, music, work, decoy):
             f.truncate(100 << 20)
         flash(binary, burnable, fw)
         env = dict(os.environ, PATH=fake + os.pathsep + os.environ["PATH"])
-        step(binary, "card burn", [burnable, node, "--dry-run"], node, "card", decoy, env=env)
+        step(binary, "drive restore", [burnable, node, "--dry-run"], node, "card", decoy, env=env)
     finally:
         sudo("losetup", "-d", node)
 
@@ -243,7 +251,7 @@ def walk_checks(binary, loop):
         check(key in COVERED["image file"], "%s is checked on an image file" % key)
         if key in MUSIC:
             check(key in COVERED["mount"], "%s is checked on a mount" % key)
-        if loop and key != "card new":
+        if loop and key != "image new":
             check(key in COVERED["card"], "%s is checked on a card" % key)
     for kind, why in NOT_APPLICABLE.items():
         print("  not applicable on a %s: %s" % (kind, why))

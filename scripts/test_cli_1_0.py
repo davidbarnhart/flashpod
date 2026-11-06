@@ -401,22 +401,22 @@ def gen4_checks(binary, work):
 
 
 def card_new_checks(binary, work):
-    print("card new (sizes and refusals against card.create_blank's rules)")
+    print("image new (sizes and refusals against card.create_blank's rules)")
     sys.path.insert(0, os.path.dirname(HERE))
     from flashpod import card
     for text, want in (("150M", 150 * 10**6 // 512 * 512), ("1GiB", 1 << 30), ("200000001", 200000001 // 512 * 512)):
         img = os.path.join(work, "new-%s.img" % text)
-        rc, out, err = run(binary, "card", "new", img, text)
+        rc, out, err = run(binary, "image", "new", img, text)
         check(rc == 0 and os.path.getsize(img) == want, "%s makes %d bytes" % (text, want))
     img = os.path.join(work, "new-150M.img")
-    rc, out, err = run(binary, "card", "new", img, "300M")
+    rc, out, err = run(binary, "image", "new", img, "300M")
     check(rc == 1 and "already exists" in err and os.path.getsize(img) == 150 * 10**6 // 512 * 512,
           "an existing image is refused and left as it was")
     tiny = card.min_card_bytes() - 512
-    rc, out, err = run(binary, "card", "new", os.path.join(work, "tiny.img"), str(tiny))
+    rc, out, err = run(binary, "image", "new", os.path.join(work, "tiny.img"), str(tiny))
     check(rc == 1 and "smaller than" in err and not os.path.exists(os.path.join(work, "tiny.img")),
           "one sector under min_card_bytes() (%d) is refused, nothing made" % card.min_card_bytes())
-    rc, out, err = run(binary, "card", "new", os.path.join(work, "bad.img"), "lots")
+    rc, out, err = run(binary, "image", "new", os.path.join(work, "bad.img"), "lots")
     check(rc == 2 and "not a size" in err, "a non-size is a usage error")
 
 
@@ -480,6 +480,80 @@ def mac_card_checks(binary, work):
     check(rc == 2 and "never touches the data partition" in err, "--no-format is gone: firmware write never formats (#115)")
 
 
+def recovery_checks(binary, work):
+    """`help recovery` (#115 N8): every command it tells you to run exists and is built."""
+    print("help recovery")
+    rc, out, err = run(binary, "help", "recovery")
+    check(rc == 0 and "chip programmer" in out, "help recovery prints the cases (rc %d)" % rc)
+    named = sorted(set(re.findall(r"flashpod ((?:[a-z]+ )*[a-z]+)(?= TARGET| --target|`)", out)))
+    check(len(named) >= 5, "it names the commands to run (%s)" % ", ".join(named))
+    img = os.path.join(work, "recovery-nothing.img")   # never created: nothing is written
+    for cmd in named:
+        words = cmd.split()
+        rc, help_out, _ = run(binary, *(words + ["-h"]))
+        check(rc == 0, "`flashpod %s` parses (rc %d)" % (cmd, rc))
+        # only target-taking commands run (a bare `music init` would go looking for an iPod)
+        if "--target" in help_out:
+            rc, o, e = run(binary, *(words + ["--target", img, "--dry-run"]))
+        elif cmd == "inspect":
+            rc, o, e = run(binary, cmd, img)
+        else:
+            continue
+        check("not built yet" not in o + e, "`flashpod %s` is built" % cmd)
+        check(not os.path.exists(img), "`flashpod %s` on a missing image made nothing" % cmd)
+
+
+def setup_checks(binary, work):
+    """`setup` (#115 C) on a pty: the four steps, each asked, each a child
+    flashpod; what it leaves on the card is read back with `music list`."""
+    print("setup (on a pty)")
+    from test_firmware_write_only import run_pty
+    fw = synth.write_firmware(os.path.join(work, "setup-fw.bin"))
+    music = synth.make_music(os.path.join(work, "setup-music"))
+    os.remove(os.path.join(music, "Beta Group", "broken.mp3"))   # add exits 1 on a failed file
+    want_titles = {"Opening", "Second Song", "Return", "Third", "untagged"}
+
+    def fresh(name):
+        img = os.path.join(work, name)
+        with open(img, "wb") as f:
+            f.truncate(300 * 10**6)
+        return img
+
+    def titles(img):
+        rc, out, err = run(binary, "music", "list", "tracks", "--raw", img)
+        return {m.group(1).strip() for m in re.finditer(r"^\s+\d+\s+(?:\d+\.)?\s+(.+?)\s+\d+:\d\d$", out, re.M)}
+
+    img = fresh("setup.img")
+    rc, out = run_pty([binary], ["setup", "--target", img, fw, "--music", music], [
+        (r"Run step 1\? \[Y/n\]", ""), (r'Type "ERASE setup\.img" to proceed:', "ERASE setup.img"),
+        (r"Run step 2\? \[Y/n\]", ""), (r"\[y/N\]", "y"),
+        (r"Run step 3\? \[Y/n\]", ""), (r"Run step 4\? \[Y/n\]", "")], timeout=180)
+    check(rc == 0 and "Done. Put the card in the iPod" in out, "setup runs all four steps (rc %s)" % rc)
+    got = titles(img)
+    check(got == want_titles, "the card ends with the music (%s)" % ", ".join(sorted(got)))
+    rc, o, e = run(binary, "inspect", img, "--json")
+    try:
+        fwinfo = json.loads(o).get("firmware", {})
+    except ValueError:
+        fwinfo = {}
+    check(fwinfo.get("present") is True, "and the firmware")
+
+    img = fresh("setup-wrong.img")
+    rc, out = run_pty([binary], ["setup", "--target", img, fw], [
+        (r"Run step 1\? \[Y/n\]", ""), (r'Type "ERASE setup-wrong\.img" to proceed:', "ERASE")], timeout=60)
+    with open(img, "rb") as f:
+        untouched = f.read(512) == b"\0" * 512
+    check(rc == 1 and "setup stopped: step 1 exited 1" in out and "drive partition --target" in out.split("setup stopped")[-1]
+          and untouched, "a refused ERASE stops setup at step 1, names the command to resume from, writes nothing")
+
+    img = fresh("setup-skip.img")
+    rc, out = run_pty([binary], ["setup", "--target", img, fw], [
+        (r"Run step %d\? \[Y/n\]" % n, "n") for n in (1, 2, 3, 4)], timeout=60)
+    with open(img, "rb") as f:
+        blank = f.read(1 << 20) == b"\0" * (1 << 20)
+    check(rc == 0 and out.count("Skipped. Later: flashpod") == 4 and blank, "answering n to every step writes nothing")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rust", required=True)
@@ -496,6 +570,8 @@ def main():
         gen4_checks(os.path.abspath(opts.rust), work)
         card_new_checks(os.path.abspath(opts.rust), work)
         mac_card_checks(os.path.abspath(opts.rust), work)
+        recovery_checks(os.path.abspath(opts.rust), work)
+        setup_checks(os.path.abspath(opts.rust), work)
     finally:
         if not opts.keep:
             shutil.rmtree(work, ignore_errors=True)

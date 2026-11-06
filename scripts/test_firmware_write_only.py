@@ -29,6 +29,7 @@ that check to fail. Ends with one PASS/FAIL line; exit 0 only on PASS.
 """
 import argparse
 import glob
+import json
 import hashlib
 import os
 import pty
@@ -395,10 +396,91 @@ def bootrom_real(binary, work):
     check(hash_ranges(img, region) == written, "bootrom disarm: the firmware partition is back as written")
 
 
+
+def splice_stock(card, donor):
+    """The oracle for `bootrom arm stock`, written from the directory format,
+    not from the Rust: donor's aupd bytes at the card's aupd offset, both
+    directory entries take the donor's fields but devOffset, then id 0 (armed)."""
+    def entries(fw, base):
+        out = []
+        for i in range(10):
+            o = base + 40 * i
+            if fw[o:o + 4] == b"\0\0\0\0":
+                break
+            out.append((o, fw[o + 4:o + 8][::-1], list(struct.unpack_from("<8I", fw, o + 8))))
+        return out
+    ptr = struct.unpack_from("<I", card, 0x104)[0]
+    live = lambda fw: [e for e in entries(fw, struct.unpack_from("<I", fw, 0x104)[0] + 0x200) if e[1] == b"aupd"][0][2]
+    cf, df = live(card), live(donor)
+    blob = donor[df[1]:df[1] + df[2]]
+    out = bytearray(card)
+    at = cf[1]
+    if len(out) < at + len(blob):
+        out.extend(b"\0" * (at + len(blob) - len(out)))
+    out[at:at + len(blob)] = blob
+    for i in range(at + len(blob), at + cf[2]):
+        out[i] = 0
+    for base in (ptr, ptr + 0x200):
+        for o, typ, f in entries(card, base):
+            if typ == b"aupd":
+                w = list(df)
+                w[1] = f[1]
+                w[0] = 0
+                struct.pack_into("<8I", out, o + 8, *w)
+    return bytes(out)
+
+
+def bootrom_stock(binary, work):
+    print("bootrom arm stock: Apple 1.5's disk-mode program onto flashpod 1.6")
+    cache = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "flashpod", "firmware")
+    apple = sorted(glob.glob(os.path.join(cache, "iPod_1.1.5_*.bin*")))
+    ours = sorted(glob.glob(os.path.join(cache, "flashpod_1.1.6*.bin*")))
+    if not apple or not ours:
+        print("  NOT RUN: needs iPod_1.1.5_* and flashpod_1.1.6* in %s" % cache)
+        return
+    sys.path.insert(0, os.path.dirname(HERE))
+    from flashpod import firmware as pyfw    # the Python 0.x reader: unwrap + fix up, independent of the Rust
+    a15, f16 = pyfw.load_firmware(apple[0]), pyfw.load_firmware(ours[0])
+    want = splice_stock(f16, a15)
+    img = os.path.join(work, "stock.img")
+    fresh_card(binary, img, 256 << 20)
+    rc, out = run_plain(binary, ["firmware", "write", "--target", img, ours[0], "--yes"])
+    check(rc == 0, "flashpod 1.6 written (rc %d)" % rc)
+    _, fwp, _ = table(img)
+    region = (fwp[0] * SECTOR, (fwp[0] + fwp[1]) * SECTOR)
+    outside = [(0, region[0]), (region[1], os.path.getsize(img))]
+    before_out = hash_ranges(img, outside)
+    before = digest(img)
+    rc, out = run_plain(binary, ["bootrom", "arm", "stock", "--target", img])
+    unchanged("bootrom arm stock, no terminal", img, before, rc, out)
+    rc, out = run_pty(binary, ["bootrom", "arm", "stock", "--target", img], [(r"\[y/N\]", "n")])
+    unchanged("bootrom arm stock, answer n", img, before, rc, out)
+    rc, out = run_plain(binary, ["bootrom", "arm", "stock", "--target", img, "--dry-run"])
+    check(rc == 0 and digest(img) == before, "bootrom arm stock --dry-run: rc 0, the image is unchanged")
+    rc, out = run_plain(binary, ["bootrom", "arm", "stock", "--target", img, "--yes"])
+    check(rc == 0 and "Apple 1.5" in out, "bootrom arm stock --yes: armed Apple 1.5 (rc %d)" % rc)
+    mutate("stock outside", img, region[1])
+    check(hash_ranges(img, outside) == before_out, "bootrom arm stock: nothing outside the firmware partition changed")
+    with open(img, "rb") as f:
+        f.seek(region[0])
+        got = f.read(region[1] - region[0])
+    REACHED.add("stock splice")
+    if MUTANT[0] == "stock splice":
+        got = got[:0x4400] + bytes([got[0x4400] ^ 1]) + got[0x4401:]
+    check(got[:len(want)] == want, "bootrom arm stock: the firmware partition is 1.6 with Apple 1.5's disk-mode program, armed")
+    check(not any(got[len(want):]), "bootrom arm stock: the rest of the firmware partition is still zero")
+    rc, out = run_plain(binary, ["inspect", img, "--json"])
+    try:
+        rep = json.loads(out[out.index("{"):])
+    except ValueError:
+        rep = {}
+    flat = json.dumps(rep)
+    check("Apple 1.5" in flat and "flashpod 1.6" in flat, "inspect: osos is still flashpod 1.6, the disk-mode program is Apple 1.5")
+
 MUTANTS = ["fat32 outside", "hfs outside", "firmware write, answer Enter", "firmware write, no terminal",
            "drive partition, a wrong ERASE", "drive partition, --dry-run",
            "large-disk gate, --yes, then an empty ERASE", "large-disk gate, no terminal, --yes",
-           "catalog: an image whose checksum is wrong", "bootrom outside"]
+           "catalog: an image whose checksum is wrong", "bootrom outside", "stock outside", "stock splice"]
 
 
 def run_all(binary):
@@ -419,6 +501,7 @@ def run_all(binary):
         print("  NOT RUN: the gate with stock firmware (no iPod_1.1.2.6_*.bin in %s)" % cache)
     catalog_choosers(binary, work, fw)
     bootrom_real(binary, work)
+    bootrom_stock(binary, work)
 
 
 def main():

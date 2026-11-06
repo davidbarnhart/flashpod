@@ -67,7 +67,7 @@ pub fn cmd_patches(ns: &Ns) -> i32 {
     let lib = match load(online) {
         Ok(lib) => lib,
         Err(e) => {
-            eprintln!("flashpod firmware patches: {}", e.message);
+            eprintln!("flashpod patch list: {}", e.message);
             return 1;
         }
     };
@@ -104,7 +104,7 @@ pub fn cmd_patches(ns: &Ns) -> i32 {
     match listing() {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("flashpod firmware patches: {}", e.message);
+            eprintln!("flashpod patch list: {}", e.message);
             1
         }
     }
