@@ -979,13 +979,18 @@ def main():
         main_compared = [0]          # the mutant runs below compare too
 
         def result(failed, new=None, mutants=None):
-            entered = 0
+            entered = retired = 0
             if new is not None:
                 entered = sum(1 for name in base
                               for ra, rb in zip(base[name], new.get(name, []))
                               if "argv" in ra and "rc" in ra and "rc" in rb)
+                # #115: a retired step is asked of 0.x only; 1.0 has no such
+                # command, and the summary line counts it by name
+                retired = sum(1 for name in base
+                              for ra, rb in zip(base[name], new.get(name, []))
+                              if "argv" in ra and rb.get("retired"))
             return result_line.emit(
-                "cli_unchanged", tree, asked, entered, main_compared[0], failed,
+                "cli_unchanged", tree, asked - retired, entered, main_compared[0], failed,
                 {"baseline": base, "tree": new}, binary=bin_, mutants=mutants)
         if opts.dump:
             for name, recs in base.items():

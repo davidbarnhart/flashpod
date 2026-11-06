@@ -1163,7 +1163,7 @@ def main():
         ref = {}
         asked = sum(1 for _name, sc in chosen for step in sc["steps"]
                     if opts.mode in step.get("modes", (opts.mode,)))
-        log, counted = {}, [0]
+        log, counted, retired = {}, [0], [0]
 
         def compare(rust, label, dump=False):
             bad, n = [], 0
@@ -1180,6 +1180,8 @@ def main():
                 shutil.rmtree(os.path.join(root, "%s-%s-rust" % (name, opts.mode)), ignore_errors=True)
                 for ra, rb in zip(a, b):
                     if rb.get("retired"):
+                        if not label:
+                            retired[0] += 1
                         continue
                     n += 1
                     if "chooser" in ra:
@@ -1216,7 +1218,8 @@ def main():
 
         def result():
             return result_line.emit(
-                "cli_fakehost_" + opts.mode, os.path.dirname(HERE), asked, n, counted[0],
+                # #115: a retired step is asked of 0.x only (counted by name below)
+                "cli_fakehost_" + opts.mode, os.path.dirname(HERE), asked - retired[0], n, counted[0],
                 bool(bad), log, binary=opts.rust,
                 mutants=(len(mutant_names) - len(missed), len(mutant_names)) if opts.mutants else None)
         if not bad:
