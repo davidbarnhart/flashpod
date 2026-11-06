@@ -622,17 +622,33 @@ def main():
 
         cmd = opts.flashpod.split() if opts.flashpod else \
             [sys.executable, "-m", "flashpod"]
-        argv = cmd + words("flash") + [node, "--yes"]
-        if opts.firmware:
-            argv += ["--firmware", opts.firmware]
-        say("running: %s" % " ".join(argv))
+        if LAYOUT_1[0]:
+            # 1.0 has no flash (#115): the drive is partitioned, then the
+            # firmware written, then the library made and loaded, each its
+            # own command -- the four steps 0.x flash ran with its offers.
+            # Without --firmware, the pty answers the same model/firmware
+            # choosers flash asked.
+            fw = [opts.firmware] if opts.firmware else []
+            steps = [cmd + ["drive", "partition", "--target", node, "--yes"],
+                     cmd + ["firmware", "write", "--target", node, "--yes"] + fw,
+                     cmd + ["music", "init", "--raw", node, "iPod"],
+                     cmd + ["music", "add", "--raw", node, music]]
+        else:
+            argv = cmd + words("flash") + [node, "--yes"]
+            if opts.firmware:
+                argv += ["--firmware", opts.firmware]
+            steps = [argv]
 
         env_root = os.environ.copy()
         env_root.setdefault("PYTHONPATH", ROOT)
         os.environ.update(env_root)
 
-        rc, _ = run_flashpod(argv, music, node, model=opts.model)
-        say("flashpod exited %d" % rc, GRN if rc == 0 else RED)
+        for argv in steps:
+            say("running: %s" % " ".join(argv))
+            rc, _ = run_flashpod(argv, music, node, model=opts.model)
+            say("flashpod exited %d" % rc, GRN if rc == 0 else RED)
+            if rc != 0:
+                break
     finally:
         detach(node, img)
 
