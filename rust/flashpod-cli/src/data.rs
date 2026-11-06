@@ -776,6 +776,17 @@ fn run_raw_device(node: &str, cmd: Cmd) -> i32 {
         eprintln!("flashpod: couldn't pin safe FireWire I/O settings for {}; the kernel may probe it unsafely after writes.", node);
     }
     let xfer = crate::rawdev::effective_xfer();
+    #[cfg(windows)]
+    crate::platform::windows::prepare_raw_write(node);
+    // finalize_raw_write on every way out (Python: run_raw's finally + atexit).
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            #[cfg(windows)]
+            crate::platform::windows::finalize_raw_write();
+        }
+    }
+    let restore = Restore;
     let mut dev = match crate::rawdev::RawDevice::open(node, true, xfer) {
         Ok(d) => d,
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -800,6 +811,7 @@ fn run_raw_device(node: &str, cmd: Cmd) -> i32 {
         dispatch(&mut fs, &cx, cmd, &mut ent)
     };
     drop(dev);
+    drop(restore);
     crate::detect::offer_eject(Some(node), rc);
     rc
 }
