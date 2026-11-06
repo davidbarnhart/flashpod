@@ -469,6 +469,29 @@ pub fn arm_firmware(fw: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// The undo of arm_firmware: the aupd id back to 1 ("performed") in both
+/// directories. Any program: disarming never runs it.
+pub fn disarm_firmware(fw: &[u8]) -> Result<Vec<u8>, String> {
+    if fw.len() < 0x108 || &fw[0x100..0x104] != b"]ih[" {
+        return Err("not an iPod firmware image (missing [hi] volume header)".into());
+    }
+    let mut out = fw.to_vec();
+    let ptr = ptr_of(fw);
+    let mut n = 0;
+    for base in [ptr, ptr + 0x200] {
+        for (off, typ, _f) in walk_directory(fw, base) {
+            if &typ == b"aupd" {
+                out[off + 8..off + 12].copy_from_slice(&1u32.to_le_bytes());
+                n += 1;
+            }
+        }
+    }
+    if n != 2 {
+        return Err(format!("expected an aupd entry in both directories, found {}", n));
+    }
+    Ok(out)
+}
+
 /// firmware.fix_on_card: does the firmware read by `read(offset, n)` carry
 /// fix `name`? None when it can't be told (no firmware volume, no osos, no
 /// such fix in the table, or a read failed).
