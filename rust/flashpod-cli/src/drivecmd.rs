@@ -550,6 +550,10 @@ pub fn cmd_bootrom(ns: &Ns, verb: &str) -> i32 {
         }
     };
     let want = verb == "arm";
+    if !want && now.is_none() {
+        println!("{}: nothing is armed (no disk-mode program in the firmware there); nothing written.", t.path);
+        return 0;
+    }
     if now == Some(want) {
         println!("{}: the disk-mode update is already {}; nothing written.", t.path, if want { "armed" } else { "disarmed" });
         return 0;

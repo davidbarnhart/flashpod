@@ -65,3 +65,27 @@ def normalize_calls(text):
     1.0 command words read back: "music", "ls" -> "ls"; "firmware", "write"
     -> "flash". (text, number of replacements)."""
     return _JSON_ARGV.subn(lambda m: '"%s"' % ("flash" if m.group(2) == "write" else m.group(2)), text)
+
+
+def flash_split(argv):
+    """#115: 0.x `flash IMG --firmware FW --yes` is two 1.0 commands,
+    `drive partition` then `firmware write`; their result (exit code and
+    image bytes) must be the 0.x flash's. Any other flash step tested
+    flash's own interface (dry run, choosers, confirmation, refusals) and
+    is retired here: None. Its 1.0 counterpart is in
+    scripts/test_firmware_write_only.py."""
+    if not argv or argv[0] != "flash":
+        return False
+    rest = argv[1:]
+    if "--yes" not in rest or "--firmware" not in rest:
+        return None
+    rest = [a for a in rest if a != "--yes"]
+    i = rest.index("--firmware")
+    fw = rest[i + 1]
+    del rest[i:i + 2]
+    if len(rest) != 1 or rest[0].startswith("-"):
+        return None
+    img = rest[0]
+    return [["drive", "partition", "--target", img, "--yes"],
+            ["firmware", "write", "--target", img, fw, "--yes"]]
+
