@@ -16,14 +16,23 @@ flashpod 1.0 groups its commands by what they act on:
 | Group | Commands |
 | --- | --- |
 | `flashpod inspect TARGET` | everything about a card, iPod or image |
-| `flashpod firmware ...` | `extract`, `write` (also `flashpod flash`), `patches`; not built yet: `list`, `patch`, `arm`, `recover` |
+| `flashpod drive ...` | `partition` (erases the drive) |
+| `flashpod firmware ...` | `write`, `extract`, `patches`; not built yet: `list`, `patch` |
+| `flashpod bootrom ...` | `arm`, `disarm` (the iPod's disk-mode update) |
 | `flashpod card ...` | `new`, `burn` |
 | `flashpod music ...` | `ls`, `add`, `rm`, `init`, `rebuild`, `export`, `playlist` |
 | `flashpod emulate` | boot a firmware or card in emupod (not built yet) |
 
 The 0.x names point you to the new ones: `flashpod ls` says
 "that command is now `flashpod music ls`" and does nothing else.
-`flashpod flash` still works, as `flashpod firmware write`.
+`flashpod flash` is split in two: `flashpod drive partition` lays out and
+formats the drive (it erases it), and `flashpod firmware write` writes only
+the firmware partition and never touches your music. `flashpod flash` names
+both and does nothing else; so do its old flags (`--firmware` is now the
+argument, `--max-data-gb`/`--format` moved to `drive partition`, which uses
+the whole drive unless told `--128g` (so `--lba48` is gone), `--arm` became
+`bootrom arm`, and `--no-format` is gone because firmware write never
+formats).
 
 Every command says what it is acting on. The music commands start with a line
 on stderr, `Target: /dev/sdc (card)`, `Target: my.img (image file)` or
@@ -108,7 +117,7 @@ flashpod --help
 ```
 
 **Windows** (`flashpod-windows-x86_64.zip`): unzip it and run `flashpod.exe`
-from a terminal (an Administrator terminal for `flash`).
+from a terminal (an Administrator terminal to write a drive).
 
 **Modern Macs — Intel and Apple Silicon** (`flashpod-macos-universal2.tar.gz`):
 one universal binary, macOS picks the right architecture. Needs **macOS 10.13
@@ -132,104 +141,27 @@ cd flashpod-macos-vintage-no-internet
 
 The **Linux, Windows, and modern-macOS** builds don't bundle firmware —
 `flashpod firmware write` downloads the image you pick (verified by checksum), or you
-supply your own with `--firmware`. (The **Vintage Mac OS 10.8** build is the exception) 
+name your own file: `flashpod firmware write FIRMWARE`. (The **Vintage Mac OS 10.8** build is the exception) 
 Building the binaries yourself is documented in [BUILD.md](BUILD.md).
 
 
 ## Typical workflow
 
 **Set the card up in a USB reader first — transfers are far faster there than
-over FireWire.** Flash it, then let flashpod initialize the database and load
-your music, all in one sitting:
+over FireWire.** Four commands, one sitting:
 
 ```sh
-flashpod firmware write    # full workflow to partition and format a card,
-                  # write the firmware, init the database, and
-                  # add music all at once
+flashpod drive partition    # pick the card, type ERASE: firmware partition + empty FAT32
+flashpod firmware write     # pick the iPod model and firmware; writes only the firmware
+flashpod music init         # create the iPod's music database
+flashpod music add          # pick your music in the directory picker
 ```
 
-<details>
-<summary><strong>See a full <code>flashpod firmware write</code> session</strong> — model and firmware pick, card selection, erase, verify, init, and first music load</summary>
-
-```
-$ flashpod firmware write
-flashpod firmware write: writing to a disk needs root — elevating via sudo...
-[sudo] password for david:
-Which iPod are you flashing for?
-
-  #  iPod            Years    How to identify it
-  -  --------------  -------  ------------------------------------------------
-  0  1st generation  2001-02  scroll wheel physically turns
-  1  2nd generation  2002     wheel does not move (touch-sensitive)
-  2  3rd generation  2003     four buttons in a row above the wheel
-
-Select model: 0
-Firmware for 1st generation (newest first):
-
-  #  Version         Built       Size  Notes
-  -  --------------  ----------  ----  ---------------------------------------
-  0  1.6 (flashpod)  2026-10-29  5.2M  NOT AN APPLE RELEASE -- flashpod's 1.6:
-                                       Apple's 1.5 plus 22 fixes. Plays FLAC;
-                                       ...
-  1  1.5 *           2005-02-18  2.0M  Last stock Apple-released firmware for
-                                       1G/2G iPods
-  2  1.4             2004-04-23  1.9M  Adds 20+ EQ presets, shuffle by album,
-                                       ...
-  ...
-
-  * recommended default
-
-Select firmware [0]: 0
-flashpod firmware write: downloading iPod_1.1.5_2005_02_18.bin.gz
-  from https://github.com/davidbarnhart/flashpod/releases/download/firmware/iPod_1.1.5_2005_02_18.bin.gz
-  91% (1.8/2.0 MiB)
-flashpod firmware write: verified and cached iPod_1.1.5_2005_02_18.bin.gz
-firmware OK: iPod_1.1.5_2005_02_18.bin.gz (5068800 bytes, structure validated)
-Attached removable storage:
-
-  #  Device         Size  Reader
-  -  --------  ---------  ------------------------------------------
-  0  /dev/sdb  119.1 GiB  USB3.0 Card Reader (Genesys Logic), slot 1
-                          MBR: unformatted 32 MiB, vfat 119.1 GiB 'IPOD'  <-
-                          looks like an iPod card
-  1  /dev/sdc        0 B  USB3.0 Card Reader (Genesys Logic), slot 2
-                          no card inserted
-
-Select device number (or 'q' to quit): 0
-
-  PLAN — this will ERASE /dev/sdb
-    layout      : MBR + FAT32
-    device size : 119.1 GiB (249737216 sectors)
-    firmware     : sectors 63..65598   (32 MiB)
-    data (FAT32) : sectors 65599..249735167  type 0x0B  (119.1 GiB)
-
-  Type "ERASE sdb" to proceed: ERASE sdb
-  wrote MBR partition table + firmware
-  formatted data partition (FAT32, 7798364 clusters @ 16 KiB, label 'IPOD')
-  verifying firmware on the card byte-for-byte (5068800 bytes @ sector 63) ...
-  verify OK: 5068800 firmware bytes on the card match the image exactly.
-
-The card still needs the iPod database before it can take music ("flashpod music init").
-Run init on /dev/sdb2 now? [Y/n] Y
-Initialized iPod directory structure on /dev/sdb2
-
-Music can be loaded onto the card now, or later when it is in the iPod.
-Load music onto the card now? [Y/n] Y
-  (the directory picker opens — Space to select, Enter to confirm)
-Adding 1 selected path:
-  /mnt/homestore/sound/mp3/New Order/Technique/
-flashpod music add: this batch is 54.8 MiB. You've got 118.94 GiB more than you need, Dude. That's gnarly!
-[6/9] Adding: Run — New Order... 100% (6.2/6.2 MiB)
-[7/9] Adding: Mr. Disco — New Order... 100% (6.0/6.0 MiB)
-[8/9] Adding: Vanishing Point — New Order... 100% (7.3/7.3 MiB)
-[9/9] Adding: Dream Attack — New Order... 100% (7.2/7.2 MiB)
-9 tracks added in 42s (54.8 MiB at 1.3 MiB/s)
-  flushing + ejecting /dev/sdb
-
-Done. /dev/sdb is ready — insert it into the iPod.
-```
-
-</details>
+Each one with no arguments asks what it needs: the drive (from the attached
+removable disks), the model and firmware (from the catalog, downloaded and
+checked by SHA-256), the music. Writing to a disk needs root, so flashpod
+re-runs itself under sudo and asks for your password. Add `--target /dev/sdX`
+to name the drive yourself, and `--dry-run` to see the plan without writing.
 
 Load the **bulk** of your library now, while the card is in the reader. Once the
 card is in the iPod, music transfers over FireWire are much slower — fine for a
@@ -464,31 +396,73 @@ it's slow over FireWire; fine for a one-off recovery.) `flashpod music list` poi
 here when it finds an iPod with an unparseable database, and `flashpod music add` onto
 such an iPod offers to rebuild first, then adds your new files on top.
 
-### `flashpod firmware write [/dev/sdX]`
+### `flashpod drive partition`
 
-Write the iPod firmware and partition layout to a CF/SD card. **Erases the
-card.** Writing needs root, so flashpod re-runs itself under sudo (prompting for
-your password) — you launch it as a regular user.
-
-**Just run `flashpod firmware write` with no arguments.** That's the normal way: it lists
-the removable disks, walks you through picking the right one, writes the
-firmware, and then offers to initialize the database and load your music — the
-whole card set up in one sitting. The forms below are only for when you want to
-name the device yourself or preview the plan.
+Lay out a CF/SD card (or any drive) for an iPod: a partition table, an empty
+32 MiB firmware partition, and a data partition formatted FAT32 (or HFS+ with
+`--format hfs`, below). **Erases the drive.** The plan says what is lost (the
+number of tracks, when there is a library to count) and you type
+`ERASE sdX` to go on; `--yes` skips that.
 
 ```
-$ flashpod firmware write                       # ← the usual way: pick a disk interactively
-$ flashpod firmware write /dev/sdb              # name the device yourself
-$ flashpod firmware write /dev/sdb --dry-run    # print the plan, write nothing (no root)
-$ flashpod firmware write --self-test           # validate layout logic, no hardware
+$ flashpod drive partition                      # pick the drive from a list
+$ flashpod drive partition --target /dev/sdb    # name it yourself
+$ flashpod drive partition --target /dev/sdb --dry-run   # the plan, nothing written
 ```
+
+| Flag | Meaning |
+|------|---------|
+| `--target T`        | the drive or image file. Default: choose from the attached removable disks |
+| `--128g`            | cap the data partition at 128 GiB, for firmware that can't read past it (all of Apple's) |
+| `--max-data-gb <N>` | cap the data partition to N decimal GB |
+| `--format fat32\|hfs` | the data partition's filesystem: FAT32 (default, any OS) or HFS+ (a Mac drive) |
+| `--yes`             | skip the typed `ERASE sdX` confirmation |
+| `--dry-run`         | show the plan only (on a disk this still needs root: it reads the drive to say what is lost) |
+
+The data partition uses the whole drive unless you cap it. Only firmware that
+can address past 128 GiB (flashpod 1.6) reads all of a bigger card; Apple's
+can't, and `firmware write` stops before writing it to such a card (below).
+
+Safety: only removable/USB disks are offered, the disk backing the running
+system is always refused, partition nodes (`/dev/sdb1`) are rejected, and the
+drive is unmounted before it is written.
+
+### `flashpod firmware write [FIRMWARE]`
+
+Write iPod firmware into the drive's firmware partition. **Nothing else on the
+drive changes**: the partition table and the music stay as they are, so this is
+also how you change the firmware on a card that already has your library.
+`--yes` skips the "Write the firmware to /dev/sdX? [y/N]" question. After
+writing, the firmware partition is read back and compared byte for byte.
+
+```
+$ flashpod firmware write                                   # pick the drive, model and firmware
+$ flashpod firmware write --target /dev/sdb iPod_1.1.5.ipsw # your own file, no download
+$ flashpod firmware write --target /dev/sdb --dry-run       # the plan, nothing written
+```
+
+| Flag | Meaning |
+|------|---------|
+| `FIRMWARE`      | a local image — raw `Firmware-*`, `.bin.gz`, or `.ipsw` (no download). Default: pick from the catalog and download it |
+| `--target T`    | the drive or image file. Default: choose from the attached removable disks |
+| `--model <id>`  | iPod model (`1G`, `2G`, `3G`); decides which firmware is offered. Default: ask |
+| `--yes`         | skip the confirmation (it never approves an erase) |
+| `--dry-run`     | show the plan only |
+
+The drive needs a firmware partition first: on a blank drive, run
+`flashpod drive partition`. **Big cards:** if the data partition reaches past
+128 GiB and the firmware can't read that far (or flashpod can't tell), it
+stops and names the fix: `flashpod drive partition --target T --128g`, then
+`firmware write` again. In a terminal it also offers to do both for you; that
+erases the drive, so it asks y/N and then for the typed `ERASE sdX`, even with
+`--yes`. Without a terminal, or with `--dry-run`, it writes nothing.
 
 **4th generation and later are read-only for now.** flashpod has never
 had a card it wrote boot on a 4G or an iPod photo, so `firmware write`
 refuses their firmware (by its load address, whichever way it was chosen).
 `inspect` and `firmware extract` still read those cards.
 
-**Firmware:** with no `--firmware`, flashpod first asks **which iPod you're
+**Firmware:** with no FIRMWARE argument, flashpod first asks **which iPod you're
 flashing for** (or takes `--model 1G|2G|3G`), then lists only the
 firmware that fits it, from the bundled catalog
 (`flashpod/firmware/firmware.json`), with version, build date, and description
@@ -514,8 +488,8 @@ What you gain over 1.5:
 
 - **FLAC.** FLAC files play, fast-forward and rewind land at once, and there's
   no dropout when a track starts or while the file cache refills.
-- **Big cards.** Disks over 128 GiB work (LBA48); flash with `--lba48` to give
-  the data partition the whole card.
+- **Big cards.** Disks over 128 GiB work (LBA48): `flashpod drive partition`
+  gives the data partition the whole card unless you pass `--128g`.
 - **Big libraries.** 1.5 shows zero songs once the iTunesDB passes about
   3.8 MB (around 5,300 tracks), because of a memory leak; 1.6 fixes the leak,
   and a track's record takes 160 bytes instead of 448. It has run on
@@ -529,11 +503,11 @@ What you gain over 1.5:
   letter, instead of vanishing.
 - **Shuffle Songs** leaves audiobooks out without looking up every track.
 - The iPod says it's version 1.6.
-- **Disk mode on big cards**, but not after a normal flash: FireWire disk
+- **Disk mode on big cards**, but not after a plain firmware write: FireWire disk
   mode can see, read and write a card past 128 GiB only once the iPod's
   flash ROM has been reprogrammed with 1.6's updater (openpod's tooling).
-  A flashpod firmware write leaves the ROM alone, so disk mode stays at 128 GiB as
-  on 1.5.
+  `flashpod firmware write` leaves the ROM alone, so disk mode stays at 128 GiB
+  as on 1.5, until you arm the update (`flashpod bootrom arm`, below).
 
 Hardware-tested: this image on 2026-10-31, on a 256 GB card of MP3s and a 128 GB
 card of FLAC files; these fixes on 2026-10-16 on a 1st-generation iPod, with a
@@ -541,38 +515,45 @@ card of FLAC files; these fixes on 2026-10-16 on a 1st-generation iPod, with a
 Shuffle Songs doesn't start on a library near 32,000 songs. It hasn't been
 tested on a 2G; it's offered for one because 1.5, which it's built from, is.
 
-**Arming a card for a disk-mode update (`--arm`).** A 1G/2G firmware
-carries a second program, the one the iPod runs in FireWire disk mode, which
-lives in the iPod's own flash chip, not on the card. flashpod normally writes
-the card with that update marked as already done, so the chip is left alone.
-An **armed** card leaves it pending: on the next start from the card **on
-FireWire power**, the iPod reprograms its flash chip with the card's
-disk-mode program (flashpod 1.6's carries disk mode past 128 GiB). On battery
-it shows the connect-power icon and does nothing. The risk is small but real:
-if power is cut during the first part of the programming (the erases and the
-first ~7%), the iPod won't start again without an external chip programmer;
-after that, a failure repairs itself on the next start. flashpod has no dump
-of your iPod's chip, so it can't rehearse the update first (openpod's
-`tools/flash_rom_update.py` can). Only disk-mode programs flashpod knows can
-be armed: flashpod 1.6's and Apple 1.5's. An interactive flash of one of them
-asks "Arm this card for an iPod update to disk-mode during the next boot?
-[y/N]"; only a yes brings the warning (FireWire power during the next boot;
-halting the update can leave the iPod permanently broken) and a second
-"Continue? [y/N]", and the card is armed only on both yeses. `--arm` arms
-without asking either, `--no-arm` never arms, and a
-non-interactive run never arms without `--arm`. `card.flash(..., arm=True)`
-does the same in the library, and `inspect` reports whether a card is armed.
+### `flashpod bootrom arm` / `flashpod bootrom disarm`
+
+A 1G/2G firmware carries a second program, the one the iPod runs in FireWire
+disk mode, which lives in the iPod's own flash chip, not on the card.
+`firmware write` writes the card with that update marked as already done, so
+the chip is left alone. `bootrom arm` marks it pending: on the next start from
+the card **on FireWire power**, the iPod reprograms its flash chip with the
+card's disk-mode program (flashpod 1.6's carries disk mode past 128 GiB). On
+battery it shows the connect-power icon and does nothing. The risk is small
+but real: if power is cut during the first part of the programming (the erases
+and the first ~7%), the iPod won't start again without an external chip
+programmer; after that, a failure repairs itself on the next start. flashpod
+has no dump of your iPod's chip, so it can't rehearse the update first
+(openpod's `tools/flash_rom_update.py` can). Only disk-mode programs flashpod
+knows can be armed: flashpod 1.6's and Apple 1.5's.
+
+```
+$ flashpod bootrom arm --target /dev/sdb      # asks, with the warning, then arms
+$ flashpod bootrom disarm --target /dev/sdb   # back to "already done"
+```
+
+`arm` asks "Arm this drive for an iPod update to disk-mode during the next
+boot? [y/N]"; `--yes` skips the question, and without a terminal it arms only
+with `--yes`. Both change only the firmware partition, and `--dry-run` shows
+what would change. Writing new firmware clears an armed update.
+`card.flash(..., arm=True)` does the same in the library, and `inspect`
+reports whether a card is armed.
 
 These early images have no low disk-size ceiling — 1.0 and 1.0.4 were tested on
 a 128 GB card in full (the broken-folder icon on such a card means the data
 partition wasn't initialized, since 1.0 doesn't auto-create `iPod_Control`; run
 `flashpod music init`). The only size limit is the 128 GiB LBA28 cap that binds all of
-this firmware; see `--lba48`. A manifest entry *may* carry a `max_data_gb`
-ceiling if some firmware ever needs one, and `--max-data-gb` sets it by hand.
+this firmware; see `drive partition --128g`. A manifest entry *may* carry a
+`max_data_gb` ceiling if some firmware ever needs one, and
+`drive partition --max-data-gb` sets one by hand.
 
 Catalog images ship as `.bin.gz` (a gzipped raw `Firmware-*` image). To use a
-firmware flashpod doesn't host (or to work fully offline), pass it with
-`--firmware <file>` — that path never touches the network, and accepts a raw
+firmware flashpod doesn't host (or to work fully offline), name the file:
+`flashpod firmware write FILE` — that path never touches the network, and accepts a raw
 `Firmware-*` image, a `.bin.gz`, or an Apple `.ipsw` (the format is detected
 from the file's magic bytes, not its name). To add an image to the catalog,
 upload it to the firmware release and add a manifest entry (`file`,
@@ -580,34 +561,6 @@ upload it to the firmware release and add a manifest entry (`file`,
 `maker` for anything not Apple's (the picker and `inspect` show it), and
 `build_date` if known — it can't be recovered from the file later, since git
 and release downloads both reset mtimes).
-
-Options:
-
-| Flag | Meaning |
-|------|---------|
-| `--firmware <file>` | use a local image — raw `Firmware-*`, `.bin.gz`, or `.ipsw` (bring-your-own; no download). Default: pick from the catalog and download it |
-| `--model <id>`      | iPod model to flash for (`1G`, `2G`, `3G`); decides which firmware is offered. Default: ask. 4th generation and later aren't written yet (see below) |
-| `--yes`             | skip the typed `ERASE sdX` confirmation |
-| `--arm` / `--no-arm` | arm the card for a disk-mode update, or don't (and don't ask). Without either, an interactive flash asks, defaulting to no; see below |
-| `--no-format`       | keep the data partition and its music: rewrite only the firmware and partition table. Refused unless the card's data partition already starts and ends where the new table puts it |
-| `--lba48`           | **experimental**: use the whole card for data, past the 128 GiB cap (LBA48-patched iPods only) |
-| `--max-data-gb <N>` | cap the data partition to N decimal GB (e.g. to make a smaller partition, or probe a firmware's disk-size ceiling) |
-| `--dry-run`         | show the plan only |
-| `--self-test`       | check layout-building logic and exit |
-
-Safety: only removable/USB disks are offered, the disk backing the running
-system is always refused, partition nodes (`/dev/sdb1`) are rejected, the
-target is unmounted first, and an explicit typed confirmation is required.
-After writing, the firmware region is read back and compared byte-for-byte
-before the card is ejected. Cards larger than 128 GiB are capped at the
-iPod's LBA28 addressing limit — pass `--lba48` to use the whole card instead,
-but only on an iPod running an LBA48 patch (an unpatched iPod can't address the
-extra sectors and will misread the card).
-
-After a successful interactive flash, flashpod offers to run init on the new
-card right away, and after that to load music onto it too — answer Y (the
-default) to both and the card comes out of the flash step ready to play. The
-offers are skipped for `--dry-run`, `--no-format`, and non-interactive runs.
 
 ### A disk image instead of a card
 
@@ -620,21 +573,21 @@ The file's size is the card's size, so give it one first:
 
 ```
 $ truncate -s 1G ipod.img
-$ flashpod firmware write ipod.img --firmware iPod_1.1.5.ipsw --yes
+$ flashpod drive partition --target ipod.img --yes
+$ flashpod firmware write --target ipod.img iPod_1.1.5.ipsw --yes
 $ flashpod music init --raw ipod.img
 $ flashpod music add  --raw ipod.img ~/Music/*.mp3
 $ flashpod music ls   --raw ipod.img
 ```
 
-An interactive `flash` of an image offers init and music afterwards, as it does
-for a card. The image is what an iPod emulator boots — openpod's
+The image is what an iPod emulator boots — openpod's
 `tools/ipod_emu_ui.py` reads one with `OPENPOD_DISK=ipod.img` — and it can be
 written to a real card with `flashpod card burn`, below.
 
 ### `flashpod card burn IMAGE [/dev/sdX]`
 
 Writes a card image file onto a real SD/CF card in a reader, byte for byte,
-then reads the card back to check it. Like `flash`, it erases the card, needs
+then reads the card back to check it. Like `drive partition`, it erases the card, needs
 root (it elevates via sudo), and asks you to type `ERASE sdX` (`--yes` skips
 that). Leave out the device to choose from the attached removable disks.
 
@@ -647,7 +600,7 @@ partition reaches past 128 GiB (only LBA48 firmware can address that).
 `--dry-run` runs every check and writes nothing; `--no-verify` skips the
 read-back. Linux only for now.
 
-### A Mac card: `flashpod firmware write --format hfs`
+### A Mac card: `flashpod drive partition --format hfs`
 
 `--format hfs` makes a Mac-formatted card instead of a FAT32 one: an Apple
 Partition Map, the firmware, and an HFS+ volume inside the HFS wrapper early
@@ -745,7 +698,7 @@ refuses anything but a regular file.
 from flashpod import card
 
 card.create_blank("a.img", 8 * 10**9)          # sparse
-card.flash("a.img", "iPod_1.1.5.bin.gz")        # same bytes as `flashpod firmware write a.img --yes`
+card.flash("a.img", "iPod_1.1.5.bin.gz")        # same bytes as `drive partition` + `firmware write`, --yes
 card.init("a.img", "My iPod")
 plan = card.plan_add("a.img", ["/music/Album"]) # what would happen; writes nothing
 report = card.add("a.img", ["/music/Album"], plan=plan,
