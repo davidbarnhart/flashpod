@@ -52,14 +52,26 @@ fn resolve_target(ns: &Ns, cmd: &str) -> Result<Target, i32> {
             eprintln!("flashpod {}: no such file or disk: {}", cmd, p);
             return Err(1);
         }
-        return Ok(Target { path: p, image: false });
+        return disk(p);
     }
     if !stdin_isatty() {
         eprintln!("flashpod {}: name the drive or image with --target (no terminal to choose one on).", cmd);
         return Err(2);
     }
     match crate::platform::current().choose_device() {
-        Ok(d) => Ok(Target { path: d, image: false }),
+        Ok(d) => disk(d),
+        Err(crate::flash::Exit(m)) => {
+            eprintln!("{}", m);
+            Err(1)
+        }
+    }
+}
+
+/// A disk passes the device rails first: no partition node, no system
+/// disk (platform.validate_target, as 0.x flash did).
+fn disk(p: String) -> Result<Target, i32> {
+    match crate::platform::current().validate_target(&p) {
+        Ok(()) => Ok(Target { path: p, image: false }),
         Err(crate::flash::Exit(m)) => {
             eprintln!("{}", m);
             Err(1)
@@ -168,7 +180,7 @@ fn after_table_write(t: &Target) {
 /// The partition plan, printed (stderr).
 fn print_partition_plan(dev: &str, total: u64, o: &PartitionOptions, lost: &str) -> Result<(), String> {
     let (_, start, n) = drive::plan_partition(total, o).map_err(|e| e.message)?;
-    eprintln!("{}", color(&format!("\n  PLAN \u{2014} this will ERASE {}: {} are lost", dev, lost), C_RED));
+    eprintln!("{}", color(&format!("\n  PLAN \u{2014} this will ERASE {}: {} will be lost", dev, lost), C_RED));
     eprintln!("    layout      : {}", if o.mac { "Apple Partition Map + HFS+ (a Mac drive)" } else { "MBR + FAT32" });
     eprintln!("    drive size  : {} ({} sectors)", fmt_size(total * SECTOR), total);
     eprintln!("    firmware    : sectors {}..{}, left empty ({})", flashpod_core::layout::FW_START,
@@ -235,6 +247,10 @@ pub fn cmd_partition(ns: &Ns) -> i32 {
         }
     };
     let total = dev.len().unwrap_or(0) / SECTOR;
+    if total == 0 && t.image {
+        eprintln!("flashpod {}: {} is empty -- give it the card's size first, e.g. `flashpod card new {} 1G`", cmd, t.path, t.path);
+        return 1;
+    }
     if total == 0 {
         eprintln!("flashpod {}: {} reports size 0 \u{2014} is a card inserted? An empty reader slot shows up as a 0-byte disk.", cmd, t.path);
         return 1;
@@ -325,7 +341,7 @@ fn large_disk_gate(ns: &Ns, t: &Target, fw_path: &str, build: &str, p: &LargeDis
     }
     let lost = what_is_lost(dev, Some(table));
     eprintln!("{}", color(&format!(
-        "Re-partitioning with --128g first makes the drive readable by this firmware. That ERASES {}: {} are lost.",
+        "Re-partitioning with --128g first makes the drive readable by this firmware. That ERASES {}: {} will be lost.",
         t.path, lost), C_RED));
     let q = if p.support.is_none() { "Re-partition anyway? [y/N] " } else { "Re-partition, then write the firmware? [y/N] " };
     if !yes_no(&format!("\n{}", q)) {

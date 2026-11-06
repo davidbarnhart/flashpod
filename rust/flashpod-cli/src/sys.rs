@@ -116,6 +116,7 @@ mod imp {
         std::os::unix::fs::FileExt::write_at(f, buf, offset)
     }
 
+    #[allow(dead_code)] // kept for `flashpod setup` (#115)
     /// mkdir with mode 0700.
     pub fn mkdir_private(path: &std::path::Path) -> io::Result<()> {
         use std::os::unix::fs::DirBuilderExt;
