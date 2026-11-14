@@ -212,7 +212,7 @@ def parity(tmp, fpcore):
 
 
 def cli(tmp, flashpod):
-    """The Rust CLI's `firmware patches` over a local HTTP server: downloads
+    """The Rust CLI's `patch list` over a local HTTP server: downloads
     what changed, refuses a tampered file and keeps its cache."""
     import functools
     import http.server
@@ -237,7 +237,7 @@ def cli(tmp, flashpod):
     cached = os.path.join(tmp, "xdg", "flashpod", "patches", "patches", "apple-1g2g-1.5", "flac", "README.md")
 
     def run_cli(*extra):
-        p = subprocess.run([flashpod, "firmware", "patches"] + list(extra), env=env,
+        p = subprocess.run([flashpod, "patch", "list"] + list(extra), env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         return p.returncode, p.stdout.decode()
     try:

@@ -279,7 +279,7 @@ def partition_confirm(binary, work, fw, music):
     run_plain(binary, ["firmware", "write", "--target", img, fw, "--yes"])
     run_plain(binary, ["music", "init", "--raw", img, "Pod"])
     rc, out = run_plain(binary, ["music", "add", "--raw", img, music])
-    n = len(re.findall(r"^\s*\[?\s*\d+\]?\s", run_plain(binary, ["music", "ls", "all", "--raw", img])[1], re.M))
+    n = len(re.findall(r"^\s*\[?\s*\d+\]?\s", run_plain(binary, ["music", "list", "tracks", "--raw", img])[1], re.M))
     m = re.search(r"(\d+) tracks? added", out)
     tracks = int(m.group(1)) if m else n
     check(tracks > 0, "setup: the card holds %d tracks" % tracks)
