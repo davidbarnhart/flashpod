@@ -94,24 +94,34 @@ def run_pty(cmd, env, cols=80):
 
 # 1.0 layout (#97): the new groups, their help and their usage errors
 CASES_1_0 = [
-    "music", "music -h", "music bogus", "music ls bogus", "music ls -h", "music list -h",
-    "music rm", "music add --foo", "music export -h", "music playlist -h",
+    "music", "music -h", "music bogus", "music list bogus", "music list -h", "music ls -h",
+    "music list all", "music remove", "music rm", "music add --foo", "music export -h", "music playlist -h",
     "firmware", "firmware -h", "firmware bogus", "firmware write -h", "firmware write a b",
     "firmware write --arm --no-arm x", "firmware extract -h", "firmware list -h", "firmware list x",
-    "firmware patch -h", "card", "card -h", "card burn", "card burn -h", "card new -h",
-    "inspect -h", "emulate -h", "flash -h", "ls", "--mount x rm 5", "burn a",
+    "image", "image -h", "image new", "image new -h", "image new x", "image new x 1G y",
+    "drive restore", "drive restore -h", "drive backup -h", "drive backup x",
+    "inspect -h", "emulate -h", "emulate x", "flash -h", "ls", "--mount x rm 5", "burn a",
     "firmware extract", "firmware extract x", "firmware extract x -o", "firmware extract x -o f --image bogus",
     "firmware extract -o f", "firmware extract a b -o f",
     "music export --to", "music export --other-files --no-other-files", "music export x",
-    "music playlist", "music playlist -h", "music playlist new", "music playlist add x",
-    "music playlist rm -h", "music playlist delete", "music playlist ls a b", "music playlist bogus",
-    "inspect", "inspect a b", "inspect --json", "card new", "card new x", "card new x 1G y",
+    "music playlist", "music playlist new", "music playlist add x",
+    "music playlist remove -h", "music playlist rm -h", "music playlist delete", "music playlist list a b",
+    "music playlist ls a b", "music playlist bogus", "music playlist lst",
+    "inspect", "inspect a b", "inspect --json",
     "firmware write --format", "firmware write --format ntfs x", "flash --format hfs --format",
     # #115: the drive commands
     "drive", "drive -h", "drive partition -h", "drive partition --128g --max-data-gb abc",
-    "drive partition --format ntfs", "drive partition x", "bootrom", "bootrom -h", "bootrom arm -h",
-    "bootrom disarm -h", "bootrom disarm x", "bootrom arm a b", "firmware write --target",
-    "firmware write --no-format x", "firmware arm -h", "firmware recover -h", "flash --firmware x /dev/sdz",
+    "drive partition --format ntfs", "drive partition --format fat3", "drive partition x", "bootrom", "bootrom -h",
+    "bootrom arm -h", "bootrom disarm -h", "bootrom disarm x", "bootrom arm a b", "firmware write --target",
+    "firmware write --no-format x", "flash --firmware x /dev/sdz",
+    # #115 step 2: the 1.0 tree, the old names' pointers, typos, bare groups
+    "", "patch", "patch -h", "patch list -h", "patch list x", "patch show -h", "patch apply x",
+    "games", "games -h", "games list", "games add x", "completion -h", "setup -h",
+    "help", "help -h", "help recovery", "help bogus", "help recovry",
+    "card", "card -h", "card new x 1G", "card burn a", "firmware patches", "firmware patch -h",
+    "firmware arm -h", "firmware recover", "music delete 5", "music erase 5", "wizard", "list", "remove 5",
+    "--raw x ls all", "muisc", "drvie", "music lst", "music remvoe 5", "bootrom amr", "firmware wirte",
+    "music list trcks", "--version", "--mount x music", "music playlist list -h",
 ]
 
 

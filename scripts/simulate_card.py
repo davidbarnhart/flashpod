@@ -65,6 +65,15 @@ def words(command):
     return [command]
 
 
+def ls_all(node):
+    """`ls all --raw NODE` as the flashpod under test spells it (1.0: `music list tracks`)."""
+    argv = ["ls", "all", "--raw", node]
+    if LAYOUT_1[0]:
+        import layout1
+        return layout1.argv_1_0(argv)
+    return argv
+
+
 GRN, RED, YEL, RST = "\033[32m", "\033[31m", "\033[33m", "\033[0m"
 
 
@@ -545,10 +554,10 @@ def raw_path_exercise(img, size, opts):
         # ls again proves the write round-trips (titles = filename stems).
         # With --music the flash-time titles are unknown -- only check exit.
         for argv, expect in (
-                (cmd + words("ls") + ["all", "--raw", node],
+                (cmd + ls_all(node),
                  None if opts.music else "test-track"),
                 (cmd + words("add") + ["--raw", node, tune], None),
-                (cmd + words("ls") + ["all", "--raw", node], "raw-path-extra")):
+                (cmd + ls_all(node), "raw-path-extra")):
             say("running: %s" % " ".join(argv))
             r = subprocess.run(argv, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT,

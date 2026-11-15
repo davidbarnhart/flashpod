@@ -1102,7 +1102,7 @@ def run_scenario(name, sc, mode, cards, build, rust, root):
                 state = json.load(f)
             mounted = mounted or any(c["tool"] == "mount" or c["tool"] == "udisksctl" and c["argv"][:1] == ["mount"]
                                      for c in calls)
-            if LAYOUT_1 and step["argv"][:1] in (["flash"], ["drive"]):
+            if LAYOUT_1 and (step["argv"][:1] == ["flash"] or step["argv"][:2] == ["drive", "partition"]):
                 recs.append({"step": i, "argv": step["argv"], "chooser": chooser_part(out + err)})
                 continue
             recs.append({

@@ -250,7 +250,7 @@ pub fn cmd_partition(ns: &Ns) -> i32 {
     };
     let total = dev.len().unwrap_or(0) / SECTOR;
     if total == 0 && t.image {
-        eprintln!("flashpod {}: {} is empty -- give it the card's size first, e.g. `flashpod card new {} 1G`", cmd, t.path, t.path);
+        eprintln!("flashpod {}: {} is empty -- give it the card's size first, e.g. `flashpod image new {} 1G`", cmd, t.path, t.path);
         return 1;
     }
     if total == 0 {
@@ -516,17 +516,52 @@ fn moved_flash_flags(ns: &Ns) -> Option<i32> {
 /// `bootrom arm [stock|PROGRAM] [--target T] [--yes] [--dry-run]` and
 /// `bootrom disarm [--target T] [--dry-run]`, on the firmware already on
 /// the drive.
+/// Apple 1.5 from the catalog, install-ready, for `bootrom arm stock`.
+/// Refused unless its disk-mode program is the one flashpod knows as
+/// Apple 1.5's. Elevated, it reuses the invoking user's cached copy (the
+/// unelevated run fetched it there) rather than downloading as root.
+fn stock_firmware() -> Result<Vec<u8>, String> {
+    let manifest = crate::catalog::load_manifest().ok_or("the firmware catalog can't be read")?;
+    let entry = manifest["firmwares"].as_array().and_then(|a| a.iter().find(|e| {
+        e["file"].as_str().is_some_and(|f| f.starts_with("iPod_1.1.5_")) && e.get("maker").is_none()
+    })).cloned().ok_or("the catalog has no Apple 1.5")?;
+    if std::env::var_os("XDG_CACHE_HOME").is_none() && std::env::var_os("SUDO_USER").is_some() {
+        let theirs = format!("{}/.cache", crate::pathpicker::invoking_home());
+        if std::path::Path::new(&format!("{}/flashpod/firmware/{}", theirs, entry["file"].as_str().unwrap_or(""))).is_file() {
+            std::env::set_var("XDG_CACHE_HOME", theirs);
+        }
+    }
+    let path = crate::catalog::ensure_firmware(&entry, manifest["base_url"].as_str().unwrap_or(""))
+        .ok_or("couldn't fetch Apple 1.5 (the download or its checksum failed)")?;
+    let fw = crate::flash::load_firmware(&path)?;
+    match firmware::aupd_of(&fw) {
+        Some((_, Some("Apple 1.5"))) => Ok(fw),
+        _ => Err(format!("{} doesn't hold the Apple 1.5 disk-mode program flashpod knows", path)),
+    }
+}
+
 pub fn cmd_bootrom(ns: &Ns, verb: &str) -> i32 {
     let cmd = format!("bootrom {}", verb);
-    if let Some(p) = s(ns, "program") {
-        eprintln!("flashpod {} {}: not built yet (coming in flashpod 1.0). `flashpod bootrom arm` arms the program in the firmware already on the drive.", cmd, p);
-        return 2;
-    }
+    let program = s(ns, "program");
+    // Apple's program, fetched (as the invoking user) before any elevation
+    let stock = if program.is_some() {
+        match stock_firmware() {
+            Ok(fw) => Some(fw),
+            Err(e) => {
+                eprintln!("{}", color(&format!("flashpod {} stock: {}", cmd, e), C_RED));
+                return 1;
+            }
+        }
+    } else {
+        None
+    };
     let t = match resolve_target(ns, &cmd) {
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    let mut argv = vec!["bootrom".to_string(), verb.into(), "--target".into(), t.path.clone()];
+    let mut argv = vec!["bootrom".to_string(), verb.into()];
+    argv.extend(program.clone());
+    argv.extend(["--target".to_string(), t.path.clone()]);
     for (flag, k) in [("--yes", "yes"), ("--dry-run", "dry_run")] {
         if b(ns, k) {
             argv.push(flag.into());
@@ -552,11 +587,17 @@ pub fn cmd_bootrom(ns: &Ns, verb: &str) -> i32 {
         }
     };
     let want = verb == "arm";
-    if !want && now.is_none() {
+    if stock.is_some() {
+        if dry {
+            eprintln!("{}", color(&format!("  [dry-run] would replace the disk-mode program on {} with Apple 1.5's and arm it \
+                                             (only the firmware partition changes); nothing written", t.path), C_DIM));
+            return 0;
+        }
+    } else if !want && now.is_none() {
         println!("{}: nothing is armed (no disk-mode program in the firmware there); nothing written.", t.path);
         return 0;
     }
-    if now == Some(want) {
+    if stock.is_none() && now == Some(want) {
         println!("{}: the disk-mode update is already {}; nothing written.", t.path, if want { "armed" } else { "disarmed" });
         return 0;
     }
@@ -583,7 +624,11 @@ pub fn cmd_bootrom(ns: &Ns, verb: &str) -> i32 {
             return 1;
         }
     };
-    let r = if want { drive::arm(dev.as_mut()) } else { drive::disarm(dev.as_mut()) };
+    let r = match (&stock, want) {
+        (Some(fw), _) => drive::arm_with(dev.as_mut(), fw),
+        (None, true) => drive::arm(dev.as_mut()),
+        (None, false) => drive::disarm(dev.as_mut()),
+    };
     match r {
         Ok(r) => {
             println!("{}: disk-mode update {} ({}; {} sectors written, read back OK).", t.path,
@@ -597,5 +642,113 @@ pub fn cmd_bootrom(ns: &Ns, verb: &str) -> i32 {
             eprintln!("{}", color(&format!("flashpod {}: {}: {}", cmd, t.path, e.message), C_RED));
             1
         }
+    }
+}
+
+/// `flashpod setup` (#115): the four commands that make a card, run in
+/// turn, each asked first and printed as it runs, so the user sees what
+/// to type next time. Each step is the real command (a child flashpod on
+/// this terminal), with its own questions: setup adds none of its own
+/// safety and skips none. The music steps go through the OS's mount of the
+/// new data partition when there is one (raw writes under a mounted FAT
+/// would corrupt it), else straight to the drive or image.
+pub fn cmd_setup(ns: &Ns) -> i32 {
+    let cmd = "setup";
+    let t = match resolve_target(ns, cmd) {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    let firmware: Vec<String> = s(ns, "firmware_file").into_iter().collect();
+    let model: Vec<String> = s(ns, "model").map(|m| vec!["--model".into(), m]).unwrap_or_default();
+    let music: Vec<String> = match ns.get("music") {
+        Some(Val::List(v)) => v.clone(),
+        _ => Vec::new(),
+    };
+    let target = vec!["--target".to_string(), t.path.clone()];
+    let partition: Vec<String> = ["drive", "partition"].iter().map(|s| s.to_string()).chain(target.clone()).collect();
+    let write: Vec<String> = ["firmware", "write"].iter().map(|s| s.to_string()).chain(target.clone())
+        .chain(model.clone()).chain(firmware.clone()).collect();
+    let show = |a: &[String]| format!("flashpod {}", a.iter().map(|w| shell_word(w)).collect::<Vec<_>>().join(" "));
+    let raw_music = |verb: &str, rest: &[String]| -> Vec<String> {
+        ["music", verb, "--raw", &t.path].iter().map(|s| s.to_string()).chain(rest.iter().cloned()).collect()
+    };
+    if !stdin_isatty() {
+        eprintln!("flashpod setup asks before each step; without a terminal, run them yourself:");
+        for a in [partition.clone(), write.clone(), raw_music("init", &[]), raw_music("add", &music)] {
+            eprintln!("  {}", show(&a));
+        }
+        return 2;
+    }
+    let mut argv = vec!["setup".to_string()];
+    argv.extend(target.clone());
+    argv.extend(model.clone());
+    argv.extend(firmware.clone());
+    if !music.is_empty() {
+        argv.push("--music".into());
+        argv.extend(music.clone());
+    }
+    if let Err(rc) = need_root(&t, cmd, &argv) {
+        return rc;
+    }
+    say_target(&t);
+    eprintln!("\nsetup makes {} an iPod card in four steps, asking before each:", t.path);
+    eprintln!("  1. {}   (erases it)", show(&partition));
+    eprintln!("  2. {}", show(&write));
+    eprintln!("  3. {}", show(&raw_music("init", &[])));
+    eprintln!("  4. {}", show(&raw_music("add", &music)));
+    eprintln!("   (3 and 4 use --mount instead when the computer has mounted the card)");
+    let steps: [(&str, &str); 4] = [("1", "partition the drive"), ("2", "write the firmware"),
+                                     ("3", "create the music library"), ("4", "add music")];
+    for (i, (n, what)) in steps.iter().enumerate() {
+        let a = match i {
+            0 => partition.clone(),
+            1 => write.clone(),
+            _ => {
+                let verb = if i == 2 { "init" } else { "add" };
+                let rest = if i == 3 { music.clone() } else { Vec::new() };
+                match (!t.image).then(|| data_mount(&t.path)).flatten() {
+                    Some(mp) => ["music", verb, "--mount", &mp].iter().map(|s| s.to_string()).chain(rest).collect(),
+                    None => raw_music(verb, &rest),
+                }
+            }
+        };
+        eprintln!("\n{}", color(&format!("Step {} of 4: {}\n  {}", n, what, show(&a)), C_GRN));
+        if !yes_no_default(&format!("Run step {}? [Y/n] ", n)) {
+            eprintln!("Skipped. Later: {}", show(&a));
+            continue;
+        }
+        let rc = std::process::Command::new(&crate::host::self_cmd()[0]).args(&a).status()
+            .map(|st| st.code().unwrap_or(1)).unwrap_or(1);
+        if rc != 0 {
+            eprintln!("{}", color(&format!("\nsetup stopped: step {} exited {}. Fix that, then carry on from:\n  {}", n, rc, show(&a)), C_RED));
+            return rc;
+        }
+    }
+    eprintln!("\n{}", color(&format!("Done. Put the card in the iPod. `flashpod inspect {}` reports what is on it.", t.path), C_GRN));
+    0
+}
+
+/// [Y/n]: Enter is yes.
+fn yes_no_default(prompt: &str) -> bool {
+    match input_line(prompt) {
+        Some(a) => !matches!(a.trim().to_lowercase().as_str(), "n" | "no"),
+        None => {
+            println!();
+            false
+        }
+    }
+}
+
+/// Where the OS mounted the drive's data partition, if it did.
+fn data_mount(dev: &str) -> Option<String> {
+    crate::platform::current().device_mountpoints(dev).into_iter().map(|(_, mp)| mp).next()
+}
+
+/// A word as a shell would need it typed.
+fn shell_word(w: &str) -> String {
+    if !w.is_empty() && w.chars().all(|c| c.is_ascii_alphanumeric() || "-_./:=,+@%\\".contains(c)) {
+        w.to_string()
+    } else {
+        format!("'{}'", w.replace('\'', "'\"'\"'"))
     }
 }
