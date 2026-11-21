@@ -494,8 +494,7 @@ def mac(binary, faults, work):
             print(out + err)
     finally:
         d.teardown()
-    if faults:
-        NOT_RUN.append("mutants on macOS (they run on Linux)")
+    NOT_RUN.append("mutants on macOS (they run on Linux)")
 
 
 def main():
