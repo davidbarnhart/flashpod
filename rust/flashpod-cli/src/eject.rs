@@ -766,6 +766,7 @@ mod imp {
             Kind::Scsi => scsi_stop(&node),
             Kind::Slot => Ok("a card slot has no stop; nothing is mounted or in flight".to_string()),
         };
+        let stopped = if fault("no-stop-recheck") { stopped.or_else(|_| Ok("stopped".to_string())) } else { stopped };
         match stopped {
             Ok(m) => step_ok(5, "stop", &m),
             Err(e) => return step_fail(&node, 5, "stop", &e, "Everything is unmounted and flushed, but the disk wasn't confirmed stopped."),
@@ -886,9 +887,20 @@ mod imp {
         crate::platform::current().device_mountpoints(&format!("/dev/{}", disk)).into_iter().map(|(_, mp)| mp).collect()
     }
 
+    /// macOS's own services that open every mounted volume: the FSKit
+    /// filesystem server (the FAT driver itself runs as a process), Spotlight
+    /// and fseventsd. `diskutil unmountDisk` releases them; if one doesn't
+    /// let go, the unmount fails and step 3 says so, and step 4 re-checks.
+    /// Seen on a GitHub macOS runner: mds, fskitd, com.apple.fskit.msdos.
+    fn os_service(prog: &str) -> bool {
+        matches!(prog, "fskitd" | "mds" | "mds_stores" | "mdworker" | "mdworker_shared" | "fseventsd")
+            || prog.starts_with("com.apple.fskit.")
+    }
+
     /// lsof over the disk's mountpoints and its device nodes: "pid N (prog):
-    /// path" lines, our own process left out.
-    fn holders(disk: &str) -> Vec<String> {
+    /// path" lines, our own process left out. Returns (holders that block
+    /// the eject, macOS's own services: see os_service).
+    fn holders(disk: &str) -> (Vec<String>, Vec<String>) {
         let me = std::process::id().to_string();
         let mut args: Vec<String> = vec!["lsof".into(), "-F".into(), "pcn".into(), "-w".into(), "--".into()];
         args.extend(mounts_of(disk));
@@ -901,22 +913,35 @@ mod imp {
         let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let out = match capture(&refs) {
             Some(o) => o.stdout,
-            None => return vec!["couldn't run lsof".into()],
+            None => return (vec!["couldn't run lsof".into()], Vec::new()),
         };
         let (mut pid, mut prog) = (String::new(), String::new());
-        let mut v = Vec::new();
+        let (mut v, mut os) = (Vec::new(), Vec::new());
         for line in out.lines() {
             let (tag, rest) = line.split_at(1.min(line.len()));
             match tag {
                 "p" => pid = rest.to_string(),
                 "c" => prog = rest.to_string(),
-                "n" if pid != me => v.push(format!("pid {} ({}): {}", pid, prog, rest)),
+                "n" if pid != me => {
+                    let h = format!("pid {} ({}): {}", pid, prog, rest);
+                    if os_service(&prog) { os.push(h) } else { v.push(h) }
+                }
                 _ => {}
             }
         }
-        v.sort();
-        v.dedup();
-        v
+        for l in [&mut v, &mut os] {
+            l.sort();
+            l.dedup();
+        }
+        (v, os)
+    }
+
+    /// "mds, fskitd": the distinct program names in holder lines.
+    fn os_names(os: &[String]) -> String {
+        let mut n: Vec<&str> = os.iter().filter_map(|h| h.split_once(" (").and_then(|(_, r)| r.split_once("):")).map(|(p, _)| p)).collect();
+        n.sort();
+        n.dedup();
+        n.join(", ")
     }
 
     pub fn run(arg: Option<&str>) -> i32 {
@@ -948,7 +973,7 @@ mod imp {
         }
         let _ = std::env::set_current_dir("/");
 
-        let held = holders(&disk);
+        let (held, os) = holders(&disk);
         if !held.is_empty() {
             for h in &held {
                 println!("        {}", h);
@@ -956,7 +981,11 @@ mod imp {
             return step_fail(&node, 2, "open files", &format!("{} hold(s) on {}", held.len(), node),
                              "Close those (flashpod killed nothing and unmounted nothing), then run flashpod eject again.");
         }
-        step_ok(2, "open files", "nothing on it is open");
+        step_ok(2, "open files", &if os.is_empty() {
+            "nothing on it is open".to_string()
+        } else {
+            format!("nothing on it is open but macOS's own services ({}), which the unmount releases", os_names(&os))
+        });
 
         crate::sys::sync_all();
         let before = mounts_of(&disk);
@@ -971,7 +1000,7 @@ mod imp {
 
         crate::sys::sync_all();
         let left = mounts_of(&disk);
-        let late = holders(&disk);
+        let late = holders(&disk).0;
         if !left.is_empty() || !late.is_empty() {
             let mut why = Vec::new();
             if !left.is_empty() {

@@ -23,7 +23,9 @@ What must hold:
   and a stand-in losetup that detaches nothing (step 5).
 Mutants (--faults: a build with `--features eject-faults`, plus a wrapper):
 the checks above must fail for a binary that prints the verdict without
-doing anything, and for one with the open-files check switched off.
+doing anything, for one with the open-files check switched off, and for
+ones with the step-4 mount re-check or the step-5 detach re-check switched
+off (each under the lying tool that re-check exists to catch).
 
 Ends with one PASS/FAIL line; exit 0 only on PASS. A part that couldn't run
 here says NOT RUN, and the PASS line names it.
@@ -336,6 +338,27 @@ def stub_dir(work, name, script="#!/bin/sh\nexit 0\n"):
     return dict(os.environ, PATH=d + os.pathsep + os.environ.get("PATH", ""))
 
 
+def lying_umount_checks(binary, d, work, into=None, fault=None):
+    env = stub_dir(work, "umount")
+    if fault:
+        env["FLASHPOD_EJECT_FAULT"] = fault
+    rc, out, _ = eject(binary, d.node, env=env)
+    check(rc == 1 and "FAIL  4 flush" in out and "still mounted" in out,
+          "a umount that unmounts nothing: step 4 fails, \"still mounted\" (rc %d)" % rc, into)
+    check(len(d.mounted()) == 3, "  ...and the mounts really are all still there", into)
+
+
+def lying_losetup_checks(binary, d, work, into=None, fault=None):
+    """Expects `d` with its mounts in place; the eject unmounts them."""
+    env = stub_dir(work, "losetup")
+    if fault:
+        env["FLASHPOD_EJECT_FAULT"] = fault
+    rc, out, _ = eject(binary, d.node, env=env)
+    check(rc == 1 and "FAIL  5 stop" in out, "a losetup that detaches nothing: step 5 fails (rc %d)" % rc, into)
+    check(d.attached() and not d.mounted(), "  ...unmounted, and really still attached", into)
+    check("Safe to unplug" not in out, "  ...and it never says safe", into)
+
+
 def linux(binary, faults, work):
     print("a loop disk: two FAT partitions, the second also bind-mounted")
     d = loop_disk(work, "a")
@@ -352,14 +375,8 @@ def linux(binary, faults, work):
     print("its own re-checks catch stand-in tools that lie")
     d = loop_disk(work, "b")
     try:
-        rc, out, _ = eject(binary, d.node, env=stub_dir(work, "umount"))
-        check(rc == 1 and "FAIL  4 flush" in out and "still mounted" in out,
-              "a umount that unmounts nothing: step 4 fails, \"still mounted\" (rc %d)" % rc)
-        check(len(d.mounted()) == 3, "  ...and the mounts really are all still there")
-        rc, out, _ = eject(binary, d.node, env=stub_dir(work, "losetup"))
-        check(rc == 1 and "FAIL  5 stop" in out, "a losetup that detaches nothing: step 5 fails (rc %d)" % rc)
-        check(d.attached() and not d.mounted(), "  ...unmounted, and really still attached")
-        check("Safe to unplug" not in out, "  ...and it never says safe")
+        lying_umount_checks(binary, d, work)
+        lying_losetup_checks(binary, d, work)
     finally:
         d.teardown()
 
@@ -391,6 +408,22 @@ def linux(binary, faults, work):
             env = dict(os.environ, FLASHPOD_EJECT_FAULT="no-holder-check")
             refusal_checks(faults, d, "device node", d.node, d.parts[0], into=caught, env=env)
             check(bool(caught), "the open-files check switched off: caught (%s)" % "; ".join(caught[:2]))
+        finally:
+            d.teardown()
+        d = loop_disk(work, "e")
+        try:
+            caught = []
+            lying_umount_checks(faults, d, work, into=caught, fault="no-mount-recheck")
+            check(bool(caught), "the step-4 mount re-check switched off, under a lying umount: caught (%s)"
+                  % "; ".join(caught[:2]))
+        finally:
+            d.teardown()
+        d = loop_disk(work, "f")
+        try:
+            caught = []
+            lying_losetup_checks(faults, d, work, into=caught, fault="no-stop-recheck")
+            check(bool(caught), "the step-5 detach re-check switched off, under a lying losetup: caught (%s)"
+                  % "; ".join(caught[:2]))
         finally:
             d.teardown()
     else:
