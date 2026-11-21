@@ -44,7 +44,7 @@ MUSIC = ["music ls", "music list", "music add", "music rm", "music remove", "mus
          "music erase", "music init", "music rebuild", "music export", "music playlist"]
 NOT_APPLICABLE = {
     "mount": "inspect, firmware extract/write, drive partition, bootrom, card new and card burn take a file "
-             "or disk, not a mount",
+             "or disk, not a mount; eject takes one, checked on real mounts by test_eject.py",
     "card": "card new makes a file",
 }
 
@@ -128,6 +128,8 @@ def image_cells(binary, fw, music, work, decoy):
     step(binary, "bootrom disarm", ["--target", img], img, "image file", decoy, line=True)
     step(binary, "firmware extract", [img, "-o", os.path.join(work, "fw-out.bin")], img, "image file", decoy)
     music_steps(binary, "--raw", img, "image file", decoy, music, work)
+    # an image file isn't attached: nothing to eject (#123)
+    step(binary, "eject", [img], img, "image file", decoy, refused=True)
     # burn's target is the disk it writes; a file is not one
     step(binary, "card burn", [img, decoy + ".not-a-disk", "--dry-run"], decoy + ".not-a-disk", "image file",
          None, refused=True)
@@ -208,8 +210,11 @@ def card_cells(binary, fw, music, work, decoy):
         flash(binary, burnable, fw)
         env = dict(os.environ, PATH=fake + os.pathsep + os.environ["PATH"])
         step(binary, "card burn", [burnable, node, "--dry-run"], node, "card", decoy, env=env)
+        # last: a real eject detaches the loop device (#123)
+        step(root, "eject", [node], node, "card", decoy)
     finally:
-        sudo("losetup", "-d", node)
+        if os.path.exists("/sys/block/%s/loop/backing_file" % os.path.basename(node)):
+            sudo("losetup", "-d", node)
 
 
 def listed_commands(binary):

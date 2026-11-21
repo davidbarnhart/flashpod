@@ -259,10 +259,39 @@ fn render(cands: &[Value]) {
     eprintln!();
 }
 
+/// eject's candidates (#123): list_candidates plus FireWire disks, which
+/// lsblk types "rbc" and transports "sbp" (eject reads nothing off them, so
+/// #122's open question for the write commands doesn't arise), minus disks
+/// reporting 0 bytes (nothing to flush; stopping one can hang).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn list_eject_candidates() -> Result<Vec<Value>, Exit> {
+    let v = lsblk_json(&["-b", "-o", "NAME,SIZE,MODEL,VENDOR,SERIAL,TRAN,RM,HOTPLUG,TYPE,MOUNTPOINT,FSTYPE,LABEL,PTTYPE"])?;
+    let protected = root_disk_names()?;
+    let mut out = Vec::new();
+    for d in v["blockdevices"].as_array().into_iter().flatten() {
+        if !matches!(s(d, "type"), "disk" | "rbc") || protected.iter().any(|p| p == s(d, "name")) || int(&d["size"]) == 0 {
+            continue;
+        }
+        if truthy(&d["rm"]) || truthy(&d["hotplug"]) || matches!(s(d, "tran"), "usb" | "mmc" | "ieee1394" | "sbp") {
+            out.push(d.clone());
+        }
+    }
+    Ok(out)
+}
+
+/// The chooser for eject.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn choose_eject() -> Result<String, Exit> {
+    choose_among(list_eject_candidates, "No removable disks attached.")
+}
+
 /// ipod_flash.choose_device (pick_device over list_candidates).
 pub fn choose_device() -> Result<String, Exit> {
-    let empty = "No removable/USB disks found. Plug in the card and retry.";
-    let mut items = list_candidates()?;
+    choose_among(list_candidates, "No removable/USB disks found. Plug in the card and retry.")
+}
+
+fn choose_among(list: fn() -> Result<Vec<Value>, Exit>, empty: &str) -> Result<String, Exit> {
+    let mut items = list()?;
     if items.is_empty() {
         return Err(Exit(color(empty, C_RED)));
     }
@@ -279,7 +308,7 @@ pub fn choose_device() -> Result<String, Exit> {
             return Err(Exit("Aborted.".into()));
         }
         if matches!(sel.as_str(), "r" | "refresh" | "rescan") {
-            items = list_candidates()?;
+            items = list()?;
             if items.is_empty() {
                 eprintln!("{}", color(&format!("  {}", empty), C_YEL));
             } else {

@@ -22,20 +22,20 @@ fn diskutil_plist(args: &[&str]) -> Option<Dictionary> {
     Value::from_reader(std::io::Cursor::new(out.stdout)).ok()?.into_dictionary()
 }
 
-fn diskutil_info(dev: &str) -> Option<Dictionary> {
+pub(crate) fn diskutil_info(dev: &str) -> Option<Dictionary> {
     diskutil_plist(&["info", dev])
 }
 
-fn text(d: &Dictionary, k: &str) -> String {
+pub(crate) fn text(d: &Dictionary, k: &str) -> String {
     d.get(k).and_then(Value::as_string).unwrap_or("").trim().to_string()
 }
 
-fn size(d: &Dictionary) -> u64 {
+pub(crate) fn size(d: &Dictionary) -> u64 {
     ["TotalSize", "Size"].iter().filter_map(|k| d.get(k).and_then(Value::as_unsigned_integer)).find(|&n| n != 0).unwrap_or(0)
 }
 
 /// /dev/disk2s1 -> disk2; /dev/rdisk2 -> disk2; disk2 -> disk2.
-fn whole_disk(dev: &str) -> String {
+pub(crate) fn whole_disk(dev: &str) -> String {
     let name = dev.rsplit('/').next().unwrap_or(dev);
     let name = name.strip_prefix('r').filter(|n| n.starts_with("disk")).unwrap_or(name);
     match name.strip_prefix("disk") {

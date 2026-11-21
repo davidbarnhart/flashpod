@@ -16,6 +16,7 @@ flashpod 1.0 groups its commands by what they act on:
 | Group | Commands |
 | --- | --- |
 | `flashpod inspect TARGET` | everything about a card, iPod or image |
+| `flashpod eject [TARGET]` | make sure it's safe to unplug, then stop the disk |
 | `flashpod drive ...` | `partition` (erases the drive) |
 | `flashpod firmware ...` | `write`, `extract`, `patches`; not built yet: `list`, `patch` |
 | `flashpod bootrom ...` | `arm`, `disarm` (the iPod's disk-mode update) |
@@ -198,6 +199,9 @@ Removed: New Order - Temptation
 …
 Removed 12 tracks
 ```
+
+When you're done, `flashpod eject` makes sure nothing is still being written
+before you pull the cable (see below).
 
 ## Commands
 
@@ -395,6 +399,44 @@ without re-copying or losing music. (It reads every track to sniff its tags, so
 it's slow over FireWire; fine for a one-off recovery.) `flashpod music list` points you
 here when it finds an iPod with an unparseable database, and `flashpod music add` onto
 such an iPod offers to rebuild first, then adds your new files on top.
+
+### `flashpod eject [TARGET]`
+
+Makes sure the iPod or card is safe to unplug, then stops it. A FireWire iPod
+then shows "OK to disconnect". TARGET is the mountpoint, a partition or the
+disk; with none, you choose from the attached removable disks.
+
+```
+$ flashpod eject /media/you/IPOD
+Target: /dev/sdb (drive)
+  Apple iPod, FireWire, 59.6 GiB; partitions sdb1, sdb2
+  ok    2 open files: nothing on it is open
+  ok    3 unmount: unmounted /media/you/IPOD
+  ok    4 flush: buffers flushed (sdb, sdb1, sdb2), its write cache synchronized; nothing mounted, 0 in flight
+  ok    5 stop: SCSI STOP UNIT sent; the disk now reports not ready (ASC/ASCQ 04/02)
+Safe to unplug /dev/sdb.
+```
+
+Each step is checked, not assumed, and it says "Safe to unplug" only when they
+all pass:
+
+1. the mountpoint or partition is traced back to its whole disk;
+2. if any program has a file open on it (or its working directory there, a
+   file memory-mapped, or the disk itself open), eject names the program and
+   its pid and stops. It kills nothing and unmounts nothing; close the program
+   and run eject again;
+3. `sync`, then every partition is unmounted, wherever it is mounted;
+4. the disk's buffers are flushed, then it checks again that nothing is
+   mounted and the kernel has no reads or writes in flight;
+5. the disk is stopped, and the stop is confirmed: a FireWire disk gets SCSI
+   STOP UNIT and must then report "not ready"; a USB reader's port is
+   powered off; a loop device is detached.
+
+Otherwise it says `NOT safe to unplug`, which step failed and why, and exits
+1. On Linux it needs root to see every program's open files, so it re-runs
+itself under sudo. On macOS it does the same through `diskutil` and `lsof`;
+macOS doesn't report in-flight I/O per disk, so step 4 there checks the
+mounts only. Not built on Windows yet: use "Safely Remove Hardware".
 
 ### `flashpod drive partition`
 

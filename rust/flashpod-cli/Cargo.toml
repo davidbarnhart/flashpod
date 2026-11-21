@@ -30,6 +30,11 @@ plist = "1"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_Threading", "Win32_UI_Shell"] }
 
+[features]
+# scripts/test_eject.py --mutants: a build where FLASHPOD_EJECT_FAULT can
+# switch off one eject check. Never in a release.
+eject-faults = []
+
 [[bin]]
 name = "flashpod"
 path = "src/main.rs"

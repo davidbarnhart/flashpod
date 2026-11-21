@@ -11,7 +11,7 @@ use flashpod_core::block::{BlockDevice, FileDevice};
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
-mod macos;
+pub(crate) mod macos;
 #[cfg(windows)]
 pub(crate) mod windows;
 #[cfg(any(target_os = "macos", windows))]

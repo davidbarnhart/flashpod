@@ -2,6 +2,8 @@ flashpod - inspect, patch, rehearse and flash early-iPod firmware, and manage th
 
 Commands:
   flashpod inspect TARGET            everything about a card, iPod or image
+  flashpod eject [TARGET]            make sure an iPod or card is safe to unplug,
+                                     then stop it ("OK to disconnect")
   flashpod firmware list             the firmware flashpod can write
   flashpod firmware extract TARGET   copy the firmware partition (or one image) off
   flashpod firmware write [--target T] [FIRMWARE]

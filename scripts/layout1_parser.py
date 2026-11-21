@@ -108,6 +108,9 @@ def build():
     p.add_argument("target", help="card image file, or a card or iPod disk (needs root)")
     p.add_argument("--json", action="store_true", help="print the report as JSON")
 
+    p = sub.add_parser("eject", help="make sure an iPod or card is safe to unplug, then stop it")
+    p.add_argument("target", nargs="?", help="its mountpoint, a partition or the disk (else a chooser)")
+
     fw = sub.add_parser("firmware", help="inspect, extract, patch and write firmware")
     fsub = fw.add_subparsers(dest="firmware_command")
     fsub.required = True

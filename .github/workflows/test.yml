@@ -366,6 +366,25 @@ jobs:
             sudo "$(which python)" scripts/simulate_card.py --size-gb 2 --layout-1 --flashpod rust/target/release/flashpod
           fi
 
+      # #123: eject on fake disks only: a loop disk, plus a scsi_debug disk
+      # (RAM-backed fake SCSI, for the real STOP UNIT) where the runner's
+      # kernel has the module; an hdiutil disk image on macOS. Linux also
+      # runs the mutants, from a build with the eject-faults feature.
+      - name: eject is safe to trust on fake disks
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update -q >/dev/null
+            sudo apt-get install -yq dosfstools >/dev/null
+            sudo apt-get install -yq "linux-modules-extra-$(uname -r)" >/dev/null || echo "no linux-modules-extra for $(uname -r)"
+            (cd rust && cargo build --release -p flashpod-cli --features eject-faults --target-dir target/faults)
+            sudo "$(which python)" scripts/test_eject.py --rust rust/target/release/flashpod \
+              --faults rust/target/faults/release/flashpod
+          else
+            sudo "$(which python)" scripts/test_eject.py --rust rust/target/release/flashpod
+          fi
+
   # A Mac card (#104): the Rust library's APM + wrapped HFS+ image, attached
   # and mounted by macOS itself, a file written and read back, fsck_hfs
   # before and after.

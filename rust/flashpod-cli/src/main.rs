@@ -19,6 +19,7 @@ mod export;
 mod detect;
 mod devices;
 mod drivecmd;
+mod eject;
 mod flash;
 mod host;
 mod rawdev;
@@ -288,6 +289,9 @@ fn build_cli() -> Cli {
     cli.parser(inspect).add(Arg::pos("target", Nargs::One).help("card image file, or a card or iPod disk (needs root)"));
     cli.parser(inspect).add(Arg::flag(&["--json"]).help("print the report as JSON"));
 
+    let ej = cli.add_parser_at(0, "eject", &[], "make sure an iPod or card is safe to unplug, then stop it", &[]);
+    cli.parser(ej).add(Arg::pos("target", Nargs::Optional).help("its mountpoint, a partition or the disk (else a chooser)"));
+
     let fw = cli.add_parser_at(0, "firmware", &[], "inspect, extract, patch and write firmware", &[]);
     cli.add_subparsers_at(fw, "firmware_command");
     cli.add_parser_at(fw, "list", &[], "the firmware flashpod can write", &[]);
@@ -511,6 +515,7 @@ fn main() {
         "firmware extract" => cmd_extract(&ns),
         "firmware patches" => patches::cmd_patches(&ns),
         "inspect" => cmd_inspect(&ns),
+        "eject" => eject::cmd_eject(&ns),
         "card new" => cmd_card_new(&ns),
         "burn" => cmd_burn(&ns),
         "ls" | "list" | "add" | "rm" | "remove" | "delete" | "erase" | "init" | "rebuild" | "export" | "playlist" => data_command(&ns, &command),
