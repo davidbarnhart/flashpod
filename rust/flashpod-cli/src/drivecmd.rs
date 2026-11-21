@@ -400,18 +400,36 @@ pub fn cmd_firmware_write(ns: &Ns) -> i32 {
             return 1;
         }
     };
-    let table = match drive::read_table(dev.as_mut()) {
-        Ok(Some(tb)) if tb.firmware.is_some() => tb,
-        Ok(_) => {
-            eprintln!("{}", color(&format!(
-                "flashpod {}: {} has no firmware partition. Partition it first (this erases it):\n  flashpod drive partition --target {}",
-                cmd, t.path, t.path), C_RED));
-            return 1;
-        }
-        Err(e) => {
-            eprintln!("flashpod {}: can't read {}: {}", cmd, t.path, e.message);
-            return 1;
-        }
+    // Keep means keep: the drive's own table, whatever tool wrote it, is
+    // used as it is; only a layout that is wrong is refused.
+    let (table, kept) = match drive::check_kept_layout(dev.as_mut(), &fw) {
+        Ok(k) => (k.table.clone(), Some(k)),
+        Err(e) => match e.details.get("reason").and_then(|r| r.as_str()) {
+            Some("no_table") | Some("no_firmware_partition") => {
+                eprintln!("{}", color(&format!(
+                    "flashpod {}: {} has no firmware partition. Partition it first (this erases it):\n  flashpod drive partition --target {}",
+                    cmd, t.path, t.path), C_RED));
+                return 1;
+            }
+            Some("large_disk") => match drive::read_table(dev.as_mut()) {
+                Ok(Some(tb)) => (tb, None),
+                _ => {
+                    eprintln!("flashpod {}: can't read {}'s partition table", cmd, t.path);
+                    return 1;
+                }
+            },
+            Some(_) => {
+                eprintln!("{}", color(&format!(
+                    "flashpod {}: {}: {}. Nothing written; the drive's layout is left alone. \
+                     To replace it with flashpod's own (this erases the drive):\n  flashpod drive partition --target {}",
+                    cmd, t.path, e.message, t.path), C_RED));
+                return 1;
+            }
+            None => {
+                eprintln!("flashpod {}: can't read {}: {}", cmd, t.path, e.message);
+                return 1;
+            }
+        },
     };
     let fwp = table.firmware.clone().unwrap();
     let repartition = match drive::large_disk_problem(&table, &fw) {
@@ -424,9 +442,17 @@ pub fn cmd_firmware_write(ns: &Ns) -> i32 {
     let armed = drive::armed(dev.as_mut()).ok().flatten() == Some(true);
     if !repartition {
         eprintln!("{}", color(&format!("\n  PLAN \u{2014} write the firmware into {}'s firmware partition; nothing else on the drive changes", t.path), C_YEL));
-        eprintln!("    table       : {}", if table.kind == "mbr" { "MBR" } else { "Apple Partition Map" });
+        match &kept {
+            Some(k) => eprintln!("    {}", k.recognised()),
+            None => eprintln!("    table       : {}", if table.kind == "mbr" { "MBR" } else { "Apple Partition Map" }),
+        }
         eprintln!("    firmware    : sectors {}..{} ({}), {} bytes of firmware, the rest zeroed",
                   fwp.start, fwp.start + fwp.sectors - 1, fmt_size(fwp.sectors * SECTOR), fw.len());
+        if let Some(k) = &kept {
+            for w in &k.warnings {
+                eprintln!("{}", color(&format!("    \u{26a0} {}", w), C_YEL));
+            }
+        }
         if armed {
             eprintln!("{}", color("    \u{26a0} the firmware there now has a disk-mode update ARMED; writing this clears it", C_YEL));
         }

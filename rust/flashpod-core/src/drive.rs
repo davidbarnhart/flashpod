@@ -91,6 +91,120 @@ fn firmware_partition(dev: &mut dyn BlockDevice) -> Result<(Table, Partition), E
     Ok((t, fw))
 }
 
+/// The existing layout `firmware write` keeps as it is: the table, its
+/// firmware and data partitions, and the differences worth a warning.
+#[derive(Debug, Clone, Serialize)]
+pub struct KeptLayout {
+    pub table: Table,
+    pub firmware: Partition,
+    pub data: Option<Partition>,
+    pub warnings: Vec<String>,
+}
+
+impl KeptLayout {
+    /// One line naming what was recognised, e.g. "partition table kept as
+    /// it is: MBR, firmware 63..65598, data 65599..30318590".
+    pub fn recognised(&self) -> String {
+        let kind = if self.table.kind == "mbr" { "MBR" } else { "Apple Partition Map" };
+        let span = |p: &Partition| format!("{}..{}", p.start, p.start + p.sectors - 1);
+        let data = match &self.data {
+            Some(d) => format!("data {}", span(d)),
+            None => "no data partition".to_string(),
+        };
+        format!("partition table kept as it is: {}, firmware {}, {}", kind, span(&self.firmware), data)
+    }
+}
+
+fn layout_refusal(reason: &str, msg: String) -> Error {
+    Error::new(ErrorKind::LayoutMismatch, msg).detail("reason", reason)
+}
+
+/// The FAT boot sector's own size of its filesystem, in 512-byte sectors,
+/// or None when `bs` isn't a FAT boot sector.
+fn fat_total_sectors(bs: &[u8]) -> Option<u64> {
+    if bs.len() < 512 || bs[510] != 0x55 || bs[511] != 0xaa {
+        return None;
+    }
+    let bps = u16::from_le_bytes([bs[11], bs[12]]) as u64;
+    if ![512, 1024, 2048, 4096].contains(&bps) || bs[13] == 0 {
+        return None;
+    }
+    let t16 = u16::from_le_bytes([bs[19], bs[20]]) as u64;
+    let total = if t16 != 0 { t16 } else { u32::from_le_bytes(bs[32..36].try_into().unwrap()) as u64 };
+    Some(total * bps / SECTOR)
+}
+
+/// Is the drive's existing layout one `firmware write` can keep, writing
+/// firmware `fw` into its firmware partition and nothing else? A layout
+/// that merely differs from flashpod's own (another tool's data length,
+/// tail gap, a bigger firmware partition) is kept; one that is wrong is
+/// refused, with `reason` in the error's details:
+///   no_table, no_firmware_partition, firmware_start (MBR only: sector 63),
+///   past_end, overlap, fat_larger_than_partition, partition_too_small,
+///   and last large_disk (so every other check has passed when a caller
+///   sees it and offers to re-partition).
+pub fn check_kept_layout(dev: &mut dyn BlockDevice, fw: &[u8]) -> Result<KeptLayout, Error> {
+    let (t, fwp) = firmware_partition(dev)?;
+    let total = dev.len()? / SECTOR;
+    if t.kind == "mbr" && fwp.start != layout::FW_START {
+        return Err(layout_refusal("firmware_start", format!(
+            "the firmware partition starts at sector {}; flashpod writes firmware only into one that starts at \
+             sector {}, because it isn't known yet whether every iPod's boot ROM finds the firmware through the \
+             partition table rather than at sector {}", fwp.start, layout::FW_START, layout::FW_START)));
+    }
+    let parts: Vec<&Partition> = t.partitions.iter().filter(|p| p.sectors > 0).collect();
+    for p in &parts {
+        if p.start + p.sectors > total {
+            return Err(layout_refusal("past_end", format!(
+                "partition {} (sectors {}..{}) runs past the end of the drive ({} sectors)",
+                p.index, p.start, p.start + p.sectors - 1, total)));
+        }
+    }
+    for (i, a) in parts.iter().enumerate() {
+        for b in &parts[i + 1..] {
+            if a.start < b.start + b.sectors && b.start < a.start + a.sectors {
+                return Err(layout_refusal("overlap", format!(
+                    "partitions {} (sectors {}..{}) and {} (sectors {}..{}) overlap",
+                    a.index, a.start, a.start + a.sectors - 1, b.index, b.start, b.start + b.sectors - 1)));
+            }
+        }
+    }
+    let data = t.data.clone();
+    let mut warnings = Vec::new();
+    if let Some(d) = &data {
+        if t.kind == "mbr" {
+            let bs = dev.read_vec(d.start * SECTOR, SECTOR as usize)?;
+            if let Some(n) = fat_total_sectors(&bs) {
+                if n > d.sectors {
+                    return Err(layout_refusal("fat_larger_than_partition", format!(
+                        "the data partition's FAT filesystem says it is {} sectors, but the partition is only {}",
+                        n, d.sectors)));
+                }
+            }
+        }
+        let gap = total - (d.start + d.sectors);
+        if gap < layout::TAIL_RESERVE {
+            warnings.push(format!(
+                "the data partition leaves {} sector{} unallocated at the end of the drive; flashpod's own layout \
+                 leaves {} (some iPods see a disk slightly smaller than a card reader does)",
+                gap, if gap == 1 { "" } else { "s" }, layout::TAIL_RESERVE));
+        }
+    }
+    if fw.len() as u64 > fwp.sectors * SECTOR {
+        return Err(layout_refusal("partition_too_small", format!(
+            "the firmware ({} bytes) is larger than the drive's firmware partition ({} bytes)",
+            fw.len(), fwp.sectors * SECTOR)));
+    }
+    if let Some(p) = large_disk_problem(&t, fw) {
+        let why = if p.support == Some(false) { "can't" } else { "may not be able to" };
+        return Err(layout_refusal("large_disk", format!(
+            "the data partition ends at sector {}, past 128 GiB, which this firmware {} read", p.data_end_sector, why))
+            .detail("support", match p.support { Some(b) => serde_json::json!(b), None => serde_json::Value::Null })
+            .detail("data_end_sector", p.data_end_sector));
+    }
+    Ok(KeptLayout { table: t, firmware: fwp, data, warnings })
+}
+
 /// Can firmware `fw` (install-ready bytes) address a data partition past
 /// 128 GiB? Some(true) when it carries the large-disks fix, Some(false)
 /// for a build flashpod recognizes without it, None when flashpod can't
@@ -187,12 +301,14 @@ pub fn write_into(dev: &mut dyn BlockDevice, p: &Partition, fw: &[u8]) -> Result
 
 /// `firmware write`: install-ready firmware `fw` (firmware_bytes) into the
 /// drive's firmware partition, whatever the table. Refuses firmware
-/// flashpod doesn't write (check_writable). The large-disk check is the
-/// caller's, before this.
+/// flashpod doesn't write (check_writable) and any layout check_kept_layout
+/// refuses, including a data partition past what the firmware can read
+/// (callers that offer to re-partition ask large_disk_problem first).
 pub fn write_firmware(dev: &mut dyn BlockDevice, fw: &[u8]) -> Result<WriteResult, Error> {
     firmware::check_writable(fw)
         .map_err(|e| Error::new(ErrorKind::FirmwareInvalid, e).detail("reason", "unsupported_generation"))?;
-    let (t, p) = firmware_partition(dev)?;
+    let kept = check_kept_layout(dev, fw)?;
+    let (t, p) = (kept.table, kept.firmware);
     let was_armed = armed_now(dev, &p)? == Some(true);
     let now_armed = firmware::aupd_armed(fw) == Some(true);
     write_into(dev, &p, fw)?;
@@ -441,6 +557,197 @@ mod tests {
         a.len() == b.len() && a[..s] == b[..s] && a[e..] == b[e..]
     }
 
+    /// A synthetic card of `total` sectors filled with 0xA5 (so any stray
+    /// write shows), an MBR of `entries` (type, start, sectors), and a FAT
+    /// boot sector at each (start, its own total sectors) in `fats`.
+    fn mbr_card(total: u64, entries: &[(u8, u64, u64)], fats: &[(u64, u64)]) -> MemDevice {
+        let mut d = MemDevice { data: vec![0xA5u8; (total * SECTOR) as usize] };
+        let m = &mut d.data[..512];
+        m.fill(0);
+        for (i, &(t, s, n)) in entries.iter().enumerate() {
+            let off = 446 + 16 * i;
+            m[off + 4] = t;
+            m[off + 8..off + 12].copy_from_slice(&(s as u32).to_le_bytes());
+            m[off + 12..off + 16].copy_from_slice(&(n as u32).to_le_bytes());
+        }
+        m[510] = 0x55;
+        m[511] = 0xaa;
+        for &(start, n) in fats {
+            let b = &mut d.data[(start * SECTOR) as usize..((start + 1) * SECTOR) as usize];
+            b.fill(0);
+            b[0..3].copy_from_slice(&[0xeb, 0x58, 0x90]);
+            b[11..13].copy_from_slice(&512u16.to_le_bytes());
+            b[13] = 8;
+            b[32..36].copy_from_slice(&(n as u32).to_le_bytes());
+            b[510] = 0x55;
+            b[511] = 0xaa;
+        }
+        d
+    }
+
+    /// An Apple Partition Map card: map, Apple_MDFW at (fw_start, fw_n),
+    /// Apple_HFS at (data_start, data_n).
+    fn apm_card(total: u64, fw_start: u64, fw_n: u64, data_start: u64, data_n: u64) -> MemDevice {
+        let mut d = MemDevice { data: vec![0xA5u8; (total * SECTOR) as usize] };
+        d.data[..4 * SECTOR as usize].fill(0);
+        d.data[0..2].copy_from_slice(b"ER");
+        d.data[2..4].copy_from_slice(&512u16.to_be_bytes());
+        let entries = [(1u64, 3u64, "Apple_partition_map"), (fw_start, fw_n, "Apple_MDFW"), (data_start, data_n, "Apple_HFS")];
+        for (i, (s, n, t)) in entries.iter().enumerate() {
+            let e = &mut d.data[(i + 1) * 512..(i + 2) * 512];
+            e[0..2].copy_from_slice(b"PM");
+            e[4..8].copy_from_slice(&3u32.to_be_bytes());
+            e[8..12].copy_from_slice(&(*s as u32).to_be_bytes());
+            e[12..16].copy_from_slice(&(*n as u32).to_be_bytes());
+            e[48..48 + t.len()].copy_from_slice(t.as_bytes());
+        }
+        d
+    }
+
+    /// What `flash --no-format` did before keep-means-keep: write the
+    /// firmware, then rewrite the table to flashpod's own formula. Only the
+    /// CONTROL uses it, to prove the identity check catches a table write.
+    fn old_table_rewrite(d: &mut MemDevice) {
+        let total = d.data.len() as u64 / SECTOR;
+        if &d.data[0..2] == b"ER" {
+            let (hdr, _, _) = layout::build_apm_layout(total, true, None).unwrap();
+            d.data[..hdr.len()].copy_from_slice(&hdr);
+        } else {
+            let (mbr, _, _) = layout::build_mbr_layout(total, true, None).unwrap();
+            d.data[..512].copy_from_slice(&mbr);
+        }
+    }
+
+    /// Write `fw` and report whether everything outside the firmware
+    /// partition is byte-identical and the firmware landed in it (with
+    /// `rewrite`, the old behaviour: the CONTROL).
+    fn kept_identical(mut d: MemDevice, fw: &[u8], rewrite: bool) -> (bool, KeptLayout) {
+        let before = d.data.clone();
+        let kept = check_kept_layout(&mut d, fw).unwrap();
+        let r = write_firmware(&mut d, fw).unwrap();
+        assert_eq!((r.partition_start, r.partition_sectors), (kept.firmware.start, kept.firmware.sectors));
+        if rewrite {
+            old_table_rewrite(&mut d);
+        }
+        let s = (kept.firmware.start * SECTOR) as usize;
+        let landed = d.data[s..s + fw.len()] == fw[..];
+        (landed && outside_equal(&before, &d.data, kept.firmware.start, kept.firmware.sectors), kept)
+    }
+
+    /// The accepted fixtures: (name, card, is flashpod's own formula).
+    fn accepted_fixtures(old: &[u8]) -> Vec<(&'static str, MemDevice, bool)> {
+        let t = 65_599 + 20_000 + 2049;
+        vec![
+            ("flashpod's own (MBR)", card(false, old), true),
+            ("flashpod's own (APM)", card(true, old), true),
+            // the reported card, scaled: data one sector short of flashpod's formula
+            ("off by one", mbr_card(t, &[(0x00, 63, 65_536), (0x0b, 65_599, 20_000)], &[(65_599, 20_000)]), false),
+            // Apple's Windows updater style: bigger firmware partition, data to the last sector
+            ("updater style", mbr_card(80_325 + 30_000, &[(0x00, 63, 80_262), (0x0b, 80_325, 30_000)], &[(80_325, 30_000)]), false),
+            // firmware partition rewritten in place by a bootloader installer; FAT smaller than its partition
+            ("patcher touched", mbr_card(120_000, &[(0x00, 63, 65_536), (0x0c, 65_599, 40_000)], &[(65_599, 39_000)]), false),
+            // hand fdisk: 1 MiB-aligned data, a gap, a third partition, a big tail
+            ("hand fdisk", mbr_card(140_000, &[(0x00, 63, 65_536), (0x0c, 67_584, 40_000), (0x83, 107_584, 20_000)], &[(67_584, 40_000)]), false),
+            // APM with the firmware where the map says, not at 63 (no regression)
+            ("APM elsewhere", apm_card(160_000, 128, 70_000, 70_128, 80_000), false),
+        ]
+    }
+
+    #[test]
+    fn keep_means_keep_on_every_accepted_layout() {
+        let (old, new) = (synth(1, Some(&[0x33u8; 0x4000])), synth(7, None));
+        for (name, d, _) in accepted_fixtures(&old) {
+            let (ok, kept) = kept_identical(d, &new, false);
+            assert!(ok, "{}: something outside the firmware partition changed", name);
+            eprintln!("{}: {}", name, kept.recognised());
+        }
+    }
+
+    #[test]
+    fn control_the_old_table_rewrite_fails_the_identity_check() {
+        // A check that passed on these too would prove nothing. flashpod's
+        // own layouts are the one case where the old rewrite was harmless.
+        let (old, new) = (synth(1, Some(&[0x33u8; 0x4000])), synth(7, None));
+        for (name, d, own) in accepted_fixtures(&old) {
+            let (ok, _) = kept_identical(d, &new, true);
+            assert_eq!(ok, own, "{}: control", name);
+        }
+    }
+
+    #[test]
+    fn what_is_recognised_and_warned() {
+        let fw = synth(7, None);
+        let mut d = mbr_card(65_599 + 20_000 + 2049, &[(0x00, 63, 65_536), (0x0b, 65_599, 20_000)], &[(65_599, 20_000)]);
+        let k = check_kept_layout(&mut d, &fw).unwrap();
+        assert_eq!(k.recognised(), "partition table kept as it is: MBR, firmware 63..65598, data 65599..85598");
+        assert!(k.warnings.is_empty());
+        let mut d = mbr_card(80_325 + 30_000, &[(0x00, 63, 80_262), (0x0b, 80_325, 30_000)], &[(80_325, 30_000)]);
+        let k = check_kept_layout(&mut d, &fw).unwrap();
+        assert_eq!(k.warnings.len(), 1);
+        assert!(k.warnings[0].contains("leaves 0 sectors"), "{}", k.warnings[0]);
+        let mut d = apm_card(160_000, 128, 70_000, 70_128, 80_000);
+        let k = check_kept_layout(&mut d, &fw).unwrap();
+        assert_eq!(k.recognised(), "partition table kept as it is: Apple Partition Map, firmware 128..70127, data 70128..150127");
+    }
+
+    #[test]
+    fn every_broken_layout_is_refused_and_untouched() {
+        let fw = synth(7, None);
+        let cases: Vec<(&str, MemDevice)> = vec![
+            ("no_table", MemDevice { data: vec![0u8; 1 << 20] }),
+            ("no_firmware_partition", mbr_card(100_000, &[(0x0b, 65_599, 20_000)], &[])),
+            ("firmware_start", mbr_card(100_000, &[(0x00, 64, 65_536), (0x0b, 65_600, 20_000)], &[])),
+            ("overlap", mbr_card(100_000, &[(0x00, 63, 65_536), (0x0b, 65_000, 20_000)], &[])),
+            ("past_end", mbr_card(80_000, &[(0x00, 63, 65_536), (0x0b, 65_599, 20_000)], &[])),
+            ("fat_larger_than_partition", mbr_card(100_000, &[(0x00, 63, 65_536), (0x0b, 65_599, 20_000)], &[(65_599, 20_001)])),
+            ("partition_too_small", mbr_card(100_000, &[(0x00, 63, 100), (0x0b, 65_599, 20_000)], &[])),
+        ];
+        for (reason, mut d) in cases {
+            let before = d.data.clone();
+            let e = check_kept_layout(&mut d, &fw).unwrap_err();
+            assert_eq!(e.details["reason"], reason, "{}", e.message);
+            let e = write_firmware(&mut d, &fw).unwrap_err();
+            assert_eq!(e.details["reason"], reason);
+            assert!(before == d.data, "{}: refused but changed", reason);
+        }
+    }
+
+    #[test]
+    fn the_reported_card_at_full_size() {
+        // The real geometry: disk 30,320,640 sectors, data 65599..30318590,
+        // one sector short of flashpod's formula. A sparse image file.
+        let dir = std::env::temp_dir().join(format!("flashpod-keep-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("card.img");
+        let total: u64 = 30_320_640;
+        let small = mbr_card(66_000, &[(0x00, 63, 65_536), (0x0b, 65_599, 30_318_590 - 65_599 + 1)], &[(65_599, 30_318_590 - 65_599 + 1)]);
+        {
+            let f = std::fs::File::create(&path).unwrap();
+            f.set_len(total * SECTOR).unwrap();
+            use std::os::unix::fs::FileExt;
+            f.write_all_at(&small.data[..512], 0).unwrap();
+            f.write_all_at(&small.data[(65_599 * SECTOR) as usize..(65_600 * SECTOR) as usize], 65_599 * SECTOR).unwrap();
+        }
+        let fw = synth(7, None);
+        let mut d = crate::block::FileDevice::open(&path, true).unwrap();
+        let k = check_kept_layout(&mut d, &fw).unwrap();
+        assert_eq!(k.recognised(), "partition table kept as it is: MBR, firmware 63..65598, data 65599..30318590");
+        assert!(k.warnings.is_empty(), "a 2049-sector tail needs no warning");
+        write_firmware(&mut d, &fw).unwrap();
+        drop(d);
+        use std::os::unix::fs::FileExt;
+        let f = std::fs::File::open(&path).unwrap();
+        let mut b = vec![0u8; 512];
+        f.read_exact_at(&mut b, 0).unwrap();
+        assert_eq!(b, small.data[..512]);
+        f.read_exact_at(&mut b, 65_599 * SECTOR).unwrap();
+        assert_eq!(b, small.data[(65_599 * SECTOR) as usize..(65_600 * SECTOR) as usize]);
+        let mut fwb = vec![0u8; fw.len()];
+        f.read_exact_at(&mut fwb, 63 * SECTOR).unwrap();
+        assert_eq!(fwb, fw);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn write_touches_only_the_firmware_partition_mbr_and_apm() {
         // the old firmware is longer: its tail must be zeroed
@@ -460,25 +767,17 @@ mod tests {
     }
 
     #[test]
-    fn a_factory_style_partition_works() {
-        // firmware at sector 2048, a bigger partition than flashpod's
+    fn an_mbr_firmware_partition_off_sector_63_is_refused() {
+        // BEHAVIOUR CHANGE (keep means keep): main before this accepted an
+        // MBR firmware partition anywhere; now only at sector 63 until it is
+        // measured whether the boot ROM reads the start from the table.
         let fw = synth(3, None);
-        let mut d = MemDevice { data: vec![0xA5u8; 80 << 20] };
-        let mut mbr = [0u8; 512];
-        let ent = |m: &mut [u8; 512], off: usize, t: u8, s: u32, n: u32| {
-            m[off + 4] = t;
-            m[off + 8..off + 12].copy_from_slice(&s.to_le_bytes());
-            m[off + 12..off + 16].copy_from_slice(&n.to_le_bytes());
-        };
-        ent(&mut mbr, 446, 0x00, 2048, 80_000);
-        ent(&mut mbr, 462, 0x0b, 82_048, 60_000);
-        mbr[510] = 0x55;
-        mbr[511] = 0xaa;
-        d.data[..512].copy_from_slice(&mbr);
+        let mut d = mbr_card(200_000, &[(0x00, 2048, 80_000), (0x0b, 82_048, 60_000)], &[]);
         let before = d.data.clone();
-        let r = write_firmware(&mut d, &fw).unwrap();
-        assert_eq!((r.partition_start, r.partition_sectors), (2048, 80_000));
-        assert!(outside_equal(&before, &d.data, 2048, 80_000));
+        let e = write_firmware(&mut d, &fw).unwrap_err();
+        assert_eq!(e.details["reason"], "firmware_start");
+        assert!(e.message.contains("2048") && e.message.contains("63"));
+        assert_eq!(before, d.data);
     }
 
     #[test]
