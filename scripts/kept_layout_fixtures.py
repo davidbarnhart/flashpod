@@ -71,6 +71,20 @@ def _apm(path, total, fw, data):
         f.write(os.urandom(4096))
 
 
+def formula_entries(total):
+    """flashpod's own MBR entries for a disk of ``total`` sectors
+    (layout.build_mbr_layout, inside 128 GiB): firmware 63+65536, data from
+    65599 to TAIL_RESERVE short of the end."""
+    return [(0, FW_START, FW_BLOCKS), (0x0B, D, total - TAIL_RESERVE - D)]
+
+
+def formula_card(path, total, made_at):
+    """A card of ``total`` sectors laid out by flashpod's formula for a disk
+    of ``made_at`` sectors (the transport case: made_at = total - 1)."""
+    ents = formula_entries(made_at)
+    _image(path, total, ents, [(D, ents[1][2])])
+
+
 def _mbr(total, entries, fats=()):
     return lambda p: _image(p, total, entries, fats)
 
@@ -82,6 +96,10 @@ FIXTURES = [
     ("flashpod's own", _mbr(D + 40000 + TAIL_RESERVE, [(0, 63, FW_BLOCKS), (0x0B, D, 40000)], [(D, 40000)]), "keep"),
     # the reported card, scaled: data one sector short of flashpod's formula
     ("off by one", _mbr(D + 40000 + TAIL_RESERVE + 1, [(0, 63, FW_BLOCKS), (0x0B, D, 40000)], [(D, 40000)]), "keep"),
+    # the same card, two transports: laid out by flashpod's own formula on a
+    # disk path that reports N-1 sectors, then written through a reader that
+    # reports N
+    ("flashpod's own at N-1, written at N", lambda p: formula_card(p, 120000, made_at=119999), "keep"),
     # Apple's Windows updater style: a bigger firmware partition, data to the last sector
     ("updater style", _mbr(80325 + 40000, [(0, 63, 80262), (0x0B, 80325, 40000)], [(80325, 40000)]), "keep"),
     # a bootloader installer rewrote the firmware in place; FAT smaller than its partition, type 0x0c
@@ -129,7 +147,7 @@ def old_table_rewrite(path):
     writing the firmware: rewrite the MBR to flashpod's own formula."""
     total = os.path.getsize(path) // SECTOR
     mbr = bytearray(SECTOR)
-    for i, (t, s, n) in enumerate([(0, FW_START, FW_BLOCKS), (0x0B, D, total - TAIL_RESERVE - D)]):
+    for i, (t, s, n) in enumerate(formula_entries(total)):
         off = 446 + 16 * i
         mbr[off + 1:off + 4] = b"\xfe\xff\xff"
         mbr[off + 4] = t

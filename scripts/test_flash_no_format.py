@@ -127,6 +127,18 @@ def kept_layouts(tmp, fw):
               % (name, "fails" if caught else "passes"))
 
 
+def formula_matches_flashpod():
+    print("the fixtures' formula is flashpod's own")
+    for total in (120000, 30320639, 30320640):
+        hdr, start, n = layout.build_mbr_layout(total)
+        check(kept.formula_entries(total)[1][1:] == (start, n),
+              "%d sectors: data %d+%d" % (total, start, n))
+    # the reported card: one sector fewer over the iPod's own disk path
+    _h, start, n = layout.build_mbr_layout(30320639)
+    check((start, start + n - 1) == (65599, 30318590),
+          "flashpod's layout for 30,320,639 sectors is data 65599..30318590")
+
+
 def reported_card(tmp, fw):
     print("the reported card at full size (sparse)")
     img = os.path.join(tmp, "reported.img")
@@ -231,6 +243,7 @@ def main():
     check(rc != 0 and "no partition table" in out and sha(blank) == before,
           "a blank card with no partition table (rc %d)" % rc)
 
+    formula_matches_flashpod()
     kept_layouts(tmp, fw2)
     reported_card(tmp, fw2)
 

@@ -585,6 +585,16 @@ mod tests {
         d
     }
 
+    /// A card of `total` sectors whose MBR is flashpod's own formula for a
+    /// disk of `made_at` sectors (layout::build_mbr_layout), FAT boot sector
+    /// to match.
+    fn formula_card(total: u64, made_at: u64) -> MemDevice {
+        let (mbr, start, n) = layout::build_mbr_layout(made_at, false, None).unwrap();
+        let mut d = mbr_card(total, &[], &[(start, n)]);
+        d.data[..512].copy_from_slice(&mbr);
+        d
+    }
+
     /// An Apple Partition Map card: map, Apple_MDFW at (fw_start, fw_n),
     /// Apple_HFS at (data_start, data_n).
     fn apm_card(total: u64, fw_start: u64, fw_n: u64, data_start: u64, data_n: u64) -> MemDevice {
@@ -648,6 +658,9 @@ mod tests {
             ("patcher touched", mbr_card(120_000, &[(0x00, 63, 65_536), (0x0c, 65_599, 40_000)], &[(65_599, 39_000)]), false),
             // hand fdisk: 1 MiB-aligned data, a gap, a third partition, a big tail
             ("hand fdisk", mbr_card(140_000, &[(0x00, 63, 65_536), (0x0c, 67_584, 40_000), (0x83, 107_584, 20_000)], &[(67_584, 40_000)]), false),
+            // the same card, two transports: flashpod's own layout for a disk
+            // path that reports N-1 sectors, written through a reader reporting N
+            ("flashpod's own at N-1, written at N", formula_card(120_000, 119_999), false),
             // APM with the firmware where the map says, not at 63 (no regression)
             ("APM elsewhere", apm_card(160_000, 128, 70_000, 70_128, 80_000), false),
         ]
@@ -714,8 +727,12 @@ mod tests {
 
     #[test]
     fn the_reported_card_at_full_size() {
-        // The real geometry: disk 30,320,640 sectors, data 65599..30318590,
-        // one sector short of flashpod's formula. A sparse image file.
+        // The real geometry: disk 30,320,640 sectors in a card reader, data
+        // 65599..30318590. That is flashpod's own layout for 30,320,639
+        // sectors, what the same card reports over the iPod's own disk path.
+        let (_, s0, n0) = layout::build_mbr_layout(30_320_639, false, None).unwrap();
+        assert_eq!((s0, s0 + n0 - 1), (65_599, 30_318_590));
+        // A sparse image file.
         let dir = std::env::temp_dir().join(format!("flashpod-keep-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("card.img");
