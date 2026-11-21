@@ -20,10 +20,21 @@ On synthetic images, through the CLI:
     on the card, every byte of the data partition is unchanged, and the
     card still lists its tracks;
   * a dry run that can't read the card says so (a real run then checks);
-  * refused, image unchanged: a card whose data partition differs from the
-    planned one (the image was grown), and a blank card with no partition
-    table.
-Against the tree before the fix, the plan, dry-run and refusal checks fail.
+  * refused, image unchanged: a blank card with no partition table.
+
+Keep means keep (2026-11-21): --no-format uses the card's partition table AS
+IT IS and writes only the firmware partition. A layout that merely DIFFERS
+from flashpod's own is kept; one that is WRONG is refused:
+  * a grown image (data partition no longer where flashpod's formula would
+    put it, which the old --no-format refused) is kept, table unchanged;
+  * every layout in kept_layout_fixtures: accepted ones keep every byte
+    outside the firmware partition and name what was kept; wrong ones (and a
+    Mac/APM card, which this command names but doesn't handle) are refused
+    with the image unchanged and the reason in the message;
+  * CONTROL: the old table rewrite after the write fails that identity
+    check on every accepted layout but flashpod's own;
+  * the reported card at full size (sparse): disk 30,320,640 sectors, data
+    65599..30318590, one sector short of flashpod's formula: kept.
 """
 import hashlib
 import os
@@ -36,6 +47,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 
 import synth_fixtures as synth  # noqa: E402
+import kept_layout_fixtures as kept  # noqa: E402
 from flashpod import card, layout  # noqa: E402
 
 fails = []
@@ -72,6 +84,77 @@ def data_region(img):
     return start * 512, count * 512
 
 
+SAYS = {
+    "no_table": "no partition table", "no_firmware_partition": "no firmware partition",
+    "firmware_start": "starts at sector 2048", "overlap": "overlap",
+    "past_end": "runs past the end", "fat_larger_than_partition": "says it is 40001 sectors",
+    "partition_too_small": "larger than the drive's firmware partition",
+    "apm": "Apple Partition Map",
+}
+
+
+def kept_layouts(tmp, fw):
+    print("keep means keep: cards laid out by other tools")
+    for i, (name, build, expect) in enumerate(kept.FIXTURES):
+        if name.startswith("APM"):
+            expect = "apm"          # named, not handled by flash --no-format
+        # a number, not the name: the refusal echoes the path, and a reason
+        # word in it would satisfy the "says why" check by itself
+        img = os.path.join(tmp, "kept-%d.img" % i)
+        build(img)
+        if expect != "keep":
+            before = sha(img)
+            rc, out = flashpod("flash", img, "--firmware", fw, "--no-format", "--yes")
+            check(rc != 0 and sha(img) == before and SAYS[expect] in out,
+                  "%s: refused, unchanged, says %r (rc %d)" % (name, SAYS[expect], rc))
+            continue
+        outside = kept.outside_ranges(img)
+        before = [sha(img, a, b - a) for a, b in outside]
+        rc, out = flashpod("flash", img, "--firmware", fw, "--no-format", "--yes")
+        check(rc == 0 and "partition table kept as it is" in out,
+              "%s: kept (rc %d)%s" % (name, rc, "" if rc == 0 else ": " + out.strip().splitlines()[-1]))
+        check([sha(img, a, b - a) for a, b in outside] == before,
+              "%s: every byte outside the firmware partition is unchanged" % name)
+        from flashpod.firmware import load_firmware
+        want = load_firmware(fw)                # install-ready, as written
+        with open(img, "rb") as f:
+            f.seek(kept.firmware_partition(img)[0] * 512)
+            check(f.read(len(want)) == want, "%s: the firmware is in its partition" % name)
+        kept.old_table_rewrite(img)
+        caught = [sha(img, a, b - a) for a, b in outside] != before
+        check(caught == (name != "flashpod's own"),
+              "%s: control, the old table rewrite %s the identity check"
+              % (name, "fails" if caught else "passes"))
+
+
+def formula_matches_flashpod():
+    print("the fixtures' formula is flashpod's own")
+    for total in (120000, 30320639, 30320640):
+        hdr, start, n = layout.build_mbr_layout(total)
+        check(kept.formula_entries(total)[1][1:] == (start, n),
+              "%d sectors: data %d+%d" % (total, start, n))
+    # the reported card: one sector fewer over the iPod's own disk path
+    _h, start, n = layout.build_mbr_layout(30320639)
+    check((start, start + n - 1) == (65599, 30318590),
+          "flashpod's layout for 30,320,639 sectors is data 65599..30318590")
+
+
+def reported_card(tmp, fw):
+    print("the reported card at full size (sparse)")
+    img = os.path.join(tmp, "reported.img")
+    total, d0, d1 = 30320640, 65599, 30318590
+    kept._image(img, total, [(0, 63, 65536), (0x0B, d0, d1 - d0 + 1)], [(d0, d1 - d0 + 1)])
+    spots = [(0, 512), (d0 * 512, 512), ((total - 8) * 512, 4096)]
+    before = [sha(img, a, n) for a, n in spots]
+    rc, out = flashpod("flash", img, "--firmware", fw, "--no-format", "--yes")
+    check(rc == 0 and "partition table kept as it is: MBR, firmware 63..65598, data 65599..30318590" in out,
+          "kept, and named (rc %d)" % rc)
+    check("unallocated" not in out, "no tail warning: it leaves 2049 sectors")
+    check([sha(img, a, n) for a, n in spots] == before,
+          "its MBR, FAT boot sector and tail are unchanged")
+    os.unlink(img)
+
+
 def main():
     tmp = synth.scratch_dir("fp-noformat-")
     fw = synth.write_firmware(os.path.join(tmp, "fw.bin"))
@@ -95,8 +178,8 @@ def main():
     check("data partition and its music are kept" in out,
           "the plan says the data partition is kept")
     check("is left as it is" in out, "the dry run says the data is left alone")
-    check("data partition matches the planned layout" in out,
-          "the dry run checked the card's data partition")
+    check("partition table kept as it is: MBR, firmware 63..65598" in out,
+          "the dry run checked the card's table and names what it keeps")
     check(sha(img) == before, "the dry run leaves the image unchanged")
 
     print("control: a plain flash still warns")
@@ -140,24 +223,29 @@ def main():
               and "ERASE" not in out and "FAT32" not in out,
               "says it couldn't check, and still never says ERASE or FAT32")
 
-    print("refused, image unchanged")
+    print("a grown card is kept, not refused")
     with open(img, "r+b") as f:                 # grow the card by 64 MiB
         f.truncate(os.path.getsize(img) + (64 << 20))
-    before = sha(img)
-    rc, out = flashpod("flash", img, "--firmware", fw2, "--no-format", "--yes")
-    check(rc != 0 and "wrong sectors" in out and sha(img) == before,
-          "a data partition elsewhere than planned (rc %d: %s)"
-          % (rc, out.strip().splitlines()[-1] if out.strip() else ""))
-    rc, out = flashpod("flash", img, "--firmware", fw2, "--no-format",
-                       "--dry-run")
-    check(rc != 0 and "wrong sectors" in out and sha(img) == before,
-          "the dry run refuses it too (rc %d)" % rc)
+    table_before = sha(img, 0, 512)
+    data_before = sha(img, start, length)
+    rc, out = flashpod("flash", img, "--firmware", fw, "--no-format", "--yes")
+    check(rc == 0 and "partition table kept as it is" in out,
+          "flash --no-format keeps it (rc %d)" % rc)
+    check(sha(img, 0, 512) == table_before and sha(img, start, length) == data_before,
+          "the partition table and the data partition are unchanged")
+    check(len(card.tracks(img)["tracks"]) == n_tracks, "the card still lists its tracks")
+
+    print("refused, image unchanged")
     blank = os.path.join(tmp, "blank.img")
     card.create_blank(blank, 96 << 20)
     before = sha(blank)
     rc, out = flashpod("flash", blank, "--firmware", fw2, "--no-format", "--yes")
     check(rc != 0 and "no partition table" in out and sha(blank) == before,
           "a blank card with no partition table (rc %d)" % rc)
+
+    formula_matches_flashpod()
+    kept_layouts(tmp, fw2)
+    reported_card(tmp, fw2)
 
     print()
     if fails:
