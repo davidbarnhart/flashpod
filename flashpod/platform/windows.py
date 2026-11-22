@@ -30,7 +30,12 @@ IOCTL_DISK_UPDATE_PROPERTIES = 0x00070140
 IOCTL_STORAGE_EJECT_MEDIA = 0x002D4808
 FSCTL_LOCK_VOLUME = 0x00090018
 FSCTL_DISMOUNT_VOLUME = 0x00090020
-IOCTL_VOLUME_OFFLINE = 0x0056C00C
+# Brings back a volume an earlier run left offline. Raw disk writes inside an
+# OFFLINE volume's sectors fail with ERROR_NOT_READY ("[Errno 21] The device is
+# not ready") even after a lock and dismount -- measured on a Windows test VM
+# (#119); the offline state outlives the process that set it. A locked,
+# dismounted, ONLINE volume takes the writes.
+IOCTL_VOLUME_ONLINE = 0x0056C008
 
 GENERIC_READ = 0x80000000
 GENERIC_WRITE = 0x40000000
@@ -478,12 +483,12 @@ class WindowsPlatform(Platform):
 
     # -- mutation around the raw write ------------------------------------
     def _lock_volumes(self, dev):
-        """Lock, dismount, and take offline every volume on *dev*.
+        """Lock and dismount every volume on *dev*, and bring it online.
 
-        IOCTL_VOLUME_OFFLINE tells the volume manager to release its
-        claim on the partition's sectors, so subsequent PhysicalDrive
-        writes don't get ACCESS DENIED.  The handle is held open to
-        prevent Windows from re-onlining the volume while we write.
+        The lock + dismount is what lets PhysicalDrive writes into the
+        partition's sectors through (without it: ACCESS DENIED). ONLINE, not
+        OFFLINE: see IOCTL_VOLUME_ONLINE. The handle is held open so
+        Windows can't remount the volume while we write.
         If the initial LOCK is refused (another handle is open), force a
         DISMOUNT first — that invalidates the other handles — and retry
         the lock. Returns [(handle_path, error_or_None)] per volume."""
@@ -509,7 +514,7 @@ class WindowsPlatform(Platform):
                     self._ioctl(h, FSCTL_LOCK_VOLUME)
                 self._ioctl(h, FSCTL_DISMOUNT_VOLUME)
                 try:
-                    self._ioctl(h, IOCTL_VOLUME_OFFLINE)
+                    self._ioctl(h, IOCTL_VOLUME_ONLINE)
                 except OSError:
                     pass
                 self._held_locks.append((handle_path, h))
