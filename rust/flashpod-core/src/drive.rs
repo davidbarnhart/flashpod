@@ -139,19 +139,12 @@ fn fat_total_sectors(bs: &[u8]) -> Option<u64> {
 /// that merely differs from flashpod's own (another tool's data length,
 /// tail gap, a bigger firmware partition) is kept; one that is wrong is
 /// refused, with `reason` in the error's details:
-///   no_table, no_firmware_partition, firmware_start (MBR only: sector 63),
-///   past_end, overlap, fat_larger_than_partition, partition_too_small,
+///   no_table, no_firmware_partition, past_end, overlap, fat_larger_than_partition, partition_too_small,
 ///   and last large_disk (so every other check has passed when a caller
 ///   sees it and offers to re-partition).
 pub fn check_kept_layout(dev: &mut dyn BlockDevice, fw: &[u8]) -> Result<KeptLayout, Error> {
     let (t, fwp) = firmware_partition(dev)?;
     let total = dev.len()? / SECTOR;
-    if t.kind == "mbr" && fwp.start != layout::FW_START {
-        return Err(layout_refusal("firmware_start", format!(
-            "the firmware partition starts at sector {}; flashpod writes firmware only into one that starts at \
-             sector {}, because it isn't known yet whether every iPod's boot ROM finds the firmware through the \
-             partition table rather than at sector {}", fwp.start, layout::FW_START, layout::FW_START)));
-    }
     let parts: Vec<&Partition> = t.partitions.iter().filter(|p| p.sectors > 0).collect();
     for p in &parts {
         if p.start + p.sectors > total {
@@ -663,6 +656,8 @@ mod tests {
             ("flashpod's own at N-1, written at N", formula_card(120_000, 119_999), false),
             // APM with the firmware where the map says, not at 63 (no regression)
             ("APM elsewhere", apm_card(160_000, 128, 70_000, 70_128, 80_000), false),
+            // MBR with the firmware partition at 1 MiB (sector 2048): kept, any start
+            ("MBR firmware at 2048", mbr_card(160_000, &[(0x00, 2048, 65_536), (0x0b, 67_584, 80_000)], &[(67_584, 80_000)]), false),
         ]
     }
 
@@ -709,7 +704,6 @@ mod tests {
         let cases: Vec<(&str, MemDevice)> = vec![
             ("no_table", MemDevice { data: vec![0u8; 1 << 20] }),
             ("no_firmware_partition", mbr_card(100_000, &[(0x0b, 65_599, 20_000)], &[])),
-            ("firmware_start", mbr_card(100_000, &[(0x00, 64, 65_536), (0x0b, 65_600, 20_000)], &[])),
             ("overlap", mbr_card(100_000, &[(0x00, 63, 65_536), (0x0b, 65_000, 20_000)], &[])),
             ("past_end", mbr_card(80_000, &[(0x00, 63, 65_536), (0x0b, 65_599, 20_000)], &[])),
             ("fat_larger_than_partition", mbr_card(100_000, &[(0x00, 63, 65_536), (0x0b, 65_599, 20_000)], &[(65_599, 20_001)])),
@@ -784,17 +778,23 @@ mod tests {
     }
 
     #[test]
-    fn an_mbr_firmware_partition_off_sector_63_is_refused() {
-        // BEHAVIOUR CHANGE (keep means keep): main before this accepted an
-        // MBR firmware partition anywhere; now only at sector 63 until it is
-        // measured whether the boot ROM reads the start from the table.
+    fn an_mbr_firmware_partition_at_any_start_is_written_there() {
+        // The firmware goes where the card's own table puts it, with no
+        // check or warning on the start sector (a 1st-gen iPod boots with
+        // the firmware partition at sector 63 and at 2048).
         let fw = synth(3, None);
-        let mut d = mbr_card(200_000, &[(0x00, 2048, 80_000), (0x0b, 82_048, 60_000)], &[]);
-        let before = d.data.clone();
-        let e = write_firmware(&mut d, &fw).unwrap_err();
-        assert_eq!(e.details["reason"], "firmware_start");
-        assert!(e.message.contains("2048") && e.message.contains("63"));
-        assert_eq!(before, d.data);
+        for start in [63u64, 64, 2048, 4096] {
+            let data_start = start + 80_000;
+            let mut d = mbr_card(200_000, &[(0x00, start, 80_000), (0x0b, data_start, 60_000)], &[(data_start, 60_000)]);
+            let before = d.data.clone();
+            let k = check_kept_layout(&mut d, &fw).unwrap();
+            assert!(k.warnings.is_empty(), "start {}: {:?}", start, k.warnings);
+            let r = write_firmware(&mut d, &fw).unwrap();
+            assert_eq!((r.partition_start, r.partition_sectors), (start, 80_000));
+            let s = (start * SECTOR) as usize;
+            assert_eq!(&d.data[s..s + fw.len()], &fw[..], "start {}", start);
+            assert!(outside_equal(&before, &d.data, start, 80_000), "start {}", start);
+        }
     }
 
     #[test]

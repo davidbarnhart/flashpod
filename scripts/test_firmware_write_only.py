@@ -406,14 +406,14 @@ MUTANTS = ["fat32 outside", "hfs outside", "firmware write, answer Enter", "firm
            "drive partition, a wrong ERASE", "drive partition, --dry-run",
            "large-disk gate, --yes, then an empty ERASE", "large-disk gate, no terminal, --yes",
            "catalog: an image whose checksum is wrong", "bootrom outside",
-           "kept: off by one", "kept: APM, firmware elsewhere", "kept: overlap", "kept: FAT bigger than its partition"]
+           "kept: off by one", "kept: APM, firmware elsewhere", "kept: MBR, firmware at 2048", "kept: overlap", "kept: FAT bigger than its partition"]
 
 
 def kept_layouts(binary, work, fw):
     print("firmware write keeps another tool's layout as it is")
     reasons = {
         "no_table": "has no firmware partition", "no_firmware_partition": "has no firmware partition",
-        "firmware_start": "starts at sector 2048", "overlap": "overlap", "past_end": "runs past the end",
+        "overlap": "overlap", "past_end": "runs past the end",
         "fat_larger_than_partition": "FAT filesystem says it is 40001 sectors",
         "partition_too_small": "larger than the drive's firmware partition",
     }

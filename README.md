@@ -462,10 +462,9 @@ It warns, without refusing, when the data partition leaves fewer than 2048
 sectors at the end of the card. It refuses, writing nothing, a layout that is
 wrong: no partition table or no firmware partition, partitions that overlap
 or run past the end of the card, a FAT filesystem bigger than its partition,
-firmware bigger than the firmware partition, and (on an MBR card) a firmware
-partition that doesn't start at sector 63, since it isn't known yet whether
-every iPod's boot ROM finds the firmware through the table. On a Mac
-(Apple Partition Map) card, the firmware goes wherever the map puts it.
+and firmware bigger than the firmware partition. The firmware goes wherever
+the card's table puts it, at any start sector, on an MBR card and on a Mac
+(Apple Partition Map) card alike.
 
 **Big cards:** if the data partition reaches past
 128 GiB and the firmware can't read that far (or flashpod can't tell), it

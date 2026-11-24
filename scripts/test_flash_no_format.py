@@ -86,7 +86,7 @@ def data_region(img):
 
 SAYS = {
     "no_table": "no partition table", "no_firmware_partition": "no firmware partition",
-    "firmware_start": "starts at sector 2048", "overlap": "overlap",
+    "overlap": "overlap",
     "past_end": "runs past the end", "fat_larger_than_partition": "says it is 40001 sectors",
     "partition_too_small": "larger than the drive's firmware partition",
     "apm": "Apple Partition Map",

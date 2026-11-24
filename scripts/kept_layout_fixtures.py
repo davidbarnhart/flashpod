@@ -108,10 +108,11 @@ FIXTURES = [
     ("hand fdisk", _mbr(150000, [(0, 63, FW_BLOCKS), (0x0C, 67584, 40000), (0x83, 107584, 20000)], [(67584, 40000)]), "keep"),
     # a Mac card whose map puts the firmware away from sector 63
     ("APM, firmware elsewhere", lambda p: _apm(p, 170000, (128, 70000), (70128, 80000)), "keep"),
+    # an MBR card with the firmware partition at 1 MiB (sector 2048): any start is kept
+    ("MBR, firmware at 2048", _mbr(120000, [(0, 2048, FW_BLOCKS), (0x0B, 2048 + FW_BLOCKS, 40000)], [(2048 + FW_BLOCKS, 40000)]), "keep"),
     # wrong:
     ("no table", lambda p: open(p, "wb").truncate(64 << 20), "no_table"),
     ("no firmware partition", _mbr(120000, [(0x0B, D, 40000)]), "no_firmware_partition"),
-    ("firmware off sector 63", _mbr(120000, [(0, 2048, FW_BLOCKS), (0x0B, 2048 + FW_BLOCKS, 40000)]), "firmware_start"),
     ("overlap", _mbr(120000, [(0, 63, FW_BLOCKS), (0x0B, D - 600, 40000)]), "overlap"),
     ("data past the end", _mbr(D + 30000, [(0, 63, FW_BLOCKS), (0x0B, D, 40000)]), "past_end"),
     ("FAT bigger than its partition", _mbr(120000, [(0, 63, FW_BLOCKS), (0x0B, D, 40000)], [(D, 40001)]), "fat_larger_than_partition"),

@@ -513,7 +513,7 @@ def report_format(dev, fmt):
                 "label 'IPOD')" % (geo["clusters"], size), C_GRN),
           file=sys.stderr)
 
-def verify_firmware(dev, fw_bytes, dry):
+def verify_firmware(dev, fw_bytes, dry, start=FW_START):
     """Read the firmware region back off the card and compare it byte-for-byte to the image we
     wrote. Runs after the images are written but before eject, so a bad write (flaky card, short
     write, bad cable) is caught here instead of bricking the boot. The buffer cache is flushed
@@ -523,13 +523,13 @@ def verify_firmware(dev, fw_bytes, dry):
               file=sys.stderr)
         return
     print(color("  verifying firmware on the card byte-for-byte (%d bytes @ sector %d) ..."
-                % (len(fw_bytes), FW_START), C_DIM), file=sys.stderr)
+                % (len(fw_bytes), start), C_DIM), file=sys.stderr)
     plat = _plat.current()
     plat.flush_buffers(dev)                                   # drop cache -> read the real card
     n = len(fw_bytes)
     with plat.open_raw(dev, "rb") as f:
         try:
-            layout.verify_region(f, fw_bytes)
+            layout.verify_region(f, fw_bytes, start)
         except VerifyFailed as e:
             d = e.details
             if d["reason"] == "short_read":
@@ -741,7 +741,7 @@ def flash_keep(plat, dev, fw, total_sectors, assume_yes, dry_run, lba48=False,
                     "partition is left as it is"
                     % (len(fw), fw_start, fw_start + fw_blocks - 1), C_DIM),
               file=sys.stderr)
-        verify_firmware(dev, fw, dry_run)
+        verify_firmware(dev, fw, dry_run, fw_start)
         return 0
     plat.unmount_all(dev, dry_run)
     with plat.open_raw(dev, "r+b") as f:
@@ -752,7 +752,7 @@ def flash_keep(plat, dev, fw, total_sectors, assume_yes, dry_run, lba48=False,
         layout.write_firmware_into(f, fw, *kept["firmware"])
     print(color("  wrote the firmware into its partition; nothing else",
                 C_GRN), file=sys.stderr)
-    verify_firmware(dev, fw, dry_run)
+    verify_firmware(dev, fw, dry_run, kept["firmware"][0])
     plat.eject(dev, dry_run)
     print(color("\nDone. %s is ready — insert it into the iPod." % dev, C_GRN),
           file=sys.stderr)

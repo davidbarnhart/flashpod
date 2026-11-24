@@ -174,8 +174,7 @@ def kept_layout(read, total_sectors, fw_len, lba48=False):
     length or tail gap, type 0x0b or 0x0c, a firmware partition bigger than
     32 MiB) is kept. One that is WRONG raises LayoutMismatch with
     ``reason``: no_table, apm (a Mac card: recognised, not handled here),
-    no_firmware_partition, firmware_start (not sector 63), past_end,
-    overlap, fat_larger_than_partition, partition_too_small, large_disk
+    no_firmware_partition, past_end, overlap, fat_larger_than_partition, partition_too_small, large_disk
     (data past 128 GiB without ``lba48``).
 
     Returns a dict: ``firmware`` and ``data`` ((start, sectors); data may be
@@ -199,13 +198,6 @@ def kept_layout(read, total_sectors, fw_len, lba48=False):
     if fw is None:
         raise LayoutMismatch("no firmware partition (MBR type 0x00)",
                              reason="no_firmware_partition")
-    if fw[0] != FW_START:
-        raise LayoutMismatch(
-            "the firmware partition starts at sector %d; flashpod writes "
-            "firmware only into one that starts at sector %d, because it isn't "
-            "known yet whether every iPod's boot ROM finds the firmware "
-            "through the partition table rather than at sector %d"
-            % (fw[0], FW_START, FW_START), reason="firmware_start")
     for i, _, s, n in parts:
         if s + n > total_sectors:
             raise LayoutMismatch(
