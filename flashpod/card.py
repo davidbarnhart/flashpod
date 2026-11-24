@@ -536,11 +536,7 @@ def flash_firmware(path, firmware):
                                  reason="layout", problems=problems)
         f = img.f
         # what a fresh flash leaves in the firmware partition: zeros, then fw
-        f.seek(layout.FW_START * SECTOR)
-        f.write(b"\x00" * (layout.FW_BLOCKS * SECTOR))
-        f.seek(layout.FW_START * SECTOR)
-        f.write(fw)
-        f.flush()
+        layout.write_firmware_into(f, fw)
         layout.verify_region(f, fw)
     return Result(firmware_bytes=len(fw))
 

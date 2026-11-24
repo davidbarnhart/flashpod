@@ -3095,9 +3095,11 @@ def main():
     p_fl.add_argument("--dry-run", action="store_true",
                       help="show the plan, write nothing")
     p_fl.add_argument("--no-format", action="store_true",
-                      help="keep the data partition and its music: rewrite "
-                           "only the firmware and partition table (refused "
-                           "unless the card's data partition matches)")
+                      help="keep the card's partition table, data partition "
+                           "and music as they are: write only the firmware "
+                           "partition the card's own table names (refused "
+                           "when the layout is wrong, e.g. overlapping "
+                           "partitions)")
     arm = p_fl.add_mutually_exclusive_group()
     arm.add_argument("--arm", action="store_true",
                      help="arm the card for a disk-mode update: on its next "

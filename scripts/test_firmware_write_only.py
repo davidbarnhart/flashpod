@@ -19,7 +19,13 @@
 3. `firmware write` with no FIRMWARE argument uses the catalog choosers (a
    local served catalog): the default writes the catalog's image; a model
    with no firmware, or an image whose checksum is wrong, writes nothing.
-4. `bootrom arm` and `bootrom disarm` on Apple's 1.1.5 from the firmware
+4. Keep means keep (kept_layout_fixtures): on a card laid out by another
+   tool, `firmware write --yes` uses the table as it is, names what it
+   recognised, and changes no byte outside the firmware partition; a wrong
+   layout is refused with nothing written. CONTROL: the old table rewrite
+   after the write must fail the same identity check on every layout but
+   flashpod's own.
+5. `bootrom arm` and `bootrom disarm` on Apple's 1.1.5 from the firmware
    cache (~/.cache/flashpod/firmware). There is no synthetic stand-in, so
    without it this prints NOT RUN and still passes.
 
@@ -43,6 +49,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import synth_fixtures as synth  # noqa: E402
 from test_cli_unchanged import serve_catalog  # noqa: E402
+import kept_layout_fixtures as kept  # noqa: E402
 
 SECTOR = 512
 GIB = 1 << 30
@@ -398,7 +405,41 @@ def bootrom_real(binary, work):
 MUTANTS = ["fat32 outside", "hfs outside", "firmware write, answer Enter", "firmware write, no terminal",
            "drive partition, a wrong ERASE", "drive partition, --dry-run",
            "large-disk gate, --yes, then an empty ERASE", "large-disk gate, no terminal, --yes",
-           "catalog: an image whose checksum is wrong", "bootrom outside"]
+           "catalog: an image whose checksum is wrong", "bootrom outside",
+           "kept: off by one", "kept: APM, firmware elsewhere", "kept: MBR, firmware at 2048", "kept: overlap", "kept: FAT bigger than its partition"]
+
+
+def kept_layouts(binary, work, fw):
+    print("firmware write keeps another tool's layout as it is")
+    reasons = {
+        "no_table": "has no firmware partition", "no_firmware_partition": "has no firmware partition",
+        "overlap": "overlap", "past_end": "runs past the end",
+        "fat_larger_than_partition": "FAT filesystem says it is 40001 sectors",
+        "partition_too_small": "larger than the drive's firmware partition",
+    }
+    for i, (name, build, expect) in enumerate(kept.FIXTURES):
+        # a number, not the name: the refusal echoes the path, and a reason
+        # word in it would satisfy the "says why" check by itself
+        img = os.path.join(work, "kept-%d.img" % i)
+        build(img)
+        if expect != "keep":
+            before = digest(img)
+            rc, out = run_plain(binary, ["firmware", "write", "--target", img, fw, "--yes"])
+            unchanged("kept: %s" % name, img, before, rc, out)
+            check(reasons[expect] in out, "kept: %s: says why (%r)" % (name, reasons[expect]))
+            continue
+        outside = kept.outside_ranges(img)
+        before = hash_ranges(img, outside)
+        rc, out = run_plain(binary, ["firmware", "write", "--target", img, fw, "--yes"])
+        mutate("kept: %s" % name, img, outside[1][0])
+        check(rc == 0, "kept: %s: firmware write succeeds (rc %d)%s" % (name, rc, "" if rc == 0 else ": " + out[-300:]))
+        check("partition table kept as it is" in out, "kept: %s: names the layout it kept" % name)
+        check(hash_ranges(img, outside) == before, "kept: %s: every byte outside the firmware partition is unchanged" % name)
+        # CONTROL: the old --no-format's table rewrite must fail that check
+        kept.old_table_rewrite(img)
+        caught = hash_ranges(img, outside) != before
+        check(caught == (name != "flashpod's own"),
+              "kept: %s: control, the old table rewrite %s the identity check" % (name, "fails" if caught else "passes"))
 
 
 def run_all(binary):
@@ -408,6 +449,7 @@ def run_all(binary):
         fwbytes = f.read()
     music = synth.make_music(os.path.join(work, "music"))
     outside_unchanged(binary, work, fw, fwbytes)
+    kept_layouts(binary, work, fw)
     write_confirm(binary, work, fw)
     partition_confirm(binary, work, fw, music)
     large_disk_gate(binary, work, fw, "synthetic: flashpod can't tell")

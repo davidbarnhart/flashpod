@@ -34,7 +34,7 @@ import json, os, struct, subprocess, sys, textwrap
 from . import fat32
 from . import layout
 from . import platform as _plat
-from .errors import VerifyFailed
+from .errors import LayoutMismatch, VerifyFailed
 # The pure layout/firmware code moved to the library (flashpod.layout,
 # flashpod.firmware); re-exported so `ipod_flash.X` keeps working.
 from .firmware import (fixup_directories, load_firmware,  # noqa: F401
@@ -513,7 +513,7 @@ def report_format(dev, fmt):
                 "label 'IPOD')" % (geo["clusters"], size), C_GRN),
           file=sys.stderr)
 
-def verify_firmware(dev, fw_bytes, dry):
+def verify_firmware(dev, fw_bytes, dry, start=FW_START):
     """Read the firmware region back off the card and compare it byte-for-byte to the image we
     wrote. Runs after the images are written but before eject, so a bad write (flaky card, short
     write, bad cable) is caught here instead of bricking the boot. The buffer cache is flushed
@@ -523,13 +523,13 @@ def verify_firmware(dev, fw_bytes, dry):
               file=sys.stderr)
         return
     print(color("  verifying firmware on the card byte-for-byte (%d bytes @ sector %d) ..."
-                % (len(fw_bytes), FW_START), C_DIM), file=sys.stderr)
+                % (len(fw_bytes), start), C_DIM), file=sys.stderr)
     plat = _plat.current()
     plat.flush_buffers(dev)                                   # drop cache -> read the real card
     n = len(fw_bytes)
     with plat.open_raw(dev, "rb") as f:
         try:
-            layout.verify_region(f, fw_bytes)
+            layout.verify_region(f, fw_bytes, start)
         except VerifyFailed as e:
             d = e.details
             if d["reason"] == "short_read":
@@ -674,33 +674,89 @@ def self_test():
                 "devOffset; LBA28 cap.", C_GRN))
 
 # ----------------------------------------------------------------------------
-def check_kept_data(plat, dev, total_sectors, dry_run, lba48=False,
-                    max_data_sectors=None):
-    """--no-format keeps the card's data partition, so the new partition
-    table must point at it exactly (layout.kept_data_problems). Refuse
-    otherwise. A dry run that can't read the card (no root) says so."""
+def flash_keep(plat, dev, fw, total_sectors, assume_yes, dry_run, lba48=False,
+               armed=None):
+    """--no-format: keep means keep. Write the firmware into the firmware
+    partition the card's OWN partition table names, and nothing else: the
+    table, the data partition and the tail stay byte for byte, whatever tool
+    laid the card out. A layout that is wrong (layout.kept_layout) is
+    refused with nothing written."""
+    def read_layout(f):
+        def read(off, n):
+            f.seek(off)
+            return f.read(n)
+        return layout.kept_layout(read, total_sectors, len(fw), lba48)
+
+    def refuse(e):
+        how = ("pass --lba48 if this iPod reads past 128 GiB, or flash without "
+               "--no-format (erases the card) to lay it out afresh"
+               if e.details.get("reason") == "large_disk" else
+               "flash without --no-format (erases the card) to lay it out afresh")
+        sys.exit(color("--no-format keeps the card's partition table and data, "
+                       "but on %s: %s.\nNothing written. To replace the layout, "
+                       "%s." % (dev, e, how), C_RED))
+
+    kept = None
     try:
         with plat.open_raw(dev, "rb") as f:
-            def read(off, n):
-                f.seek(off)
-                return f.read(n)
-            problems = layout.kept_data_problems(read, total_sectors, lba48,
-                                                 max_data_sectors)
+            kept = read_layout(f)
+    except LayoutMismatch as e:
+        refuse(e)
     except OSError as e:
         if not dry_run:
-            sys.exit(color("could not read %s to check its data partition: %s"
+            sys.exit(color("could not read %s to check its partition table: %s"
                            % (dev, e), C_RED))
-        print(color("  [dry-run] could not read %s to check that its data "
-                    "partition matches (%s); a real run checks before writing."
+        print(color("  [dry-run] could not read %s to check its partition "
+                    "table (%s); a real run checks before writing."
                     % (dev, e.strerror or e), C_YEL), file=sys.stderr)
-        return
-    if problems:
-        sys.exit(color("--no-format keeps the data partition, but on %s:\n  %s\n"
-                       "Flashing would point the iPod at the wrong sectors. "
-                       "Flash without --no-format (erases the card) instead."
-                       % (dev, "\n  ".join(problems)), C_RED))
-    print(color("  data partition matches the planned layout; it will be kept",
+    fw_start, fw_blocks = kept["firmware"] if kept else (FW_START, FW_BLOCKS)
+    print(color("\n  PLAN — this will REWRITE the firmware on %s; the partition "
+                "table, the data partition and its music are kept" % dev, C_YEL),
+          file=sys.stderr)
+    print("    device size : %s (%d sectors)"
+          % (fmt_size(total_sectors * SECTOR), total_sectors), file=sys.stderr)
+    if kept:
+        print("    " + kept["recognised"], file=sys.stderr)
+    print("    firmware    : sectors %d..%d   (%s), %d bytes of firmware, the "
+          "rest zeroed" % (fw_start, fw_start + fw_blocks - 1,
+                           fmt_size(fw_blocks * SECTOR), len(fw)), file=sys.stderr)
+    for w in (kept["warnings"] if kept else []):
+        print(color("    ⚠ " + w, C_YEL), file=sys.stderr)
+    if armed:
+        print(color("    ⚠ ARMED for a disk-mode update (%s). %s"
+                    % (armed, ARM_WARNING), C_RED), file=sys.stderr)
+    mps = _plat.current().device_mountpoints(dev)
+    if mps:
+        print(color("    mounted now : " + ", ".join("%s@%s" % m for m in mps), C_YEL),
+              file=sys.stderr)
+    if not (assume_yes or dry_run):
+        print(file=sys.stderr)
+        want = "REWRITE %s" % device_label(dev)
+        got = input(color('  Type "%s" to proceed: ' % want, C_RED)).strip()
+        if got != want:
+            sys.exit("Confirmation did not match. Aborted.")
+    if dry_run:
+        print(color("  [dry-run] would write %d bytes of firmware into sectors "
+                    "%d..%d; nothing else on the card is written, and the data "
+                    "partition is left as it is"
+                    % (len(fw), fw_start, fw_start + fw_blocks - 1), C_DIM),
+              file=sys.stderr)
+        verify_firmware(dev, fw, dry_run, fw_start)
+        return 0
+    plat.unmount_all(dev, dry_run)
+    with plat.open_raw(dev, "r+b") as f:
+        try:
+            kept = read_layout(f)            # the card it is about to write
+        except LayoutMismatch as e:
+            refuse(e)
+        layout.write_firmware_into(f, fw, *kept["firmware"])
+    print(color("  wrote the firmware into its partition; nothing else",
                 C_GRN), file=sys.stderr)
+    verify_firmware(dev, fw, dry_run, kept["firmware"][0])
+    plat.eject(dev, dry_run)
+    print(color("\nDone. %s is ready — insert it into the iPod." % dev, C_GRN),
+          file=sys.stderr)
+    return 0
 
 
 def flash(device=None, firmware=None,
@@ -757,7 +813,8 @@ def flash(device=None, firmware=None,
                        % (dev, fmt_size(total_sectors * SECTOR),
                           fmt_size(FW_BLOCKS * SECTOR)), C_RED))
     if not do_format:
-        check_kept_data(plat, dev, total_sectors, dry_run, lba48, max_data_sectors)
+        return flash_keep(plat, dev, fw, total_sectors, assume_yes, dry_run,
+                          lba48, armed)
     confirm(dev, total_sectors, assume_yes or dry_run, lba48, max_data_sectors,
             do_format, armed)
     plat.unmount_all(dev, dry_run)

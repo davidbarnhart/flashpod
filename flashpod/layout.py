@@ -12,7 +12,7 @@ prints, prompts or exits: failures are exceptions.
 import struct
 
 from . import fat32
-from .errors import VerifyFailed
+from .errors import LayoutMismatch, VerifyFailed
 
 SECTOR        = 512
 FW_START      = 63
@@ -152,36 +152,114 @@ def write_card(f, fw_bytes, total_sectors, lba48=False, max_data_sectors=None,
             "data_blocks": data_blocks, "format": fmt}
 
 
-def kept_data_problems(read, total_sectors, lba48=False, max_data_sectors=None):
-    """Why a flash that KEEPS the data partition (no format) would be unsafe
-    on this card; [] when it is safe. ``read(offset, n)`` reads the card.
+def _fat_total_sectors(bs):
+    """A FAT boot sector's own size of its filesystem in 512-byte sectors,
+    or None when ``bs`` isn't a FAT boot sector."""
+    if len(bs) < SECTOR or bs[510:512] != b"\x55\xaa":
+        return None
+    bps = struct.unpack_from("<H", bs, 11)[0]
+    if bps not in (512, 1024, 2048, 4096) or bs[13] == 0:
+        return None
+    total = struct.unpack_from("<H", bs, 19)[0] or struct.unpack_from("<I", bs, 32)[0]
+    return total * bps // SECTOR
 
-    Without a format the new partition table must point at the FAT32 that is
-    already there: the same start sector and length. Anything else would
-    send the iPod to the wrong sectors, so the caller refuses."""
-    _, data_start, data_blocks = build_mbr_layout(total_sectors, lba48,
-                                                  max_data_sectors)
+
+def kept_layout(read, total_sectors, fw_len, lba48=False):
+    """Keep means keep: can firmware of ``fw_len`` bytes be written into this
+    card's firmware partition, using its partition table AS IT IS (whatever
+    tool wrote it) and writing nothing else? ``read(offset, n)`` reads the
+    card. The same checks as the Rust core's drive::check_kept_layout.
+
+    A layout that only DIFFERS from flashpod's own (another tool's data
+    length or tail gap, type 0x0b or 0x0c, a firmware partition bigger than
+    32 MiB) is kept. One that is WRONG raises LayoutMismatch with
+    ``reason``: no_table, apm (a Mac card: recognised, not handled here),
+    no_firmware_partition, past_end, overlap, fat_larger_than_partition, partition_too_small, large_disk
+    (data past 128 GiB without ``lba48``).
+
+    Returns a dict: ``firmware`` and ``data`` ((start, sectors); data may be
+    None), ``warnings`` (strings) and ``recognised`` (one line naming what
+    was kept)."""
     mbr = read(0, SECTOR)
+    if len(mbr) >= 2 and mbr[:2] == b"ER" and read(SECTOR, 2) == b"PM":
+        raise LayoutMismatch(
+            "an Apple Partition Map (Mac) card; flash --no-format keeps MBR "
+            "(Windows-format) cards only", reason="apm")
     if len(mbr) < SECTOR or mbr[510:512] != b"\x55\xaa":
-        return ["no partition table, so no data partition to keep"]
-    data = None
-    for off in (446, 462, 478, 494):
-        if mbr[off + 4] in (0x0b, 0x0c):
-            data = struct.unpack_from("<II", mbr, off + 8)
-            break
-    if data is None:
-        return ["no FAT32 data partition (type 0x0b/0x0c) to keep"]
-    problems = []
-    if tuple(data) != (data_start, data_blocks):
-        problems.append(
-            "the data partition is at sectors %d..%d, but this flash would "
-            "put it at %d..%d" % (data[0], data[0] + data[1] - 1,
-                                  data_start, data_start + data_blocks - 1))
-    boot = read(data[0] * SECTOR, SECTOR)
-    if len(boot) < SECTOR or boot[510:512] != b"\x55\xaa" \
-            or boot[82:87] != b"FAT32":
-        problems.append("no FAT32 filesystem at sector %d" % data[0])
-    return problems
+        raise LayoutMismatch("no partition table", reason="no_table")
+    parts = []
+    for i, off in enumerate((446, 462, 478, 494)):
+        ptype = mbr[off + 4]
+        start, count = struct.unpack_from("<II", mbr, off + 8)
+        if count:
+            parts.append((i + 1, ptype, start, count))
+    fw = next(((s, n) for _, t, s, n in parts if t == 0x00), None)
+    data = next(((s, n) for _, t, s, n in parts if t in (0x0B, 0x0C)), None)
+    if fw is None:
+        raise LayoutMismatch("no firmware partition (MBR type 0x00)",
+                             reason="no_firmware_partition")
+    for i, _, s, n in parts:
+        if s + n > total_sectors:
+            raise LayoutMismatch(
+                "partition %d (sectors %d..%d) runs past the end of the drive "
+                "(%d sectors)" % (i, s, s + n - 1, total_sectors),
+                reason="past_end")
+    for k, (i, _, s, n) in enumerate(parts):
+        for j, _, s2, n2 in parts[k + 1:]:
+            if s < s2 + n2 and s2 < s + n:
+                raise LayoutMismatch(
+                    "partitions %d (sectors %d..%d) and %d (sectors %d..%d) "
+                    "overlap" % (i, s, s + n - 1, j, s2, s2 + n2 - 1),
+                    reason="overlap")
+    warnings = []
+    if data is not None:
+        n = _fat_total_sectors(read(data[0] * SECTOR, SECTOR))
+        if n is not None and n > data[1]:
+            raise LayoutMismatch(
+                "the data partition's FAT filesystem says it is %d sectors, "
+                "but the partition is only %d" % (n, data[1]),
+                reason="fat_larger_than_partition")
+        gap = total_sectors - (data[0] + data[1])
+        if gap < TAIL_RESERVE:
+            warnings.append(
+                "the data partition leaves %d sector%s unallocated at the end "
+                "of the drive; flashpod's own layout leaves %d (some iPods see "
+                "a disk slightly smaller than a card reader does)"
+                % (gap, "" if gap == 1 else "s", TAIL_RESERVE))
+    if fw_len > fw[1] * SECTOR:
+        raise LayoutMismatch(
+            "the firmware (%d bytes) is larger than the drive's firmware "
+            "partition (%d bytes)" % (fw_len, fw[1] * SECTOR),
+            reason="partition_too_small")
+    if data is not None and data[0] + data[1] > LBA28_MAX and not lba48:
+        raise LayoutMismatch(
+            "the data partition ends at sector %d, past 128 GiB, which an "
+            "iPod without LBA48 support can't read" % (data[0] + data[1]),
+            reason="large_disk")
+    span = lambda p: "%d..%d" % (p[0], p[0] + p[1] - 1)  # noqa: E731
+    return {"firmware": fw, "data": data, "warnings": warnings,
+            "recognised": "partition table kept as it is: MBR, firmware %s, %s"
+                          % (span(fw), "data " + span(data) if data else
+                             "no data partition")}
+
+
+def write_firmware_into(f, fw_bytes, start=FW_START, sectors=FW_BLOCKS):
+    """Write firmware into its partition and nothing else: the partition
+    zeroed, then the firmware at its start (what a fresh flash leaves
+    there). The caller verifies (verify_region)."""
+    if len(fw_bytes) > sectors * SECTOR:
+        raise LayoutMismatch("firmware larger than its partition",
+                             reason="partition_too_small")
+    zero = b"\x00" * (1 << 20)
+    f.seek(start * SECTOR)
+    left = sectors * SECTOR
+    while left:
+        n = min(left, len(zero))
+        f.write(zero[:n])
+        left -= n
+    f.seek(start * SECTOR)
+    f.write(fw_bytes)
+    f.flush()
 
 
 def write_mbr(f, header):

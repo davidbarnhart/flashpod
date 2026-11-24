@@ -450,7 +450,23 @@ $ flashpod firmware write --target /dev/sdb --dry-run       # the plan, nothing 
 | `--dry-run`     | show the plan only |
 
 The drive needs a firmware partition first: on a blank drive, run
-`flashpod drive partition`. **Big cards:** if the data partition reaches past
+`flashpod drive partition`.
+
+**A card formatted by another tool** is kept as it is. flashpod reads the
+firmware partition from the card's own partition table and writes only
+there, so a layout that merely differs from flashpod's own (a data partition
+of another length, a different gap at the end of the card, a bigger firmware
+partition, FAT type 0x0b or 0x0c) is fine, and the plan names what it found:
+`partition table kept as it is: MBR, firmware 63..65598, data 65599..30318590`.
+It warns, without refusing, when the data partition leaves fewer than 2048
+sectors at the end of the card. It refuses, writing nothing, a layout that is
+wrong: no partition table or no firmware partition, partitions that overlap
+or run past the end of the card, a FAT filesystem bigger than its partition,
+and firmware bigger than the firmware partition. The firmware goes wherever
+the card's table puts it, at any start sector, on an MBR card and on a Mac
+(Apple Partition Map) card alike.
+
+**Big cards:** if the data partition reaches past
 128 GiB and the firmware can't read that far (or flashpod can't tell), it
 stops and names the fix: `flashpod drive partition --target T --128g`, then
 `firmware write` again. In a terminal it also offers to do both for you; that
