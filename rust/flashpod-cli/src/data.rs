@@ -148,7 +148,7 @@ fn playlist(t: &mut dyn Target, cx: &Ctx, action: &str, name: Option<&str>, ids:
         match s.parse::<u32>() {
             Ok(n) => ids_n.push(n),
             Err(_) => {
-                eprintln!("flashpod music playlist: {:?} is not a track id (ids from `flashpod music ls all`)", s);
+                eprintln!("flashpod music playlist: {:?} is not a track id (ids from `flashpod music list tracks`)", s);
                 return 1;
             }
         }
@@ -320,21 +320,21 @@ fn rm(fs: &mut dyn Target, cx: &Ctx, what: &[String], ent: &mut flashpod_core::e
                 let why = e.details.get("reason").and_then(|v| v.as_str()).unwrap_or("");
                 return match why {
                     "name_required" => {
-                        eprintln!("flashpod music rm {}: name required", what[0]);
+                        eprintln!("flashpod music remove {}: name required", what[0]);
                         2
                     }
                     "no_match" => {
-                        eprintln!("flashpod music rm: no tracks match that name (see `flashpod music ls`)");
+                        eprintln!("flashpod music remove: no tracks match that name (see `flashpod music list`)");
                         1
                     }
                     "bad_ids" => {
-                        eprintln!("flashpod music rm: expected track ids, or `artist <name>` / `album <name>`");
+                        eprintln!("flashpod music remove: expected track ids, or `artist <name>` / `album <name>`");
                         2
                     }
                     _ => {
                         let missing: Vec<String> = e.details.get("missing").and_then(|v| v.as_array())
                             .map(|a| a.iter().map(|i| i.to_string()).collect()).unwrap_or_default();
-                        eprintln!("flashpod music rm: no track with id {} (see `flashpod music ls all`)", missing.join(", "));
+                        eprintln!("flashpod music remove: no track with id {} (see `flashpod music list tracks`)", missing.join(", "));
                         1
                     }
                 };
@@ -528,7 +528,7 @@ fn add(fs: &mut dyn Target, cx: &Ctx, paths: &[String], ent: &mut flashpod_core:
             } else {
                 eprintln!("flashpod music add: that is past the {} tracks the firmware lists; the rest would be on the card but never shown.", commas(c.limit));
                 if c.fit == 0 {
-                    eprintln!("  The library already holds {}; remove tracks (`flashpod music rm`) or set FLASHPOD_DB_LIMIT=0 to override.", commas(have as i64));
+                    eprintln!("  The library already holds {}; remove tracks (`flashpod music remove`) or set FLASHPOD_DB_LIMIT=0 to override.", commas(have as i64));
                     return 1;
                 }
                 (true, "cap")
@@ -540,7 +540,7 @@ fn add(fs: &mut dyn Target, cx: &Ctx, paths: &[String], ent: &mut flashpod_core:
                 eprintln!("  (Couldn't read the card's firmware to check for the large-library fix that flashpod 1.6 has; assuming stock.)");
             }
             if c.fit == 0 {
-                eprintln!("  The library alone already exceeds the ceiling; remove tracks (`flashpod music rm`) or set FLASHPOD_DB_LIMIT=0 to override.");
+                eprintln!("  The library alone already exceeds the ceiling; remove tracks (`flashpod music remove`) or set FLASHPOD_DB_LIMIT=0 to override.");
                 return 1;
             }
             (true, "ceiling")

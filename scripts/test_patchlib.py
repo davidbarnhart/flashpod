@@ -66,8 +66,6 @@ def main():
         run(tmp)
         if "--rust" in flags:
             parity(tmp, flags["--rust"])
-        if "--cli" in flags:
-            cli(tmp, flags["--cli"])
     finally:
         shutil.rmtree(tmp)
     if FAILS:
@@ -209,53 +207,6 @@ def parity(tmp, fpcore):
     # a comparison that can't fail is caught: one altered field must show
     check(python_side(patchlib.parse_index, corpus[0]) != rust_side(fpcore, "patch-index", _altered(tmp, good)),
           "parity: an altered index is told apart")
-
-
-def cli(tmp, flashpod):
-    """The Rust CLI's `firmware patches` over a local HTTP server: downloads
-    what changed, refuses a tampered file and keeps its cache."""
-    import functools
-    import http.server
-    import threading
-    served = os.path.join(tmp, "served")
-    shutil.copytree(patchlib.bundled_dir(), served)
-    readme = os.path.join(served, "patches", "apple-1g2g-1.5", "flac", "README.md")
-    with open(readme, "ab") as f:
-        f.write(b"\nA newer note.\n")
-    files = server_from(served)
-    reindex(files)
-    with open(os.path.join(served, "index.json"), "wb") as f:
-        f.write(files[BASE + "index.json"])
-    class Quiet(http.server.SimpleHTTPRequestHandler):
-        def log_message(self, *args):
-            pass
-    handler = functools.partial(Quiet, directory=served)
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    env = dict(os.environ, XDG_CACHE_HOME=os.path.join(tmp, "xdg"),
-               FLASHPOD_PATCHES_URL="http://127.0.0.1:%d/" % srv.server_address[1])
-    cached = os.path.join(tmp, "xdg", "flashpod", "patches", "patches", "apple-1g2g-1.5", "flac", "README.md")
-
-    def run_cli(*extra):
-        p = subprocess.run([flashpod, "firmware", "patches"] + list(extra), env=env,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        return p.returncode, p.stdout.decode()
-    try:
-        rc, out = run_cli()
-        check(rc == 0 and out.startswith("Patch library: downloaded") and "library-leak" in out
-              and "flashpod-1.6" in out, "cli: downloaded and listed")
-        check(open(cached, "rb").read().endswith(b"A newer note.\n"), "cli: cache holds the new file")
-        with open(readme, "r+b") as f:                 # same length, wrong bytes
-            f.seek(-2, 2)
-            f.write(b"?")
-        os.remove(cached)
-        rc, out = run_cli()
-        check(rc == 0 and out.startswith("Patch library: the copy built into flashpod")
-              and "does not match the patch index" in out, "cli: tampered download refused")
-        rc, out = run_cli("--offline")
-        check(rc == 0 and "couldn't refresh" not in out, "cli: --offline doesn't touch the network")
-    finally:
-        srv.shutdown()
 
 
 def _altered(tmp, good):

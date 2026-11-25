@@ -34,16 +34,17 @@ fn ns_list(ns: &Ns, k: &str) -> Vec<String> {
 /// _cmd_args for the data commands (ls/add/rm/init/rebuild).
 pub fn cmd_args(ns: &Ns) -> Vec<String> {
     let c = ns_s(ns, "command").unwrap_or_default();
-    // the 1.0 spelling of the command (main sets group): music ls, card
-    // burn, firmware write; flash stays flash
+    // the 1.0 spelling of the command (main sets group): music list,
+    // music remove, drive restore
     let mut a = match (ns_s(ns, "group").as_deref(), c.as_str()) {
+        (Some("music"), "ls") => vec!["music".to_string(), "list".to_string()],
+        (Some("music"), "rm") => vec!["music".to_string(), "remove".to_string()],
         (Some("music"), _) => vec!["music".to_string(), c.clone()],
-        (Some("card"), _) => vec!["card".to_string(), c.clone()],
-        (Some("firmware"), "flash") => vec!["firmware".to_string(), "write".to_string()],
+        (Some("drive"), "burn") => vec!["drive".to_string(), "restore".to_string()],
         _ => vec![c.clone()],
     };
     match c.as_str() {
-        "ls" | "list" => a.extend(ns_s(ns, "field").filter(|s| !s.is_empty())),
+        "ls" | "list" => a.extend(ns_s(ns, "field").filter(|s| !s.is_empty()).map(|f| if f == "all" { "tracks".to_string() } else { f })),
         "add" => a.extend(ns_list(ns, "files")),
         "rm" | "remove" | "delete" | "erase" => a.extend(ns_list(ns, "what")),
         "init" | "rebuild" => a.extend(ns_s(ns, "name").filter(|s| !s.is_empty())),
@@ -58,7 +59,7 @@ pub fn cmd_args(ns: &Ns) -> Vec<String> {
             }
         }
         "playlist" => {
-            a.extend(ns_s(ns, "playlist_command"));
+            a.extend(ns_s(ns, "playlist_command").map(|p| match p.as_str() { "ls" => "list".to_string(), "rm" => "remove".to_string(), _ => p }));
             a.extend(ns_s(ns, "name").filter(|s| !s.is_empty()));
             a.extend(ns_list(ns, "ids"));
         }

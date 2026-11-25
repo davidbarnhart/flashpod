@@ -16,7 +16,13 @@ const SECTOR: u64 = 512;
 const IOCTL_DISK_UPDATE_PROPERTIES: u32 = 0x0007_0140;
 const FSCTL_LOCK_VOLUME: u32 = 0x0009_0018;
 const FSCTL_DISMOUNT_VOLUME: u32 = 0x0009_0020;
-const IOCTL_VOLUME_OFFLINE: u32 = 0x0056_C00C;
+/// Brings back a volume an earlier run left offline. Raw disk writes inside an
+/// OFFLINE volume's sectors fail with ERROR_NOT_READY ("[Errno 21] The device
+/// is not ready") even after a lock and dismount -- measured on a Windows test VM (#119),
+/// and it is what CI's error was: flashpod used to offline the volumes itself,
+/// and the offline state outlives the process (`firmware write` left it for
+/// `music init`). A locked, dismounted, ONLINE volume takes the writes.
+const IOCTL_VOLUME_ONLINE: u32 = 0x0056_C008;
 
 pub struct Windows;
 
@@ -90,9 +96,10 @@ fn render(cands: &[Disk]) {
     eprintln!();
 }
 
-/// Lock, dismount and take offline every volume on `dev`, holding the
-/// handles so Windows doesn't bring them back mid-write. A refused lock
-/// gets a forced dismount (invalidating whoever holds it) and a retry.
+/// Lock and dismount every volume on `dev` and bring it online (see
+/// IOCTL_VOLUME_ONLINE), holding the handles so Windows doesn't remount
+/// them mid-write. A refused lock gets a forced dismount (invalidating
+/// whoever holds it) and a retry.
 pub(crate) fn lock_volumes(dev: &str) -> Vec<(String, Option<String>)> {
     let mut held = HELD.lock().unwrap_or_else(|p| p.into_inner());
     let mut out = Vec::new();
@@ -115,7 +122,7 @@ pub(crate) fn lock_volumes(dev: &str) -> Vec<(String, Option<String>)> {
         }).and_then(|_| crate::sys::ioctl(&h, FSCTL_DISMOUNT_VOLUME, 0));
         match locked {
             Ok(_) => {
-                let _ = crate::sys::ioctl(&h, IOCTL_VOLUME_OFFLINE, 0);
+                let _ = crate::sys::ioctl(&h, IOCTL_VOLUME_ONLINE, 0);
                 held.push((path.clone(), h));
                 out.push((path, None));
             }
@@ -167,7 +174,8 @@ pub(crate) fn prepare_raw_write(dev: &str) {
     // a volume has several access paths (E: and \\.\Volume{...}); once one
     // holds the lock the others are refused, so report failures only when
     // nothing locked.
-    if results.iter().any(|(_, e)| e.is_none()) {
+    let locked = results.iter().any(|(_, e)| e.is_none());
+    if locked {
         for (vol, err) in &results {
             if err.is_none() {
                 eprintln!("flashpod: locked volume {} for raw writing", vol);
@@ -185,27 +193,38 @@ pub(crate) fn prepare_raw_write(dev: &str) {
         eprintln!("flashpod: no FAT partition found in {}'s MBR \u{2014} cannot enable raw writes.", dev);
         return;
     }
+    if (locked || results.is_empty()) && writable_now(dev, part_start).is_ok() {
+        // a held lock is enough (the volume is dismounted and online), and
+        // with no volume there is nothing to drop: no table clear, so no
+        // wait on Windows tearing the volume down (#119's race). The clear
+        // below stays for a volume nothing could lock.
+        return;
+    }
     Windows.invalidate_cached_partitions(dev);
     *CLEARED.lock().unwrap_or_else(|p| p.into_inner()) = Some((dev.to_string(), mbr, part_start));
     eprintln!("flashpod: temporarily cleared {}'s partition table so Windows lets go of the FAT partition (LBA {}). The original table is restored when flashpod finishes.", dev, part_start);
     wait_writable(dev, part_start);
 }
 
+/// One try: the FAT partition's boot sector reads and writes back (its own
+/// bytes, so nothing changes).
+fn writable_now(dev: &str, lba: u64) -> io::Result<()> {
+    open_handle(dev, true).and_then(|h| {
+        let mut b = vec![0u8; SECTOR as usize];
+        crate::sys::read_at(&h, &mut b, lba * SECTOR)?;
+        crate::sys::write_all_at(&h, &b, lba * SECTOR)
+    })
+}
+
 /// Windows drops the volume after the table is cleared, but not always at
 /// once: on CI the clear once took 20 s and the first write after it still
-/// got "[Errno 21] The device is not ready". Wait until the FAT partition's
-/// boot sector reads and writes back (its own bytes, so nothing changes),
-/// for up to 30 s; the command then reports whatever error remains.
+/// got "[Errno 21] The device is not ready". Wait until writable_now
+/// succeeds, for up to 30 s; the command then reports whatever error remains.
 fn wait_writable(dev: &str, lba: u64) {
     let t0 = std::time::Instant::now();
     let mut said = false;
     loop {
-        let ok = open_handle(dev, true).and_then(|h| {
-            let mut b = vec![0u8; SECTOR as usize];
-            crate::sys::read_at(&h, &mut b, lba * SECTOR)?;
-            crate::sys::write_all_at(&h, &b, lba * SECTOR)
-        });
-        match ok {
+        match writable_now(dev, lba) {
             Ok(()) => return,
             Err(e) if t0.elapsed() >= std::time::Duration::from_secs(30) => {
                 eprintln!("flashpod: {} still refuses writes to the FAT partition after 30 s ({}).", dev, e);

@@ -292,7 +292,7 @@ fn inspect_mac(dev: &mut dyn BlockDevice, mut info: CardInfo) -> Result<CardInfo
             }
         }
     }
-    info.itunesdb = json!({"state": "not_read", "reason": "HFS+: read the library through the OS's mount (flashpod music ls --mount)"});
+    info.itunesdb = json!({"state": "not_read", "reason": "HFS+: read the library through the OS's mount (flashpod music list --mount)"});
     info.layout_ok = info.problems.is_empty();
     info.ipod_compatible = info.layout_ok && info.filesystem.is_some() && !info.past_128gib;
     Ok(info)
