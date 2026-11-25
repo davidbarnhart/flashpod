@@ -35,16 +35,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import synth_fixtures as synth  # noqa: E402
 
-NOT_BUILT = ["drive backup", "firmware list", "patch show", "patch apply", "music find",
-             "music check", "games list", "games add", "games remove", "emulate", "completion"]
+NOT_BUILT = ["drive backup", "firmware list", "music find",
+             "music check", "games list", "games add", "games remove", "completion"]
 # #115: 0.x names kept so a habit is told the new one (rc 2)
-MOVED = {"card new": "image new", "card burn": "drive restore", "firmware patches": "patch list",
-         "firmware patch": "patch apply", "firmware arm": "bootrom arm", "firmware recover": "help recovery",
+MOVED = {"card new": "image new", "card burn": "drive restore",
+         "firmware arm": "bootrom arm", "firmware recover": "help recovery",
          "music delete": "music remove", "music erase": "music remove", "ls": "music list",
          "rm": "music remove", "burn": "drive restore", "wizard": "setup"}
-EXEMPT = {"patch list": "reads the patch library; it has no target",
-          "help": "prints help; it has no target"}
-GROUPS = ["drive", "image", "firmware", "bootrom", "patch", "music", "games"]
+EXEMPT = {"help": "prints help; it has no target"}
+GROUPS = ["drive", "image", "firmware", "bootrom", "music", "games"]
 MUSIC = ["music list", "music ls", "music add", "music remove", "music rm", "music init", "music rebuild",
          "music export", "music playlist"]
 NOT_APPLICABLE = {

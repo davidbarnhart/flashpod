@@ -20,16 +20,13 @@ flashpod 1.0 groups its commands by what they act on:
 | `flashpod image ...` | `new` |
 | `flashpod firmware ...` | `write`, `extract`; not built yet: `list` |
 | `flashpod bootrom ...` | `arm`, `disarm` (the iPod's disk-mode update) |
-| `flashpod patch ...` | `list`; not built yet: `show`, `apply` |
 | `flashpod music ...` | `list` (or `ls`), `add`, `remove` (or `rm`), `init`, `rebuild`, `export`, `playlist`; not built yet: `find`, `check` |
 | `flashpod games ...` | not built yet: `list`, `add`, `remove` |
-| `flashpod emulate` | boot a firmware or card in emupod (not built yet) |
 
 A group on its own lists its commands (`flashpod music`), and a mistyped
 command gets a suggestion. The 0.x names point you to the new ones:
 `flashpod ls` says "that command is now `flashpod music list`" and does
-nothing else; `card new` is now `image new`, `card burn` is `drive restore`,
-and `firmware patches` is `patch list`.
+nothing else; `card new` is now `image new`, and `card burn` is `drive restore`.
 `flashpod flash` is split in two: `flashpod drive partition` lays out and
 formats the drive (it erases it), and `flashpod firmware write` writes only
 the firmware partition and never touches your music. `flashpod flash` names
@@ -654,18 +651,6 @@ know, it prints a link to a new GitHub issue on this repo, already filled
 in with the build's sha256 and what flashpod read. flashpod sends nothing
 itself: open the link, add where the file came from, and submit it if you
 want the build added. `inspect --json` doesn't carry the link.
-
-### `flashpod patch list [--offline]`
-
-Lists the patch library: each base firmware, the patches written against
-it (with their status), and the named builds such as flashpod 1.6. The
-library is [ipod-patches](https://github.com/davidbarnhart/ipod-patches).
-flashpod fetches its index, downloads only the files that changed, and
-checks every file's sha256 against the index before keeping it, in
-`~/.cache/flashpod/patches`. Offline, or when the download fails a
-check, it uses the last copy it downloaded, then the copy built into
-flashpod, and says which one it used and why. `--offline` skips the
-download.
 
 ### `flashpod music export [--to DIR]`
 

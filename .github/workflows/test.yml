@@ -302,7 +302,6 @@ jobs:
         run: |
           sudo apt-get install -yq hfsprogs || true
           PYTHONPATH=. python scripts/test_cli_1_0.py --rust rust/target/release/flashpod
-          python scripts/test_patchlib.py --cli rust/target/release/flashpod
 
       # #112: each command names its target, on an image file, a mount and a
       # loop device; --mutants proves the check fails when a command doesn't.

@@ -1,4 +1,4 @@
-flashpod - inspect, patch, rehearse and flash early-iPod firmware, and manage the music on it.
+flashpod - inspect and flash early-iPod firmware, and manage the music on it.
 
 Commands:
   flashpod setup                     set up a card step by step
@@ -14,7 +14,6 @@ Commands:
   flashpod firmware extract TARGET   copy the firmware partition (or one image) off
   flashpod bootrom arm|disarm [--target T]
                                      arm or clear a disk-mode update
-  flashpod patch list                the patch library
   flashpod music list [tracks|artists|albums]
                                      the library: artist/album tree, or flat counts
   flashpod music add [path ...]      add audio files; directories are scanned

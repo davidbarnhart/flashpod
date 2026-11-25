@@ -32,7 +32,6 @@ RENAMED = [
 # two-word names that moved in 1.0 (#115)
 RENAMED_2 = [
     (("card", "new"), "image new"), (("card", "burn"), "drive restore"),
-    (("firmware", "patches"), "patch list"), (("firmware", "patch"), "patch apply"),
     (("firmware", "arm"), "bootrom arm"), (("firmware", "recover"), "help recovery"),
     (("music", "delete"), "music remove"), (("music", "erase"), "music remove"),
 ]
@@ -196,12 +195,6 @@ def build():
     p.add_argument("--target", help="the drive or image file (else a chooser)")
     p.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
 
-    psub = group(sub, "patch", "patch_command", "firmware patches")
-    add(psub, "list", help="the patch library").add_argument(
-        "--offline", action="store_true", help="don't refresh the library; use the copy on this computer")
-    coming(psub, "show", "one patch in full")
-    coming(psub, "apply", "build a patched firmware")
-
     music = add(sub, "music", help="the music library on an iPod, card or image")
     msub = music.add_subparsers(dest="music_command")
     msub.required = True
@@ -249,7 +242,6 @@ def build():
     coming(gsub, "add", "add a game")
     coming(gsub, "remove", "remove a game")
 
-    coming(sub, "emulate", "boot a firmware or card image in emupod")
     coming(sub, "completion", "shell completion for bash, zsh or fish")
     add(sub, "help", help="help on a topic: recovery (a card or iPod that won't start)").add_argument(
         "topic", nargs="?", choices=["recovery"], help="the topic (default: the command list)")
@@ -261,8 +253,8 @@ RECOVERY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
                         "rust", "flashpod-cli", "src", "help_recovery.txt")
 
 # the commands the Rust binary parses and then says aren't built
-NOT_BUILT = {"drive backup", "firmware list", "patch show", "patch apply", "music find",
-             "music check", "games list", "games add", "games remove", "emulate", "completion"}
+NOT_BUILT = {"drive backup", "firmware list", "music find",
+             "music check", "games list", "games add", "games remove", "completion"}
 
 # the flags `firmware write` lost (#115), each naming where it went
 MOVED = [

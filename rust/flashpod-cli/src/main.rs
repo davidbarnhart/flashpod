@@ -24,7 +24,6 @@ mod host;
 mod rawdev;
 mod mount;
 mod pathpicker;
-mod patches;
 mod platform;
 mod sys;
 mod term;
@@ -338,13 +337,6 @@ fn build_cli() -> Cli {
     dp.add(Arg::opt(&["--target"]).help("the drive or image file (else a chooser)"));
     dp.add(Arg::flag(&["--dry-run"]).help("show what would change, write nothing"));
 
-    let pt = cli.add_parser_at(0, "patch", &[], "firmware patches", &[]);
-    cli.add_subparsers_at(pt, "patch_command");
-    let pl = cli.add_parser_at(pt, "list", &[], "the patch library", &[]);
-    cli.parser(pl).add(Arg::flag(&["--offline"]).help("don't refresh the library; use the copy on this computer"));
-    coming(&mut cli, pt, "show", "one patch in full");
-    coming(&mut cli, pt, "apply", "build a patched firmware");
-
     let music = cli.add_parser_at(0, "music", &[], "the music library on an iPod, card or image", &[]);
     cli.add_subparsers_at(music, "music_command");
     let i = cli.add_parser_at(music, "list", &["ls"], "the library: artist/album tree, its tracks, or flat counts", &common());
@@ -391,7 +383,6 @@ fn build_cli() -> Cli {
     coming(&mut cli, gm, "add", "add a game");
     coming(&mut cli, gm, "remove", "remove a game");
 
-    coming(&mut cli, 0, "emulate", "boot a firmware or card image in emupod");
     coming(&mut cli, 0, "completion", "shell completion for bash, zsh or fish");
     let h = cli.add_parser_at(0, "help", &[], "help on a topic: recovery (a card or iPod that won't start)", &[]);
     cli.parser(h).add(Arg::pos("topic", Nargs::Optional).choices(&["recovery"]).help("the topic (default: the command list)"));
@@ -446,9 +437,8 @@ const RENAMED: [(&str, &str); 12] = [
 ];
 
 /// Two-word names that moved in 1.0 (#115).
-const RENAMED_2: [((&str, &str), &str); 8] = [
+const RENAMED_2: [((&str, &str), &str); 6] = [
     (("card", "new"), "image new"), (("card", "burn"), "drive restore"),
-    (("firmware", "patches"), "patch list"), (("firmware", "patch"), "patch apply"),
     (("firmware", "arm"), "bootrom arm"), (("firmware", "recover"), "help recovery"),
     (("music", "delete"), "music remove"), (("music", "erase"), "music remove"),
 ];
@@ -537,7 +527,6 @@ fn main() {
         "image" => s(&ns, "image_command"),
         "drive" => s(&ns, "drive_command"),
         "bootrom" => s(&ns, "bootrom_command"),
-        "patch" => s(&ns, "patch_command"),
         "games" => s(&ns, "games_command"),
         _ => None,
     };
@@ -565,7 +554,6 @@ fn main() {
         ("music", Some(m)) => m.to_string(),
         ("drive", Some("restore")) => "burn".to_string(),
         ("image", Some("new")) => "card new".to_string(),
-        ("patch", Some("list")) => "firmware patches".to_string(),
         (g, Some(m)) => format!("{} {}", g, m),
         (g, None) => g.to_string(),
     };
@@ -579,7 +567,6 @@ fn main() {
         "bootrom arm" => drivecmd::cmd_bootrom(&ns, "arm"),
         "bootrom disarm" => drivecmd::cmd_bootrom(&ns, "disarm"),
         "firmware extract" => cmd_extract(&ns),
-        "firmware patches" => patches::cmd_patches(&ns),
         "inspect" => cmd_inspect(&ns),
         "card new" => cmd_card_new(&ns),
         "burn" => cmd_burn(&ns),
